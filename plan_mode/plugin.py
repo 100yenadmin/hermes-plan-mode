@@ -641,8 +641,11 @@ class PlanModePlugin:
             if identity.unsupported:
                 return None
             if identity.non_cli_without_key or not identity.key:
-                cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
-                if self._active_keys or cli_active:
+                with self._lock:
+                    cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
+                    durable_active = bool(self._active_storage_keys())
+                    process_active = bool(self._active_keys)
+                if process_active or durable_active or cli_active:
                     return _block_message(
                         tool_name or "unknown tool",
                         "The active session key could not be derived, so this request was blocked fail-closed.",
@@ -689,23 +692,28 @@ class PlanModePlugin:
             )
 
     def pre_llm_call(self, **kwargs: Any) -> dict[str, str] | None:
-        with self._lock:
-            self._prune_dead_cli_states()
-        identity = derive_session_identity(str(kwargs.get("platform") or ""))
-        if identity.unsupported:
-            return None
-        if identity.non_cli_without_key or not identity.key:
-            cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
-            if self._active_keys or cli_active:
-                return {
-                    "context": (
-                        "Plan mode is active in this process, but this turn's session key could not "
-                        "be derived. Tool calls will be blocked fail-closed."
-                    )
-                }
-            return None
-
         try:
+            with self._lock:
+                self._prune_dead_cli_states()
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if identity.unsupported:
+                return None
+            if identity.non_cli_without_key or not identity.key:
+                with self._lock:
+                    cli_active = self._load_state(f"cli:{os.getpid()}").get(
+                        "active"
+                    )
+                    durable_active = bool(self._active_storage_keys())
+                    process_active = bool(self._active_keys)
+                if process_active or durable_active or cli_active:
+                    return {
+                        "context": (
+                            "Plan mode is active in this process, but this turn's session key "
+                            "could not be derived. Tool calls will be blocked fail-closed."
+                        )
+                    }
+                return None
+
             with self._lock:
                 state_key, state = self._state_for_hook(identity)
                 parts: list[str] = []

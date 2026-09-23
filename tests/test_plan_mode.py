@@ -291,6 +291,20 @@ def test_pre_tool_callback_fails_closed_on_internal_exception(plugin, session_en
     assert "failed closed" in result["message"]
 
 
+def test_pre_llm_callback_fails_closed_when_active_index_read_raises(
+    plugin, monkeypatch
+):
+    monkeypatch.setattr(
+        plugin,
+        "_active_storage_keys",
+        lambda: (_ for _ in ()).throw(RuntimeError("state unavailable")),
+    )
+
+    result = plugin.pre_llm_call()
+
+    assert "could not be read safely" in result["context"]
+
+
 def test_missing_non_cli_key_overblocks_when_any_session_active(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
@@ -299,6 +313,23 @@ def test_missing_non_cli_key_overblocks_when_any_session_active(plugin, session_
     result = plugin.pre_tool_call("read_file", {"path": "/tmp/x"})
     assert result["action"] == "block"
     assert "could not be derived" in result["message"]
+
+
+def test_unbound_request_uses_durable_active_index_after_plugin_reload(
+    plugin, session_env, tmp_path
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    assert "Plan mode is on" in plugin.command("on durable index")
+    reloaded = PlanModePlugin(plugin.ctx)
+    session_env["HERMES_SESSION_KEY"] = ""
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+
+    blocked = reloaded.pre_tool_call("terminal", {"command": "pwd"})
+    context = reloaded.pre_llm_call()
+
+    assert blocked["action"] == "block"
+    assert "could not be derived" in blocked["message"]
+    assert "session key could not be derived" in context["context"]
 
 
 def test_missing_internal_import_refuses_on_and_hooks_do_not_block(monkeypatch):
