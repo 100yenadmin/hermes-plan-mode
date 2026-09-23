@@ -30,7 +30,9 @@ jobs:
       - name: Install pinned Hermes and tests
         run: |
           python -m pip install pytest
-          python -m pip install "git+https://github.com/NousResearch/hermes-agent.git@38c289c0146ed8c8b2b767eca1fff6f5b7e6382e"
+          git clone --filter=blob:none https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent"
+          git -C "$RUNNER_TEMP/hermes-agent" checkout --detach 38c289c0146ed8c8b2b767eca1fff6f5b7e6382e
+          python -m pip install -e "$RUNNER_TEMP/hermes-agent"
       - run: pytest -q
       - run: hermes plugins validate .
       - run: hermes plugins doctor . --ci
