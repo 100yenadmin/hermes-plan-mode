@@ -15,6 +15,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 from typing import Any, Callable
 
@@ -30,7 +31,6 @@ READ_ONLY_TOOLS = frozenset(
         "read_window_below",
         "search_files",
         "session_search",
-        "skill_view",
         "skills_list",
         "todo_list",
         "video_analyze",
@@ -58,6 +58,8 @@ class SessionIdentity:
     unsupported: bool = False
     non_cli_without_key: bool = False
     surface: str = ""
+    fallback_key: str | None = None
+    inherited_env: bool = False
 
 
 def _session_reader() -> Callable[[str, str], str] | None:
@@ -71,21 +73,138 @@ def _session_reader() -> Callable[[str, str], str] | None:
     return get_session_env
 
 
+def _session_context_is_engaged() -> bool:
+    """Return whether Hermes has ever bound server session context in this process."""
+    try:
+        # Sanctioned alongside get_session_env by WS2 FIXROUND-2 N1/F7.  Unlike
+        # imported-module heuristics this distinguishes a CLI importing gateway.run
+        # from a server process that has actually entered a bound session path.
+        from gateway.session_context import session_context_engaged
+    except Exception:
+        return False
+    try:
+        return bool(session_context_engaged())
+    except Exception:
+        return False
+
+
+def _cron_session_is_active() -> bool:
+    """Return whether Hermes marked this ContextVar-scoped turn as cron."""
+    reader = _session_reader()
+    if reader is None:
+        return False
+    return str(reader("HERMES_CRON_SESSION", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _gateway_process_is_admitted() -> bool:
+    """Return whether Hermes admitted this process as a gateway runtime."""
+    truthy = {"1", "true", "yes", "on"}
+    if str(os.environ.get("HERMES_GATEWAY_SESSION") or "").strip().lower() in truthy:
+        return True
+    gateway_run = sys.modules.get("gateway.run")
+    runner_ref = getattr(gateway_run, "_gateway_runner_ref", None)
+    if not callable(runner_ref):
+        return False
+    try:
+        return runner_ref() is not None
+    except Exception:
+        return False
+
+
+def _skill_view_block_reason() -> str | None:
+    """Return why ``skill_view`` must stay blocked, or ``None`` when it is safe.
+
+    ``skill_view`` preprocesses SKILL.md through
+    ``agent.skill_preprocessing.preprocess_skill_content`` without an explicit
+    ``skills_cfg`` (``tools/skills_tool_plugin.py:117``), so the tool reads the
+    same ``load_skills_config()`` this hook calls in the same process and
+    context.  Inline shell runs only when that value is truthy.  Anything the
+    plugin cannot read through Hermes' own loader fails closed.
+    """
+    try:
+        from agent.skill_preprocessing import load_skills_config
+    except Exception:
+        return (
+            "Hermes' skill config loader (agent.skill_preprocessing.load_skills_config) "
+            "is unavailable, so inline shell cannot be ruled out."
+        )
+    try:
+        skills_cfg = load_skills_config()
+    except Exception as exc:
+        return f"Reading skills.inline_shell failed ({type(exc).__name__})."
+    if not isinstance(skills_cfg, dict):
+        return "Hermes returned an unreadable skills config, so inline shell cannot be ruled out."
+    if skills_cfg.get("inline_shell", False):
+        return "skills.inline_shell is enabled, so viewing a skill can run shell snippets."
+    return None
+
+
+def _runtime_cwd_reader() -> Callable[[], Path] | None:
+    """Return Hermes' turn-scoped cwd resolver required by FIXROUND-1 W3."""
+    try:
+        # W3 explicitly requires the cwd bound by _set_session_context(..., cwd=...).
+        # Import lazily so unsupported Hermes versions refuse/fallback cleanly.
+        from agent.runtime_cwd import resolve_agent_cwd
+    except Exception:
+        return None
+    return resolve_agent_cwd
+
+
 def derive_session_identity(platform_hint: str = "") -> SessionIdentity:
     """Derive one key identically for commands and all registered hooks."""
     reader = _session_reader()
     if reader is None:
         return SessionIdentity(None, unsupported=True)
 
-    session_key = str(reader("HERMES_SESSION_KEY", "") or "").strip()
-    if session_key:
-        return SessionIdentity(f"sk:{session_key}")
-
     surface = (
         str(reader("HERMES_SESSION_PLATFORM", "") or "").strip()
         or str(reader("HERMES_SESSION_SOURCE", "") or "").strip()
         or str(platform_hint or "").strip()
     )
+    session_key = str(reader("HERMES_SESSION_KEY", "") or "").strip()
+    ui_session_id = str(reader("HERMES_UI_SESSION_ID", "") or "").strip()
+    context_engaged = _session_context_is_engaged()
+    inherited_cli_identity = bool(
+        not context_engaged
+        and (
+            (
+                session_key
+                and session_key
+                == str(os.environ.get("HERMES_SESSION_KEY") or "").strip()
+            )
+            or (
+                ui_session_id
+                and ui_session_id
+                == str(os.environ.get("HERMES_UI_SESSION_ID") or "").strip()
+            )
+        )
+    )
+    if inherited_cli_identity:
+        return SessionIdentity(
+            f"cli:{os.getpid()}",
+            surface=surface or "cli",
+            inherited_env=True,
+        )
+    if ui_session_id:
+        return SessionIdentity(
+            f"ui:{ui_session_id}",
+            surface=surface,
+            fallback_key=f"sk:{session_key}" if session_key else None,
+        )
+    if session_key:
+        return SessionIdentity(f"sk:{session_key}", surface=surface)
+
+    if context_engaged or _gateway_process_is_admitted():
+        return SessionIdentity(
+            None,
+            non_cli_without_key=True,
+            surface=surface or "server",
+        )
     if surface and surface.lower() not in {"cli", "terminal"}:
         return SessionIdentity(None, non_cli_without_key=True, surface=surface)
     return SessionIdentity(f"cli:{os.getpid()}", surface=surface or "cli")
@@ -125,6 +244,21 @@ def _path_is_inside(target: str, plans_dir: str) -> bool:
         return False
 
 
+def _plans_dir_is_still_safe(plans_dir: str) -> bool:
+    """Revalidate the fixed plan root immediately before a writer is allowed."""
+    if not isinstance(plans_dir, str) or not os.path.isabs(plans_dir):
+        return False
+    hermes_dir = os.path.dirname(plans_dir)
+    try:
+        return (
+            not os.path.islink(hermes_dir)
+            and not os.path.islink(plans_dir)
+            and os.path.realpath(plans_dir) == plans_dir
+        )
+    except OSError:
+        return False
+
+
 def _patch_targets(args: dict[str, Any]) -> list[str] | None:
     """Extract every replace/V4A patch target; ``None`` means not explicit/safe."""
     mode = str(args.get("mode") or "replace").strip().lower()
@@ -157,6 +291,24 @@ class PlanModePlugin:
         self.ctx = ctx
         self._lock = threading.RLock()
         self._active_keys: set[str] = set()
+        manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
+        self._registration_profile = self._profile_name_for_home(manager_home)
+
+    @staticmethod
+    def _profile_name_for_home(home: Any) -> str | None:
+        if home is None or not str(home).strip():
+            return None
+        path = Path(str(home)).expanduser()
+        if path.parent.name == "profiles":
+            return path.name
+        try:
+            from hermes_cli.profiles import get_active_profile_name
+
+            return str(get_active_profile_name() or "").strip() or None
+        except Exception:
+            # Unknown, not "default": a bound session then refuses every
+            # state-mutating command instead of storing state no copy reads.
+            return None
 
     def register(self) -> None:
         self.ctx.register_command(
@@ -167,10 +319,14 @@ class PlanModePlugin:
         )
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
+        self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
         self.ctx.register_hook("on_session_reset", self.on_session_reset)
 
     def _load_state(self, key: str) -> dict[str, Any]:
-        value = self.ctx.state.get(_state_storage_key(key), {})
+        return self._load_storage_state(_state_storage_key(key))
+
+    def _load_storage_state(self, storage_key: str) -> dict[str, Any]:
+        value = self.ctx.state.get(storage_key, {})
         return dict(value) if isinstance(value, dict) else {}
 
     def _active_storage_keys(self) -> list[str]:
@@ -191,19 +347,146 @@ class PlanModePlugin:
             key for key in self._active_keys if _state_storage_key(key) != storage_key
         }
 
+    def _clear_state_family(
+        self, storage_key: str, state: dict[str, Any] | None = None
+    ) -> None:
+        state = state or self._load_storage_state(storage_key)
+        related = {storage_key, *self._linked_command_storage_keys(state)}
+        canonical = state.get("canonical_ui_storage_key")
+        if isinstance(canonical, str) and canonical.startswith("session:"):
+            related.add(canonical)
+        for candidate in related:
+            self._clear_storage_key(candidate)
+
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        if pid == os.getpid():
+            return True
+        if os.name == "nt":
+            # os.kill(pid, 0) is not a harmless probe on Windows.  Keep the
+            # bounded durable entry rather than risk signaling the process.
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    def _prune_dead_cli_states(self) -> None:
+        for storage_key in list(self._active_storage_keys()):
+            state = self.ctx.state.get(storage_key, {})
+            pid = state.get("cli_pid") if isinstance(state, dict) else None
+            if isinstance(pid, int) and not self._pid_is_alive(pid):
+                self._clear_storage_key(storage_key)
+
+    def _current_process_has_active_state(self) -> bool:
+        current_pid = os.getpid()
+        for storage_key in self._active_storage_keys():
+            state = self._load_storage_state(storage_key)
+            if state.get("active") and state.get("owner_pid") == current_pid:
+                return True
+        return False
+
     def _save_state(self, key: str, state: dict[str, Any]) -> None:
+        self._save_storage_state(_state_storage_key(key), state, key_hint=key)
+
+    def _save_storage_state(
+        self, storage_key: str, state: dict[str, Any], *, key_hint: str | None = None
+    ) -> None:
         state = dict(state)
-        storage_key = _state_storage_key(key)
         self.ctx.state.set(storage_key, state)
         active_storage = self._active_storage_keys()
         if state.get("active"):
-            self._active_keys.add(key)
+            if key_hint and state.get("owner_pid") == os.getpid():
+                self._active_keys.add(key_hint)
             if storage_key not in active_storage:
                 active_storage.append(storage_key)
         else:
-            self._active_keys.discard(key)
+            self._active_keys = {
+                key
+                for key in self._active_keys
+                if _state_storage_key(key) != storage_key
+            }
+            if key_hint:
+                self._active_keys.discard(key_hint)
             active_storage = [item for item in active_storage if item != storage_key]
         self._set_active_storage_keys(active_storage)
+
+    @staticmethod
+    def _linked_command_storage_keys(state: dict[str, Any]) -> list[str]:
+        value = state.get("command_session_storage_keys")
+        if not isinstance(value, list):
+            return []
+        return [
+            item
+            for item in value[:256]
+            if isinstance(item, str) and item.startswith("session:")
+        ]
+
+    def _save_command_state(
+        self, raw_key: str, storage_key: str, state: dict[str, Any]
+    ) -> None:
+        """Save a command mutation to its canonical UI state and linked sk copies."""
+        self._save_storage_state(storage_key, state, key_hint=raw_key)
+        for linked_storage in self._linked_command_storage_keys(state):
+            if linked_storage != storage_key:
+                self._save_storage_state(linked_storage, state)
+
+    def _command_state(
+        self, raw_key: str, surface: str = ""
+    ) -> tuple[str, dict[str, Any], bool]:
+        """Resolve a command-only sk key to the one UI state that linked it."""
+        storage_key = _state_storage_key(raw_key)
+        if raw_key.startswith("sk:"):
+            matches = []
+            canonical_active = False
+            for candidate in self._active_storage_keys():
+                state = self._load_storage_state(candidate)
+                if (
+                    state.get("active")
+                    and state.get("canonical_ui_storage_key") == candidate
+                ):
+                    canonical_active = True
+                    if storage_key in self._linked_command_storage_keys(state):
+                        matches.append((candidate, state))
+            if len(matches) == 1:
+                candidate, state = matches[0]
+                return candidate, state, False
+            direct = self._load_storage_state(storage_key)
+            ui_surface = str(surface or "").strip().lower() in {
+                "tui",
+                "desktop",
+                "dashboard",
+            }
+            return storage_key, direct, bool(
+                ui_surface and canonical_active and not direct.get("active")
+            )
+        return storage_key, self._load_storage_state(storage_key), False
+
+    def _link_command_key(
+        self, state_key: str, state: dict[str, Any], command_key: str | None
+    ) -> None:
+        if not command_key or not command_key.startswith("sk:"):
+            return
+        linked = self._linked_command_storage_keys(state)
+        command_storage = _state_storage_key(command_key)
+        canonical_storage = _state_storage_key(state_key)
+        if (
+            command_storage in linked
+            and state.get("canonical_ui_storage_key") == canonical_storage
+        ):
+            return
+        if command_storage not in linked:
+            linked.append(command_storage)
+        state["command_session_storage_keys"] = linked[-256:]
+        state["canonical_ui_storage_key"] = canonical_storage
+        self._save_state(state_key, state)
 
     @staticmethod
     def _session_id_hash(value: Any) -> str:
@@ -216,6 +499,13 @@ class PlanModePlugin:
             state["session_id_hash"] = digest
             self._save_state(key, state)
 
+    def _claim_state_for_current_process(
+        self, key: str, state: dict[str, Any]
+    ) -> None:
+        if state.get("active") and state.get("owner_pid") != os.getpid():
+            state["owner_pid"] = os.getpid()
+            self._save_state(key, state)
+
     def _identity_or_reply(self) -> tuple[SessionIdentity, str | None]:
         identity = derive_session_identity()
         if identity.unsupported:
@@ -225,58 +515,196 @@ class PlanModePlugin:
             )
         if identity.non_cli_without_key or not identity.key:
             return identity, (
-                "Plan mode cannot identify this non-CLI session safely. Upgrade Hermes or "
-                "use a surface that binds HERMES_SESSION_KEY."
+                "Plan mode activation was refused: this server surface lacks the required "
+                "session binding. Upgrade Hermes to a version containing the TUI/gateway "
+                "plugin-command session-binding fix."
             )
         return identity, None
 
+    def _state_for_hook(self, identity: SessionIdentity) -> tuple[str | None, dict[str, Any]]:
+        """Return active state, including the required legacy CLI fail-closed fallback."""
+        if identity.key:
+            state = self._load_state(identity.key)
+            if state.get("active"):
+                self._claim_state_for_current_process(identity.key, state)
+                self._link_command_key(identity.key, state, identity.fallback_key)
+                return identity.key, state
+        if identity.key and identity.fallback_key:
+            fallback_state = self._load_state(identity.fallback_key)
+            if fallback_state.get("active"):
+                self._claim_state_for_current_process(
+                    identity.fallback_key, fallback_state
+                )
+                self._link_command_key(
+                    identity.key, fallback_state, identity.fallback_key
+                )
+                self._save_state(identity.key, fallback_state)
+                return identity.key, fallback_state
+        cli_key = f"cli:{os.getpid()}"
+        if identity.key != cli_key:
+            cli_state = self._load_state(cli_key)
+            if cli_state.get("active"):
+                self._claim_state_for_current_process(cli_key, cli_state)
+                if identity.key and identity.key.startswith("ui:"):
+                    linked = self._linked_command_storage_keys(cli_state)
+                    cli_storage = _state_storage_key(cli_key)
+                    if cli_storage not in linked:
+                        linked.append(cli_storage)
+                    cli_state["command_session_storage_keys"] = linked[-256:]
+                    cli_state.pop("cli_pid", None)
+                    self._link_command_key(
+                        identity.key, cli_state, identity.fallback_key
+                    )
+                    self._save_state(identity.key, cli_state)
+                    return identity.key, cli_state
+                return cli_key, cli_state
+        return identity.key, self._load_state(identity.key) if identity.key else {}
+
     def _fixed_plans_dir(self) -> str:
+        cwd_reader = _runtime_cwd_reader()
+        raw = str(cwd_reader() if cwd_reader else "").strip()
         reader = _session_reader()
-        raw = str(reader("TERMINAL_CWD", "") if reader else "").strip()
+        if not raw:
+            raw = str(reader("TERMINAL_CWD", "") if reader else "").strip()
         if not raw or not os.path.isabs(raw) or not os.path.isdir(raw):
             raw = os.getcwd()
         base = os.path.realpath(raw)
-        plan_path = os.path.join(base, ".hermes", "plans")
+        hermes_path = os.path.join(base, ".hermes")
+        plan_path = os.path.join(hermes_path, "plans")
+        if os.path.islink(hermes_path) or os.path.islink(plan_path):
+            raise ValueError("the .hermes plan path contains a symlink")
         os.makedirs(plan_path, exist_ok=True)
-        return os.path.realpath(plan_path)
+        expected = os.path.join(os.path.realpath(base), ".hermes", "plans")
+        if (
+            os.path.islink(hermes_path)
+            or os.path.islink(plan_path)
+            or os.path.realpath(plan_path) != expected
+        ):
+            raise ValueError("the .hermes plan path contains a symlink")
+        return expected
 
     @staticmethod
     def _plan_files(state: dict[str, Any]) -> list[str]:
         plans_dir = state.get("plans_dir")
         if not isinstance(plans_dir, str) or not os.path.isdir(plans_dir):
             return []
-        try:
-            return sorted(
-                str(path.resolve())
-                for path in Path(plans_dir).glob("*.md")
-                if path.is_file()
-            )
-        except OSError:
+        remembered = state.get("plan_files")
+        if not isinstance(remembered, list):
             return []
+        files = []
+        for value in remembered[:256]:
+            if (
+                isinstance(value, str)
+                and value.endswith(".md")
+                and _path_is_inside(value, plans_dir)
+                and os.path.isfile(value)
+            ):
+                files.append(os.path.realpath(value))
+        return files
+
+    def _remember_plan_targets(
+        self, key: str, state: dict[str, Any], targets: list[str]
+    ) -> None:
+        remembered = state.get("plan_files")
+        files = [item for item in remembered if isinstance(item, str)] if isinstance(remembered, list) else []
+        for target in targets:
+            resolved = os.path.realpath(target)
+            if not resolved.endswith(".md"):
+                continue
+            files = [item for item in files if item != resolved]
+            files.append(resolved)
+        state["plan_files"] = files[-256:]
+        self._save_state(key, state)
 
     def command(self, raw_args: str) -> str:
-        identity, error = self._identity_or_reply()
-        if error:
-            return error
-        assert identity.key is not None
-
         raw = str(raw_args or "").strip()
         action, _, remainder = raw.partition(" ")
         action = action.lower() or "status"
         remainder = remainder.strip()
 
+        identity, error = self._identity_or_reply()
+        if error:
+            if action == "status":
+                reason = error.removeprefix("Plan mode activation was refused: ")
+                reason = reason.removeprefix("Plan mode is unavailable: ")
+                return f"Plan mode is unavailable on this surface: {reason}"
+            return error
+        assert identity.key is not None
+
+        if action == "on" and identity.inherited_env and _gateway_process_is_admitted():
+            return (
+                "Plan mode activation was refused: this gateway/slash-worker process "
+                "only exposed inherited session identity, so activation cannot be "
+                "bound safely to one session."
+            )
+        if action in {"on", "off", "approve", "reject"}:
+            # Every state-mutating command must run in the plugin instance of the
+            # session's own profile; status stays read-only and is not gated.
+            refused = (
+                "Plan mode activation was refused"
+                if action == "on"
+                else f"Plan mode command '{action}' was refused"
+            )
+            reader = _session_reader()
+            session_profile = str(
+                reader("HERMES_SESSION_PROFILE", "") if reader else ""
+            ).strip()
+            if session_profile and self._registration_profile is None:
+                return (
+                    f"{refused}: the plugin registration profile "
+                    "is unknown, so it cannot be matched safely to the bound session "
+                    f"profile '{session_profile}'."
+                )
+            if (
+                session_profile
+                and self._registration_profile
+                and session_profile != self._registration_profile
+            ):
+                return (
+                    f"{refused}: this plugin instance is registered "
+                    f"for profile '{self._registration_profile}', but the session belongs "
+                    f"to profile '{session_profile}'."
+                )
+
         with self._lock:
-            state = self._load_state(identity.key)
+            command_storage_key, state, unresolved_ui_command = self._command_state(
+                identity.key, identity.surface
+            )
+            if action not in {"on", "status"} and unresolved_ui_command:
+                return (
+                    "Plan mode command was refused: Hermes did not bind the stable UI "
+                    "session ID, so this command cannot be matched safely to the tab that "
+                    "owns plan mode. Retry from that tab after Hermes exposes its stable UI "
+                    "identity; the plugin will not guess across tabs."
+                )
             if action == "on":
-                plans_dir = self._fixed_plans_dir()
+                try:
+                    plans_dir = self._fixed_plans_dir()
+                except (OSError, ValueError) as exc:
+                    return f"Plan mode activation was refused: {exc}."
+                preserved = {
+                    key: state[key]
+                    for key in (
+                        "canonical_ui_storage_key",
+                        "command_session_storage_keys",
+                        "cli_pid",
+                        "session_id_hash",
+                    )
+                    if key in state
+                }
                 state = {
                     "active": True,
                     "entered_at": _utc_now(),
                     "plans_dir": plans_dir,
                     "task": remainder,
                     "pending_note": "",
+                    "plan_files": state.get("plan_files", []),
+                    "owner_pid": os.getpid(),
+                    **preserved,
                 }
-                self._save_state(identity.key, state)
+                if identity.key.startswith("cli:"):
+                    state["cli_pid"] = os.getpid()
+                self._save_command_state(identity.key, command_storage_key, state)
                 task_text = f" Task: {remainder}" if remainder else ""
                 return (
                     f"Plan mode is on for this session.{task_text}\n"
@@ -301,12 +729,26 @@ class PlanModePlugin:
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 files = self._plan_files(state)
-                approved_path = files[-1] if files else str(state.get("plans_dir") or "the plans directory")
+                if remainder:
+                    candidate = remainder if os.path.isabs(remainder) else os.path.join(
+                        str(state.get("plans_dir") or ""), remainder
+                    )
+                    candidate = os.path.realpath(candidate)
+                    if candidate not in files:
+                        return (
+                            "Plan approval was refused: the requested file was not written "
+                            "by this session."
+                        )
+                    approved_path = candidate
+                else:
+                    approved_path = files[-1] if files else str(
+                        state.get("plans_dir") or "the plans directory"
+                    )
                 state["active"] = False
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
                 )
-                self._save_state(identity.key, state)
+                self._save_command_state(identity.key, command_storage_key, state)
                 return f"Plan approved. Plan mode is off. Next turn will implement {approved_path}."
 
             if action == "reject":
@@ -314,13 +756,13 @@ class PlanModePlugin:
                     return "Plan mode is not on for this session."
                 feedback = remainder or "No additional feedback was provided."
                 state["pending_note"] = f"The user rejected the plan: {feedback}. Revise it."
-                self._save_state(identity.key, state)
+                self._save_command_state(identity.key, command_storage_key, state)
                 return "Plan rejected. Plan mode remains on; the feedback will be injected next turn."
 
             if action == "off":
                 state["active"] = False
                 state["pending_note"] = ""
-                self._save_state(identity.key, state)
+                self._save_command_state(identity.key, command_storage_key, state)
                 return "Plan mode is off for this session. No approval note will be injected."
 
         return "Usage: /planmode on [task] | status | approve | reject [feedback] | off"
@@ -338,11 +780,19 @@ class PlanModePlugin:
     ) -> dict[str, str] | None:
         """Enforce the plan-mode allowlist, failing closed on internal errors."""
         try:
+            with self._lock:
+                self._prune_dead_cli_states()
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
             if identity.unsupported:
                 return None
             if identity.non_cli_without_key or not identity.key:
-                if self._active_keys:
+                if _cron_session_is_active():
+                    return None
+                with self._lock:
+                    cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
+                    durable_active = self._current_process_has_active_state()
+                    process_active = bool(self._active_keys)
+                if process_active or durable_active or cli_active:
                     return _block_message(
                         tool_name or "unknown tool",
                         "The active session key could not be derived, so this request was blocked fail-closed.",
@@ -350,23 +800,34 @@ class PlanModePlugin:
                 return None
 
             with self._lock:
-                state = self._load_state(identity.key)
+                state_key, state = self._state_for_hook(identity)
                 if not state.get("active"):
                     self._active_keys.discard(identity.key)
                     return None
-                self._active_keys.add(identity.key)
-                self._remember_session_id(identity.key, state, kwargs.get("session_id"))
+                assert state_key is not None
+                self._active_keys.add(state_key)
+                self._remember_session_id(state_key, state, kwargs.get("session_id"))
 
                 name = str(tool_name or "")
                 call_args = args if isinstance(args, dict) else {}
                 if name in READ_ONLY_TOOLS or name in self._extra_allowed_tools():
                     return None
+                if name == "skill_view":
+                    reason = _skill_view_block_reason()
+                    return _block_message(name, reason) if reason else None
                 if name in PLAN_WRITERS:
                     targets = _write_targets(name, call_args)
                     plans_dir = state.get("plans_dir")
                     if not targets or not isinstance(plans_dir, str):
                         return _block_message(name, "Every write target must be explicit and absolute.")
+                    if not _plans_dir_is_still_safe(plans_dir):
+                        return _block_message(
+                            name,
+                            "The plans directory changed after activation; reactivate plan mode "
+                            "only after restoring a non-symlink plan root.",
+                        )
                     if all(_path_is_inside(target, plans_dir) for target in targets):
+                        self._remember_plan_targets(state_key, state, targets)
                         return None
                     return _block_message(
                         name,
@@ -381,31 +842,43 @@ class PlanModePlugin:
             )
 
     def pre_llm_call(self, **kwargs: Any) -> dict[str, str] | None:
-        identity = derive_session_identity(str(kwargs.get("platform") or ""))
-        if identity.unsupported:
-            return None
-        if identity.non_cli_without_key or not identity.key:
-            if self._active_keys:
-                return {
-                    "context": (
-                        "Plan mode is active in this process, but this turn's session key could not "
-                        "be derived. Tool calls will be blocked fail-closed."
-                    )
-                }
-            return None
-
         try:
             with self._lock:
-                state = self._load_state(identity.key)
+                self._prune_dead_cli_states()
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if identity.unsupported:
+                return None
+            if identity.non_cli_without_key or not identity.key:
+                if _cron_session_is_active():
+                    return None
+                with self._lock:
+                    cli_active = self._load_state(f"cli:{os.getpid()}").get(
+                        "active"
+                    )
+                    durable_active = self._current_process_has_active_state()
+                    process_active = bool(self._active_keys)
+                if process_active or durable_active or cli_active:
+                    return {
+                        "context": (
+                            "Plan mode is active in this process, but this turn's session key "
+                            "could not be derived. Tool calls will be blocked fail-closed."
+                        )
+                    }
+                return None
+
+            with self._lock:
+                state_key, state = self._state_for_hook(identity)
                 parts: list[str] = []
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():
                     parts.append(pending.strip())
                     state["pending_note"] = ""
-                    self._save_state(identity.key, state)
+                    assert state_key is not None
+                    self._save_state(state_key, state)
                 if state.get("active"):
-                    self._active_keys.add(identity.key)
-                    self._remember_session_id(identity.key, state, kwargs.get("session_id"))
+                    assert state_key is not None
+                    self._active_keys.add(state_key)
+                    self._remember_session_id(state_key, state, kwargs.get("session_id"))
                     plans_dir = state.get("plans_dir")
                     parts.append(
                         "Plan mode is ON. Explore with the allowed read-only tools and write only "
@@ -426,26 +899,58 @@ class PlanModePlugin:
         identity = derive_session_identity(str(kwargs.get("platform") or ""))
         if identity.unsupported:
             return
+        platform = str(kwargs.get("platform") or "").strip().lower()
         with self._lock:
+            if platform in {"cli", "terminal"}:
+                cli_key = f"cli:{os.getpid()}"
+                cli_storage = _state_storage_key(cli_key)
+                self._clear_state_family(
+                    cli_storage, self._load_storage_state(cli_storage)
+                )
+                if identity.key == cli_key:
+                    return
             if identity.key and not identity.non_cli_without_key:
-                self._save_state(identity.key, {})
+                if identity.key.startswith("sk:"):
+                    storage_key, state, _ = self._command_state(
+                        identity.key, identity.surface
+                    )
+                else:
+                    storage_key = _state_storage_key(identity.key)
+                    state = self._load_storage_state(storage_key)
+                self._clear_state_family(storage_key, state)
                 return
 
             # Gateway's reset callback may run outside the command's bound
             # ContextVar scope. Match the hashed old session id when possible;
-            # otherwise clear only a unique active session. Never guess among
-            # multiple sessions, because that would weaken another session.
+            # never guess from active-session count because another session's
+            # reset must not disable this one.
             active_storage = self._active_storage_keys()
             old_digest = self._session_id_hash(
-                kwargs.get("old_session_id") or kwargs.get("session_id")
+                kwargs.get("old_session_id")
             )
-            matches = []
+            matches: dict[str, dict[str, Any]] = {}
             if old_digest:
                 for storage_key in active_storage:
                     state = self.ctx.state.get(storage_key, {})
                     if isinstance(state, dict) and state.get("session_id_hash") == old_digest:
-                        matches.append(storage_key)
+                        canonical = state.get("canonical_ui_storage_key")
+                        family_key = (
+                            canonical
+                            if isinstance(canonical, str)
+                            and canonical.startswith("session:")
+                            else storage_key
+                        )
+                        matches[family_key] = state
             if len(matches) == 1:
-                self._clear_storage_key(matches[0])
-            elif not matches and len(active_storage) == 1:
-                self._clear_storage_key(active_storage[0])
+                storage_key, state = next(iter(matches.items()))
+                self._clear_state_family(storage_key, state)
+
+    def on_session_finalize(self, **kwargs: Any) -> None:
+        identity = derive_session_identity(str(kwargs.get("platform") or ""))
+        if identity.unsupported:
+            return
+        cli_key = f"cli:{os.getpid()}"
+        platform = str(kwargs.get("platform") or "").strip().lower()
+        if identity.key == cli_key or platform in {"cli", "terminal"}:
+            with self._lock:
+                self._clear_storage_key(_state_storage_key(cli_key))
