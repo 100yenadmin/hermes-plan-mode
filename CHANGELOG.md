@@ -9,7 +9,7 @@
 - Document the supported surfaces honestly: the classic CLI on released Hermes
   (≤ 0.21.4); gateway/TUI/Desktop only on builds containing
   NousResearch/hermes-agent `5943347a2a` and `35fdb4608a` (after
-  `v2026.9.21`). Add disclosures, list every internal Hermes seam with its
+  `v2026.9.21`). Add disclosures, list every internal Hermes seam (seven) with its
   missing-seam behavior, and fix source citations and the
   `extra_allowed_tools` config path.
 - Gate real-Hermes tests on the session-binding features instead of the version
@@ -19,6 +19,13 @@
   from the plugin registration profile, or the registration profile is
   unknown, exactly as `on` already did; nothing is written. `status` stays
   read-only.
+
+- Review follow-ups: a raising `get_active_profile_name` now leaves the
+  registration profile unknown (bound sessions refuse state-changing
+  commands) instead of assuming `default`; README lists the seventh internal
+  seam (`ctx._manager.home_path`) and the cron exemption for key-less calls;
+  the real-PluginManager CLI test now asserts `terminal` and out-of-plans
+  `write_file` are blocked.
 
 ## 0.1.5 - 2026-09-23
 

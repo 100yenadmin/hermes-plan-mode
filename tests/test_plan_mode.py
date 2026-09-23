@@ -1031,3 +1031,19 @@ def test_unbound_gateway_reset_never_guesses_among_active_sessions(plugin, sessi
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
     session_env["HERMES_SESSION_KEY"] = "second-session"
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+
+def test_custom_home_profile_helper_failure_is_unknown_not_default(monkeypatch, tmp_path):
+    """A raising get_active_profile_name must not fall back to "default" (review N3)."""
+    fake_profiles = ModuleType("hermes_cli.profiles")
+
+    def _boom():
+        raise RuntimeError("helper unavailable")
+
+    fake_profiles.get_active_profile_name = _boom
+    fake_cli = sys.modules.get("hermes_cli") or ModuleType("hermes_cli")
+    monkeypatch.setitem(sys.modules, "hermes_cli", fake_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.profiles", fake_profiles)
+
+    assert PlanModePlugin._profile_name_for_home(tmp_path / "custom-home") is None
+    assert PlanModePlugin._profile_name_for_home(tmp_path / "profiles" / "eva") == "eva"

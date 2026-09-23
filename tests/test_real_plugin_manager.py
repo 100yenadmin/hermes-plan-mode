@@ -89,6 +89,9 @@ def test_real_cli_like_process_works_after_gateway_run_import(tmp_path, monkeypa
         response = plugins.get_plugin_command_handler("planmode")("on real cli")
 
         assert "Plan mode is on" in response
+        block = plugins.get_pre_tool_call_block_message
+        assert block("terminal", {"command": "pwd"})
+        assert block("write_file", {"path": str(workspace / "outside.txt"), "content": "x"})
     finally:
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)

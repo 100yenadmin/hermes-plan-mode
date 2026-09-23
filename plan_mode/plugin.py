@@ -306,7 +306,9 @@ class PlanModePlugin:
 
             return str(get_active_profile_name() or "").strip() or None
         except Exception:
-            return "default"
+            # Unknown, not "default": a bound session then refuses every
+            # state-mutating command instead of storing state no copy reads.
+            return None
 
     def register(self) -> None:
         self.ctx.register_command(

@@ -114,13 +114,18 @@ seams. Each is imported lazily and wrapped in `try/except`; line citations are
    turn-scoped workspace. If missing, activation uses an existing absolute
    `TERMINAL_CWD` or the classic CLI process cwd.
 5. `hermes_cli.profiles.get_active_profile_name`: the registration profile when
-   the plugin's Hermes home is not `profiles/<name>`. If missing, the
-   registration profile is taken as `default`, and a bound session from any
-   other profile refuses activation and every state-mutating command.
+   the plugin's Hermes home is not `profiles/<name>`. If missing or raising,
+   the registration profile is unknown: a bound session refuses activation and
+   every state-mutating command, and the classic CLI (no bound session
+   profile) is unaffected.
 6. `agent.skill_preprocessing.load_skills_config`
    (`agent/skill_preprocessing.py:22-31`): whether `skill_view` would run
    inline shell. If missing, raising, or returning a non-dict, `skill_view` is
    blocked.
+7. `ctx._manager.home_path` (private `PluginContext._manager`,
+   `hermes_cli/plugins.py:235`): the Hermes home the plugin was registered
+   from, used to derive the registration profile. If missing, the registration
+   profile is unknown and bound sessions refuse every state-mutating command.
 
 The cwd import remains necessary on both target Hermes versions. Their
 `gateway.session_context.set_session_vars(..., cwd=...)` stores cwd only in
@@ -190,7 +195,9 @@ when the reset callback is outside the command's ContextVar scope; raw session
 keys and ids are never persisted. If several active sessions cannot be
 distinguished, none is cleared. Each active entry records its owning process.
 If any session owned by the current process is active and a non-CLI tool call
-arrives without a derivable key, the call is blocked fail-closed. State left by
+arrives without a derivable key, the call is blocked fail-closed, except turns
+Hermes marks as cron (`HERMES_CRON_SESSION` in the cron scheduler's session
+context, which tools cannot set). State left by
 another process does not block cron or other bound-but-keyless work.
 
 ## Containment and failure behavior
