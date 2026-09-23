@@ -15,6 +15,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 from typing import Any, Callable
 
@@ -90,10 +91,16 @@ def _session_context_is_engaged() -> bool:
 def _gateway_process_is_admitted() -> bool:
     """Return whether Hermes admitted this process as a gateway runtime."""
     truthy = {"1", "true", "yes", "on"}
-    return any(
-        str(os.environ.get(name) or "").strip().lower() in truthy
-        for name in ("HERMES_GATEWAY_SESSION", "HERMES_EXEC_ASK")
-    )
+    if str(os.environ.get("HERMES_GATEWAY_SESSION") or "").strip().lower() in truthy:
+        return True
+    gateway_run = sys.modules.get("gateway.run")
+    runner_ref = getattr(gateway_run, "_gateway_runner_ref", None)
+    if not callable(runner_ref):
+        return False
+    try:
+        return runner_ref() is not None
+    except Exception:
+        return False
 
 
 def _runtime_cwd_reader() -> Callable[[], Path] | None:

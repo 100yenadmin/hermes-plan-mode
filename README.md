@@ -112,9 +112,10 @@ Hermes 0.21.3 does not bind a TUI/dashboard session around plugin command
 handlers. TUI/Desktop session creation sets `HERMES_GATEWAY_SESSION=1`, so even
 the first unbound `/planmode on` refuses and names the required Hermes fix.
 Its messaging gateway also omits command binding; the gateway-start-only
-`HERMES_EXEC_ASK=1` marker makes the first `/planmode on` refuse instead of
-falling back to a process-wide CLI key. Hermes 0.21.3 gateway plan mode is
-therefore unsupported and fails closed at activation.
+live-runner reference makes the first `/planmode on` refuse instead of falling
+back to a process-wide CLI key. The inherited `HERMES_EXEC_ASK` environment
+value alone is not trusted, so nested CLIs remain independent. Hermes 0.21.3
+gateway plan mode is therefore unsupported and fails closed at activation.
 Importing `gateway.run` alone is not treated as a server signal, so normal CLI
 remains usable after every chat-turn import. The tool and LLM hooks
 also treat an active current-process CLI state as plan mode if a later legacy

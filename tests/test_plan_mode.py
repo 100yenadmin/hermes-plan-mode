@@ -456,11 +456,33 @@ def test_legacy_messaging_gateway_first_command_refuses_cli_fallback(
     monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
     monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
     monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    gateway_run = ModuleType("gateway.run")
+    gateway_run._gateway_runner_ref = lambda: object()
+    monkeypatch.setitem(sys.modules, "gateway.run", gateway_run)
 
     response = plugin.command("on legacy gateway")
 
     assert "refused" in response.lower()
     assert "gateway" in response.lower()
+
+
+def test_nested_cli_ignores_inherited_exec_ask_without_live_gateway(
+    session_env, plugin, monkeypatch, tmp_path
+):
+    session_env.clear()
+    session_env.update(
+        {"HERMES_SESSION_SOURCE": "cli", "TERMINAL_CWD": str(tmp_path)}
+    )
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+    monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    gateway_run = ModuleType("gateway.run")
+    gateway_run._gateway_runner_ref = lambda: None
+    monkeypatch.setitem(sys.modules, "gateway.run", gateway_run)
+
+    response = plugin.command("on nested cli")
+
+    assert "Plan mode is on" in response
 
 
 def test_cli_still_works_after_gateway_run_is_imported(

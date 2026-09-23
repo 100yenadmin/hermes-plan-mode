@@ -6,7 +6,8 @@
   without an explicit old session id.
 - Refuse cross-profile TUI activation through a launch-profile plugin instance,
   inherited slash-worker activation, and the first unbound Hermes 0.21.3
-  messaging-gateway command.
+  messaging-gateway command without treating an inherited gateway environment
+  flag as process admission.
 - Limit unbound fail-closed enforcement to active state owned by the current
   process so another process's abandoned state does not block cron.
 - Let an unlinked tab query `status`, clarify unavailable/refused command
