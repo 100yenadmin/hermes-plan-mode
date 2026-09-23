@@ -651,6 +651,25 @@ def test_session_reset_clears_cli_state(plugin, session_env, tmp_path):
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
+def test_cli_reset_clears_fallback_after_a_later_turn_derives_session_key(
+    plugin, session_env, tmp_path
+):
+    session_env.clear()
+    session_env.update(
+        {
+            "HERMES_SESSION_SOURCE": "cli",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on cli fallback reset")
+    session_env["HERMES_SESSION_KEY"] = "later-cli-turn-key"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    plugin.on_session_reset(platform="cli")
+
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
 def test_tui_reset_clears_adopted_ui_and_linked_command_states(
     plugin, session_env, tmp_path
 ):

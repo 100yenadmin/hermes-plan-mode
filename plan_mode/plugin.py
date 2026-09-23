@@ -760,7 +760,16 @@ class PlanModePlugin:
         identity = derive_session_identity(str(kwargs.get("platform") or ""))
         if identity.unsupported:
             return
+        platform = str(kwargs.get("platform") or "").strip().lower()
         with self._lock:
+            if platform in {"cli", "terminal"}:
+                cli_key = f"cli:{os.getpid()}"
+                cli_storage = _state_storage_key(cli_key)
+                self._clear_state_family(
+                    cli_storage, self._load_storage_state(cli_storage)
+                )
+                if identity.key == cli_key:
+                    return
             if identity.key and not identity.non_cli_without_key:
                 if identity.key.startswith("sk:"):
                     storage_key, state, _ = self._command_state(
