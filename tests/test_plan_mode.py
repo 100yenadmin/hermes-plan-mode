@@ -332,6 +332,24 @@ def test_unbound_request_uses_durable_active_index_after_plugin_reload(
     assert "session key could not be derived" in context["context"]
 
 
+def test_unbound_cron_request_ignores_active_state_owned_by_another_process(
+    plugin, session_env, monkeypatch
+):
+    plugin._save_state(
+        "sk:other-process-session",
+        {
+            "active": True,
+            "owner_pid": os.getpid() + 10_000,
+            "plans_dir": "/other-process/.hermes/plans",
+        },
+    )
+    session_env.clear()
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: True)
+
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"}) is None
+    assert plugin.pre_llm_call() is None
+
+
 def test_missing_internal_import_refuses_on_and_hooks_do_not_block(monkeypatch):
     ctx = FakeContext()
     plugin = PlanModePlugin(ctx)
@@ -389,6 +407,33 @@ def test_nested_cli_ignores_all_inherited_parent_session_identity(monkeypatch):
     assert identity.key == f"cli:{os.getpid()}"
 
 
+def test_inherited_slash_worker_identity_refuses_activation(
+    monkeypatch, tmp_path
+):
+    values = {
+        "HERMES_SESSION_KEY": "parent-session-key",
+        "HERMES_SESSION_SOURCE": "tui",
+        "HERMES_SESSION_PLATFORM": "desktop",
+        "HERMES_UI_SESSION_ID": "parent-ui-tab",
+        "TERMINAL_CWD": str(tmp_path),
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+    monkeypatch.setattr(
+        plugin_mod,
+        "_session_reader",
+        lambda: lambda key, default="": values.get(key, default),
+    )
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+    plugin = PlanModePlugin(FakeContext())
+
+    response = plugin.command("on slash worker")
+
+    assert "refused" in response.lower()
+    assert "gateway" in response.lower()
+
+
 def test_unbound_server_surface_refuses_activation(session_env, plugin, monkeypatch):
     session_env.clear()
     monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: True)
@@ -397,6 +442,25 @@ def test_unbound_server_surface_refuses_activation(session_env, plugin, monkeypa
 
     assert "refused" in response.lower()
     assert "session binding" in response.lower()
+
+    status = plugin.command("status")
+    assert "Plan mode is unavailable on this surface:" in status
+    assert "activation was refused" not in status.lower()
+
+
+def test_legacy_messaging_gateway_first_command_refuses_cli_fallback(
+    session_env, plugin, monkeypatch, tmp_path
+):
+    session_env.clear()
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+    monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+
+    response = plugin.command("on legacy gateway")
+
+    assert "refused" in response.lower()
+    assert "gateway" in response.lower()
 
 
 def test_cli_still_works_after_gateway_run_is_imported(
@@ -580,9 +644,11 @@ def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
             "HERMES_UI_SESSION_ID": "",
         }
     )
+    assert "Plan mode: off" in plugin.command("status")
     response = plugin.command("off")
     assert "refused" in response.lower()
     assert "will not guess across tabs" in response
+    assert "ordinary turn" not in response.lower()
 
     session_env["HERMES_UI_SESSION_ID"] = "rotation-ui-tab"
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
@@ -642,6 +708,38 @@ def test_reenabling_linked_tui_state_preserves_command_links(
 
     session_env["HERMES_UI_SESSION_ID"] = "reenable-ui-tab"
     assert plugin.pre_tool_call("terminal", {}) is None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "compression.in_place=false can rotate the key before Hermes exposes a "
+        "stable UI id or public old-to-new mapping"
+    ),
+)
+def test_nondefault_rotating_compression_before_first_turn_loses_plan_state(
+    session_env, plugin, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "pre-compression-key",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on before compression")
+
+    # compression.in_place=false rotates the runtime session key before any
+    # bound hook has had a chance to link the stable UI id to the command key.
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "post-compression-key",
+            "HERMES_UI_SESSION_ID": "compression-ui-tab",
+        }
+    )
+
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
 
 
 def test_session_reset_clears_cli_state(plugin, session_env, tmp_path):

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3 - 2026-09-23
+
+- Preserve TUI/Desktop plan mode when an agent rebuild emits a reset callback
+  without an explicit old session id.
+- Refuse cross-profile TUI activation through a launch-profile plugin instance,
+  inherited slash-worker activation, and the first unbound Hermes 0.21.3
+  messaging-gateway command.
+- Limit unbound fail-closed enforcement to active state owned by the current
+  process so another process's abandoned state does not block cron.
+- Let an unlinked tab query `status`, clarify unavailable/refused command
+  responses, and document the non-default pre-turn rotating-compression gap.
+
 ## 0.1.2 - 2026-09-23
 
 - Distinguish a CLI that merely imports gateway modules from an actually engaged

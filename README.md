@@ -95,18 +95,26 @@ the current hashed `sk:` storage key in the UI state, so `status`, `approve`,
 `reject`, and `off` resolve the same state before and after session-key rotation.
 Re-enabling an already linked state preserves those aliases. If a command using
 a newly rotated key arrives before any bound hook has recorded it, the plugin
-refuses the command instead of guessing another tab's UI state; submit one
-ordinary turn in that tab and retry. This narrow gap remains until Hermes binds
-`HERMES_UI_SESSION_ID` around plugin commands or emits a public rotation mapping.
+refuses state-changing commands instead of guessing another tab's UI state;
+`status` still reports that the unlinked tab is off. Retry from the owning tab
+after Hermes exposes its stable UI identity. This narrow gap remains until
+Hermes binds `HERMES_UI_SESSION_ID` around plugin commands or emits a public
+rotation mapping.
 Gateway sessions without a UI id continue to use the session key. Classic CLI
 uses `cli:<pid>`, so conversation compression may rotate `session_id` without
 losing plan mode. A nested process that only inherited its parent's session
 key, source, platform, and UI id uses its own PID key when Hermes session context
-has never been engaged in that process.
+has never been engaged in that process. Activation is refused when that
+inherited identity appears inside a gateway/slash-worker process because it
+cannot be assigned safely to one session.
 
 Hermes 0.21.3 does not bind a TUI/dashboard session around plugin command
 handlers. TUI/Desktop session creation sets `HERMES_GATEWAY_SESSION=1`, so even
 the first unbound `/planmode on` refuses and names the required Hermes fix.
+Its messaging gateway also omits command binding; the gateway-start-only
+`HERMES_EXEC_ASK=1` marker makes the first `/planmode on` refuse instead of
+falling back to a process-wide CLI key. Hermes 0.21.3 gateway plan mode is
+therefore unsupported and fails closed at activation.
 Importing `gateway.run` alone is not treated as a server signal, so normal CLI
 remains usable after every chat-turn import. The tool and LLM hooks
 also treat an active current-process CLI state as plan mode if a later legacy
@@ -124,10 +132,10 @@ State is stored with the bounded, profile-scoped `ctx.state` facade. A hashed
 active-state index lets gateway resets clear a uniquely matching session even
 when the reset callback is outside the command's ContextVar scope; raw session
 keys and ids are never persisted. If several active sessions cannot be
-distinguished, none is cleared. If any session in the process is active and a
-non-CLI tool call arrives without a derivable key, the call is blocked
-fail-closed; this can intentionally over-block another concurrent session until
-its key is available.
+distinguished, none is cleared. Each active entry records its owning process.
+If any session owned by the current process is active and a non-CLI tool call
+arrives without a derivable key, the call is blocked fail-closed. State left by
+another process does not block cron or other bound-but-keyless work.
 
 ## Containment and failure behavior
 
@@ -174,12 +182,20 @@ argument-rewriting plugins on plan writers.
 
 Pinned upstream Hermes 0.21.4 resolves the `slash.exec` plugin command handler
 before entering the target TUI session's `profile_home` scope
-(`tui_gateway/methods_tools.py:933-964`). In a multi-profile dashboard, a
-profile-B slash command can therefore reach the launch profile's plugin manager
-and plan-mode state. The real regression test is strict-xfail until upstream
-routes handler resolution under the session profile. The plugin cannot repair
-this because the wrong manager and state facade are selected before its handler
-runs.
+(`tui_gateway/methods_tools.py:933-964`). `_run_plugin_command` does bind
+`HERMES_SESSION_PROFILE` for the target session (`tui_gateway/server.py:1262-1287`).
+The plugin compares that profile with the Hermes home captured by its registering
+plugin manager and refuses activation on a mismatch, so the wrong launch-profile
+instance cannot claim enforcement. This refusal remains necessary until upstream
+resolves the handler inside the target profile scope.
+
+With non-default `compression.in_place: false`, `/planmode on` followed by
+`/compress` before any bound turn can rotate the session key before Hermes has
+exposed a stable UI id to the plugin. Hermes emits neither a plan-mode hook nor a
+public old-to-new command-key mapping at that boundary, so a safe in-plugin copy
+would require guessing across tabs. This sequence remains unsupported and is
+covered by a strict expected-failure regression; use the default in-place
+compression or allow one bound turn before rotating compression.
 
 ## Development
 

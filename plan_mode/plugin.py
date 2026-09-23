@@ -58,6 +58,7 @@ class SessionIdentity:
     non_cli_without_key: bool = False
     surface: str = ""
     fallback_key: str | None = None
+    inherited_env: bool = False
 
 
 def _session_reader() -> Callable[[str, str], str] | None:
@@ -87,13 +88,12 @@ def _session_context_is_engaged() -> bool:
 
 
 def _gateway_process_is_admitted() -> bool:
-    """Return whether Hermes admitted this process as a TUI/Desktop gateway."""
-    return str(os.environ.get("HERMES_GATEWAY_SESSION") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    """Return whether Hermes admitted this process as a gateway runtime."""
+    truthy = {"1", "true", "yes", "on"}
+    return any(
+        str(os.environ.get(name) or "").strip().lower() in truthy
+        for name in ("HERMES_GATEWAY_SESSION", "HERMES_EXEC_ASK")
+    )
 
 
 def _runtime_cwd_reader() -> Callable[[], Path] | None:
@@ -137,7 +137,11 @@ def derive_session_identity(platform_hint: str = "") -> SessionIdentity:
         )
     )
     if inherited_cli_identity:
-        return SessionIdentity(f"cli:{os.getpid()}", surface=surface or "cli")
+        return SessionIdentity(
+            f"cli:{os.getpid()}",
+            surface=surface or "cli",
+            inherited_env=True,
+        )
     if ui_session_id:
         return SessionIdentity(
             f"ui:{ui_session_id}",
@@ -239,6 +243,15 @@ class PlanModePlugin:
         self.ctx = ctx
         self._lock = threading.RLock()
         self._active_keys: set[str] = set()
+        manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
+        self._registration_profile = self._profile_name_for_home(manager_home)
+
+    @staticmethod
+    def _profile_name_for_home(home: Any) -> str | None:
+        if home is None or not str(home).strip():
+            return None
+        path = Path(str(home)).expanduser()
+        return path.name if path.parent.name == "profiles" else "default"
 
     def register(self) -> None:
         self.ctx.register_command(
@@ -315,6 +328,14 @@ class PlanModePlugin:
             if isinstance(pid, int) and not self._pid_is_alive(pid):
                 self._clear_storage_key(storage_key)
 
+    def _current_process_has_active_state(self) -> bool:
+        current_pid = os.getpid()
+        for storage_key in self._active_storage_keys():
+            state = self._load_storage_state(storage_key)
+            if state.get("active") and state.get("owner_pid") == current_pid:
+                return True
+        return False
+
     def _save_state(self, key: str, state: dict[str, Any]) -> None:
         self._save_storage_state(_state_storage_key(key), state, key_hint=key)
 
@@ -325,7 +346,7 @@ class PlanModePlugin:
         self.ctx.state.set(storage_key, state)
         active_storage = self._active_storage_keys()
         if state.get("active"):
-            if key_hint:
+            if key_hint and state.get("owner_pid") == os.getpid():
                 self._active_keys.add(key_hint)
             if storage_key not in active_storage:
                 active_storage.append(storage_key)
@@ -421,6 +442,13 @@ class PlanModePlugin:
             state["session_id_hash"] = digest
             self._save_state(key, state)
 
+    def _claim_state_for_current_process(
+        self, key: str, state: dict[str, Any]
+    ) -> None:
+        if state.get("active") and state.get("owner_pid") != os.getpid():
+            state["owner_pid"] = os.getpid()
+            self._save_state(key, state)
+
     def _identity_or_reply(self) -> tuple[SessionIdentity, str | None]:
         identity = derive_session_identity()
         if identity.unsupported:
@@ -441,11 +469,15 @@ class PlanModePlugin:
         if identity.key:
             state = self._load_state(identity.key)
             if state.get("active"):
+                self._claim_state_for_current_process(identity.key, state)
                 self._link_command_key(identity.key, state, identity.fallback_key)
                 return identity.key, state
         if identity.key and identity.fallback_key:
             fallback_state = self._load_state(identity.fallback_key)
             if fallback_state.get("active"):
+                self._claim_state_for_current_process(
+                    identity.fallback_key, fallback_state
+                )
                 self._link_command_key(
                     identity.key, fallback_state, identity.fallback_key
                 )
@@ -455,6 +487,7 @@ class PlanModePlugin:
         if identity.key != cli_key:
             cli_state = self._load_state(cli_key)
             if cli_state.get("active"):
+                self._claim_state_for_current_process(cli_key, cli_state)
                 if identity.key and identity.key.startswith("ui:"):
                     linked = self._linked_command_storage_keys(cli_state)
                     cli_storage = _state_storage_key(cli_key)
@@ -526,25 +559,52 @@ class PlanModePlugin:
         self._save_state(key, state)
 
     def command(self, raw_args: str) -> str:
-        identity, error = self._identity_or_reply()
-        if error:
-            return error
-        assert identity.key is not None
-
         raw = str(raw_args or "").strip()
         action, _, remainder = raw.partition(" ")
         action = action.lower() or "status"
         remainder = remainder.strip()
 
+        identity, error = self._identity_or_reply()
+        if error:
+            if action == "status":
+                reason = error.removeprefix("Plan mode activation was refused: ")
+                reason = reason.removeprefix("Plan mode is unavailable: ")
+                return f"Plan mode is unavailable on this surface: {reason}"
+            return error
+        assert identity.key is not None
+
+        if action == "on" and identity.inherited_env and _gateway_process_is_admitted():
+            return (
+                "Plan mode activation was refused: this gateway/slash-worker process "
+                "only exposed inherited session identity, so activation cannot be "
+                "bound safely to one session."
+            )
+        if action == "on":
+            reader = _session_reader()
+            session_profile = str(
+                reader("HERMES_SESSION_PROFILE", "") if reader else ""
+            ).strip()
+            if (
+                session_profile
+                and self._registration_profile
+                and session_profile != self._registration_profile
+            ):
+                return (
+                    "Plan mode activation was refused: this plugin instance is registered "
+                    f"for profile '{self._registration_profile}', but the session belongs "
+                    f"to profile '{session_profile}'."
+                )
+
         with self._lock:
             command_storage_key, state, unresolved_ui_command = self._command_state(
                 identity.key, identity.surface
             )
-            if action != "on" and unresolved_ui_command:
+            if action not in {"on", "status"} and unresolved_ui_command:
                 return (
                     "Plan mode command was refused: Hermes did not bind the stable UI "
-                    "session ID and this session key is not linked yet. Submit one ordinary "
-                    "turn in this tab, then retry; the plugin will not guess across tabs."
+                    "session ID, so this command cannot be matched safely to the tab that "
+                    "owns plan mode. Retry from that tab after Hermes exposes its stable UI "
+                    "identity; the plugin will not guess across tabs."
                 )
             if action == "on":
                 try:
@@ -568,6 +628,7 @@ class PlanModePlugin:
                     "task": remainder,
                     "pending_note": "",
                     "plan_files": state.get("plan_files", []),
+                    "owner_pid": os.getpid(),
                     **preserved,
                 }
                 if identity.key.startswith("cli:"):
@@ -656,7 +717,7 @@ class PlanModePlugin:
             if identity.non_cli_without_key or not identity.key:
                 with self._lock:
                     cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
-                    durable_active = bool(self._active_storage_keys())
+                    durable_active = self._current_process_has_active_state()
                     process_active = bool(self._active_keys)
                 if process_active or durable_active or cli_active:
                     return _block_message(
@@ -716,7 +777,7 @@ class PlanModePlugin:
                     cli_active = self._load_state(f"cli:{os.getpid()}").get(
                         "active"
                     )
-                    durable_active = bool(self._active_storage_keys())
+                    durable_active = self._current_process_has_active_state()
                     process_active = bool(self._active_keys)
                 if process_active or durable_active or cli_active:
                     return {
@@ -787,7 +848,7 @@ class PlanModePlugin:
             # reset must not disable this one.
             active_storage = self._active_storage_keys()
             old_digest = self._session_id_hash(
-                kwargs.get("old_session_id") or kwargs.get("session_id")
+                kwargs.get("old_session_id")
             )
             matches: dict[str, dict[str, Any]] = {}
             if old_digest:

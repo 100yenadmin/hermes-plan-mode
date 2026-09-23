@@ -245,16 +245,91 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
         reset_hermes_home_override(home_token)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="upstream slash.exec resolves the launch-profile plugin manager before profile scoping",
-)
-def test_real_tui_slash_exec_does_not_leak_profile_plugin_state(tmp_path, monkeypatch):
+def test_real_tui_resume_rebuild_does_not_clear_plan_mode(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])
+    if runtime_version < (0, 21, 4):
+        pytest.skip("real TUI resume regression targets pinned upstream Hermes 0.21.4+")
+    home = tmp_path / "hermes-home"
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+    from tui_gateway import server
+
+    home_token = set_hermes_home_override(str(home))
+    turn_tokens = None
+    runtime_id = "round3-resume-runtime"
+    session_key = "round3-resume-session-key"
+    session = {
+        "session_key": session_key,
+        "cwd": str(workspace),
+        "source": "tui",
+    }
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        plugins.get_plugin_manager().discover_and_load()
+        handler = plugins.get_plugin_command_handler("planmode")
+        assert handler is not None
+        response = server._run_plugin_command(handler, "on resume proof", session)
+        assert "Plan mode is on" in response
+
+        turn_tokens = set_session_vars(
+            source="tui",
+            session_key=session_key,
+            session_id=session_key,
+            ui_session_id=runtime_id,
+            cwd=str(workspace),
+        )
+        assert plugins.get_pre_tool_call_block_message(
+            "terminal", {"command": "pwd"}, session_id=session_key
+        )
+        clear_session_vars(turn_tokens)
+        turn_tokens = None
+
+        server._sessions[runtime_id] = session
+        monkeypatch.setattr(server, "_start_notification_poller", lambda _sid, _rec: None)
+        server._start_session_services(runtime_id, session_key, session)
+
+        turn_tokens = set_session_vars(
+            source="tui",
+            session_key=session_key,
+            session_id=session_key,
+            ui_session_id=runtime_id,
+            cwd=str(workspace),
+        )
+        assert plugins.get_pre_tool_call_block_message(
+            "write_file",
+            {"path": str(workspace / "outside.md"), "content": "x"},
+            session_id=session_key,
+        )
+    finally:
+        server._sessions.pop(runtime_id, None)
+        if turn_tokens is not None:
+            clear_session_vars(turn_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypatch):
     pytest.importorskip("hermes_cli.plugins")
     runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])
     if runtime_version < (0, 21, 4):
         pytest.skip("real profile-aware slash.exec regression targets pinned upstream")
-    homes = [tmp_path / "profile-a", tmp_path / "profile-b"]
+    homes = [tmp_path / "profiles" / "profile-a", tmp_path / "profiles" / "profile-b"]
     workspace = tmp_path / "workspace"
     empty_bundled = tmp_path / "empty-bundled"
     workspace.mkdir()
@@ -270,45 +345,31 @@ def test_real_tui_slash_exec_does_not_leak_profile_plugin_state(tmp_path, monkey
     monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
     monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
 
-    from gateway.session_context import clear_session_vars, set_session_vars
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from hermes_cli import plugins
     from tui_gateway import server
 
     plugins._reset_plugin_managers_for_tests()
     home_token = set_hermes_home_override(str(homes[0]))
-    session_tokens = None
     runtime_id = "round2-profile-b-runtime"
     try:
         manager = plugins.get_plugin_manager()
         manager.discover_and_load()
-        session_tokens = set_session_vars(
-            source="tui",
-            session_key="shared-session-key",
-            session_id="shared-session-key",
-            cwd=str(workspace),
-        )
-        response = plugins.get_plugin_command_handler("planmode")("on profile A")
-        assert "Plan mode is on" in response
-        clear_session_vars(session_tokens)
-        session_tokens = None
-
         server._sessions[runtime_id] = {
             "session_key": "shared-session-key",
             "cwd": str(workspace),
             "profile_home": str(homes[1]),
         }
         result = server._methods["slash.exec"](
-            "round2-f5",
-            {"session_id": runtime_id, "command": "/planmode status"},
+            "round3-f5",
+            {"session_id": runtime_id, "command": "/planmode on profile B"},
         )
         output = result["result"]["output"]
 
-        assert "Plan mode: off" in output
+        assert "refused" in output.lower()
+        assert "profile" in output.lower()
     finally:
         server._sessions.pop(runtime_id, None)
-        if session_tokens is not None:
-            clear_session_vars(session_tokens)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)
 
