@@ -157,6 +157,47 @@ def test_on_refuses_bound_profile_when_registration_profile_is_unknown(
     assert ctx.state.values == {}
 
 
+@pytest.mark.parametrize("action", ["off", "approve", "reject revise it"])
+def test_mutating_commands_refuse_cross_profile_session(
+    plugin, session_env, tmp_path, action
+):
+    plugin._registration_profile = "profile-a"
+    session_env.update(
+        {"HERMES_SESSION_PROFILE": "profile-a", "TERMINAL_CWD": str(tmp_path)}
+    )
+    assert "Plan mode is on" in plugin.command("on")
+    before = {key: dict(value) if isinstance(value, dict) else value
+              for key, value in plugin.ctx.state.values.items()}
+
+    session_env["HERMES_SESSION_PROFILE"] = "profile-b"
+    response = plugin.command(action)
+
+    assert "refused" in response.lower()
+    assert "profile-b" in response
+    assert plugin.ctx.state.values == before
+    session_env["HERMES_SESSION_PROFILE"] = "profile-a"
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+    assert "Plan mode: on" in plugin.command("status")
+
+
+@pytest.mark.parametrize("action", ["off", "approve", "reject revise it"])
+def test_mutating_commands_refuse_when_registration_profile_is_unknown(
+    plugin, session_env, tmp_path, action
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    assert "Plan mode is on" in plugin.command("on")
+    before = {key: dict(value) if isinstance(value, dict) else value
+              for key, value in plugin.ctx.state.values.items()}
+
+    plugin._registration_profile = None
+    session_env["HERMES_SESSION_PROFILE"] = "profile-a"
+    response = plugin.command(action)
+
+    assert "refused" in response.lower()
+    assert "registration profile" in response.lower()
+    assert plugin.ctx.state.values == before
+
+
 def test_read_allowlist_and_unknown_blocks(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")

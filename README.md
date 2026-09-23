@@ -116,7 +116,7 @@ seams. Each is imported lazily and wrapped in `try/except`; line citations are
 5. `hermes_cli.profiles.get_active_profile_name`: the registration profile when
    the plugin's Hermes home is not `profiles/<name>`. If missing, the
    registration profile is taken as `default`, and a bound session from any
-   other profile refuses activation.
+   other profile refuses activation and every state-mutating command.
 6. `agent.skill_preprocessing.load_skills_config`
    (`agent/skill_preprocessing.py:22-31`): whether `skill_view` would run
    inline shell. If missing, raising, or returning a non-dict, `skill_view` is
@@ -244,9 +244,13 @@ before entering the target TUI session's `profile_home` scope
 (`tui_gateway/methods_tools.py:573`) does bind `HERMES_SESSION_PROFILE` for the
 target session through `_set_session_context` (`tui_gateway/server.py:1269-1296`).
 The plugin compares that profile with the Hermes home captured by its registering
-plugin manager and refuses activation on a mismatch, so the wrong launch-profile
+plugin manager and refuses activation, `off`, `approve` and `reject` on a mismatch
+(`status` stays read-only), so the wrong launch-profile
 instance cannot claim enforcement. This refusal remains necessary until upstream
 resolves the handler inside the target profile scope.
+If two live sessions in one TUI backend share a session key, Hermes binds the
+first record's profile (`_session_for_key`, `tui_gateway/server.py:1263` at `upstream/main@e5131dc`), so
+the plugin cannot tell them apart; keep session keys unique per profile.
 
 With non-default `compression.in_place: false`, `/planmode on` followed by
 `/compress` before any bound turn can rotate the session key before Hermes has

@@ -15,6 +15,10 @@
 - Gate real-Hermes tests on the session-binding features instead of the version
   string, and run CI against Hermes `v2026.9.14`, `v2026.9.21` and the pinned
   `main` commit.
+- Refuse `off`, `approve` and `reject` when the bound session profile differs
+  from the plugin registration profile, or the registration profile is
+  unknown, exactly as `on` already did; nothing is written. `status` stays
+  read-only.
 
 ## 0.1.5 - 2026-09-23
 

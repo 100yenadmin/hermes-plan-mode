@@ -685,3 +685,79 @@ def test_real_extra_allowed_tools_config_path_matches_readme(tmp_path, monkeypat
             clear_session_vars(session_tokens)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)
+
+
+def test_real_tui_slash_exec_refuses_cross_profile_off(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    if not _tui_binds_plugin_commands():
+        pytest.skip("Hermes build lacks the TUI plugin-command session binding (35fdb4608a)")
+    homes = [tmp_path / "profiles" / "profile-a", tmp_path / "profiles" / "profile-b"]
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    for home in homes:
+        _copy_plugin(home / "plugins" / "plan-mode")
+        (home / "config.yaml").write_text(
+            "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setenv("HERMES_HOME", str(homes[0]))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+    from tui_gateway import server
+
+    plugins._reset_plugin_managers_for_tests()
+    home_token = set_hermes_home_override(str(homes[0]))
+    runtime_a = "round6-profile-a-runtime"
+    runtime_b = "round6-profile-b-runtime"
+    turn_tokens = None
+    try:
+        plugins.get_plugin_manager().discover_and_load()
+        server._sessions[runtime_a] = {
+            "session_key": "colliding-session-key",
+            "cwd": str(workspace),
+            "profile_home": str(homes[0]),
+        }
+        on = server._methods["slash.exec"](
+            "round6-on", {"session_id": runtime_a, "command": "/planmode on profile A"}
+        )
+        assert "Plan mode is on" in on["result"]["output"]
+        # Profile A's tab is no longer live in this backend, but its durable plan
+        # state remains. (While both records are live, Hermes' _session_for_key
+        # binds the first record's profile, so the plugin cannot see profile B.)
+        server._sessions.pop(runtime_a, None)
+
+        server._sessions[runtime_b] = {
+            "session_key": "colliding-session-key",
+            "cwd": str(workspace),
+            "profile_home": str(homes[1]),
+        }
+        off = server._methods["slash.exec"](
+            "round6-off", {"session_id": runtime_b, "command": "/planmode off"}
+        )
+        output = off["result"]["output"].lower()
+        assert "refused" in output
+        assert "profile" in output
+
+        turn_tokens = set_session_vars(
+            source="tui",
+            session_key="colliding-session-key",
+            session_id="colliding-session-key",
+            cwd=str(workspace),
+        )
+        assert plugins.get_pre_tool_call_block_message(
+            "terminal", {"command": "pwd"}, session_id="colliding-session-key"
+        )
+    finally:
+        if turn_tokens is not None:
+            clear_session_vars(turn_tokens)
+        server._sessions.pop(runtime_a, None)
+        server._sessions.pop(runtime_b, None)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)

@@ -635,14 +635,21 @@ class PlanModePlugin:
                 "only exposed inherited session identity, so activation cannot be "
                 "bound safely to one session."
             )
-        if action == "on":
+        if action in {"on", "off", "approve", "reject"}:
+            # Every state-mutating command must run in the plugin instance of the
+            # session's own profile; status stays read-only and is not gated.
+            refused = (
+                "Plan mode activation was refused"
+                if action == "on"
+                else f"Plan mode command '{action}' was refused"
+            )
             reader = _session_reader()
             session_profile = str(
                 reader("HERMES_SESSION_PROFILE", "") if reader else ""
             ).strip()
             if session_profile and self._registration_profile is None:
                 return (
-                    "Plan mode activation was refused: the plugin registration profile "
+                    f"{refused}: the plugin registration profile "
                     "is unknown, so it cannot be matched safely to the bound session "
                     f"profile '{session_profile}'."
                 )
@@ -652,7 +659,7 @@ class PlanModePlugin:
                 and session_profile != self._registration_profile
             ):
                 return (
-                    "Plan mode activation was refused: this plugin instance is registered "
+                    f"{refused}: this plugin instance is registered "
                     f"for profile '{self._registration_profile}', but the session belongs "
                     f"to profile '{session_profile}'."
                 )
