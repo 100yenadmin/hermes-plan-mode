@@ -5,7 +5,10 @@
 - Distinguish a CLI that merely imports gateway modules from an actually engaged
   server session, and ignore inherited parent TUI/Desktop identity in child CLIs.
 - Keep TUI command state reachable after stable-UI adoption and session-key
-  rotation, while preserving and synchronizing active CLI fallback state.
+  rotation, preserve links when re-enabling, and refuse an unlinked rotated
+  command instead of guessing across UI tabs.
+- Refuse the first unbound legacy TUI/dashboard command using Hermes' gateway
+  process admission marker, without confusing a CLI that imports gateway code.
 - Limit finalization cleanup to the current process's CLI state and avoid
   destructive Windows PID probes.
 - Block `skill_view` unconditionally in plan mode; profile config cannot safely

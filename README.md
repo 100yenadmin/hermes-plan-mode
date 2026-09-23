@@ -93,6 +93,11 @@ the first bound turn adopts the command's `sk:<HERMES_SESSION_KEY>` state into
 the stable UI key without deleting the source state. Each bound turn records
 the current hashed `sk:` storage key in the UI state, so `status`, `approve`,
 `reject`, and `off` resolve the same state before and after session-key rotation.
+Re-enabling an already linked state preserves those aliases. If a command using
+a newly rotated key arrives before any bound hook has recorded it, the plugin
+refuses the command instead of guessing another tab's UI state; submit one
+ordinary turn in that tab and retry. This narrow gap remains until Hermes binds
+`HERMES_UI_SESSION_ID` around plugin commands or emits a public rotation mapping.
 Gateway sessions without a UI id continue to use the session key. Classic CLI
 uses `cli:<pid>`, so conversation compression may rotate `session_id` without
 losing plan mode. A nested process that only inherited its parent's session
@@ -100,10 +105,10 @@ key, source, platform, and UI id uses its own PID key when Hermes session contex
 has never been engaged in that process.
 
 Hermes 0.21.3 does not bind a TUI/dashboard session around plugin command
-handlers. Once that server process has actually engaged session context,
-`/planmode on` therefore refuses an unbound command and names the required
-Hermes fix. Importing `gateway.run` alone is not treated as a server signal, so
-normal CLI remains usable after every chat-turn import. The tool and LLM hooks
+handlers. TUI/Desktop session creation sets `HERMES_GATEWAY_SESSION=1`, so even
+the first unbound `/planmode on` refuses and names the required Hermes fix.
+Importing `gateway.run` alone is not treated as a server signal, so normal CLI
+remains usable after every chat-turn import. The tool and LLM hooks
 also treat an active current-process CLI state as plan mode if a later legacy
 path derives a session key or no key at all.
 

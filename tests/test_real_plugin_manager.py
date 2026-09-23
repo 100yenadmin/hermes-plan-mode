@@ -183,6 +183,7 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
     monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
     monkeypatch.delenv("HERMES_SESSION_KEY", raising=False)
     monkeypatch.delenv("HERMES_SESSION_SOURCE", raising=False)
     monkeypatch.setitem(sys.modules, "tui_gateway.server", ModuleType("tui_gateway.server"))
@@ -219,14 +220,6 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
                 {"session_key": "tui-session-key", "cwd": str(workspace)},
             )
         else:
-            latch_tokens = set_session_vars(
-                source="tui",
-                session_key="prior-turn",
-                session_id="prior-turn",
-                cwd=str(workspace),
-            )
-            clear_session_vars(latch_tokens)
-            clear_session_vars([])
             response = methods_tools._run_plugin_command(handler, "on regression proof")
 
         runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])

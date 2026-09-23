@@ -86,6 +86,16 @@ def _session_context_is_engaged() -> bool:
         return False
 
 
+def _gateway_process_is_admitted() -> bool:
+    """Return whether Hermes admitted this process as a TUI/Desktop gateway."""
+    return str(os.environ.get("HERMES_GATEWAY_SESSION") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _runtime_cwd_reader() -> Callable[[], Path] | None:
     """Return Hermes' turn-scoped cwd resolver required by FIXROUND-1 W3."""
     try:
@@ -110,13 +120,19 @@ def derive_session_identity(platform_hint: str = "") -> SessionIdentity:
     )
     session_key = str(reader("HERMES_SESSION_KEY", "") or "").strip()
     ui_session_id = str(reader("HERMES_UI_SESSION_ID", "") or "").strip()
-    server_surface = _session_context_is_engaged()
-    inherited_cli_key = bool(
-        session_key
-        and session_key == str(os.environ.get("HERMES_SESSION_KEY") or "").strip()
-        and not server_surface
+    context_engaged = _session_context_is_engaged()
+    inherited_cli_identity = bool(
+        not context_engaged
+        and (
+            session_key
+            and session_key
+            == str(os.environ.get("HERMES_SESSION_KEY") or "").strip()
+            or ui_session_id
+            and ui_session_id
+            == str(os.environ.get("HERMES_UI_SESSION_ID") or "").strip()
+        )
     )
-    if inherited_cli_key:
+    if inherited_cli_identity:
         return SessionIdentity(f"cli:{os.getpid()}", surface=surface or "cli")
     if ui_session_id:
         return SessionIdentity(
@@ -127,7 +143,7 @@ def derive_session_identity(platform_hint: str = "") -> SessionIdentity:
     if session_key:
         return SessionIdentity(f"sk:{session_key}", surface=surface)
 
-    if server_surface:
+    if context_engaged or _gateway_process_is_admitted():
         return SessionIdentity(
             None,
             non_cli_without_key=True,
@@ -340,22 +356,27 @@ class PlanModePlugin:
             if linked_storage != storage_key:
                 self._save_storage_state(linked_storage, state)
 
-    def _command_state(self, raw_key: str) -> tuple[str, dict[str, Any]]:
+    def _command_state(self, raw_key: str) -> tuple[str, dict[str, Any], bool]:
         """Resolve a command-only sk key to the one UI state that linked it."""
         storage_key = _state_storage_key(raw_key)
         if raw_key.startswith("sk:"):
             matches = []
+            canonical_active = False
             for candidate in self._active_storage_keys():
                 state = self._load_storage_state(candidate)
                 if (
                     state.get("active")
                     and state.get("canonical_ui_storage_key") == candidate
-                    and storage_key in self._linked_command_storage_keys(state)
                 ):
-                    matches.append((candidate, state))
+                    canonical_active = True
+                    if storage_key in self._linked_command_storage_keys(state):
+                        matches.append((candidate, state))
             if len(matches) == 1:
-                return matches[0]
-        return storage_key, self._load_storage_state(storage_key)
+                candidate, state = matches[0]
+                return candidate, state, False
+            direct = self._load_storage_state(storage_key)
+            return storage_key, direct, bool(canonical_active and not direct.get("active"))
+        return storage_key, self._load_storage_state(storage_key), False
 
     def _link_command_key(
         self, state_key: str, state: dict[str, Any], command_key: str | None
@@ -503,12 +524,30 @@ class PlanModePlugin:
         remainder = remainder.strip()
 
         with self._lock:
-            command_storage_key, state = self._command_state(identity.key)
+            command_storage_key, state, unresolved_ui_command = self._command_state(
+                identity.key
+            )
+            if action != "on" and unresolved_ui_command:
+                return (
+                    "Plan mode command was refused: Hermes did not bind the stable UI "
+                    "session ID and this session key is not linked yet. Submit one ordinary "
+                    "turn in this tab, then retry; the plugin will not guess across tabs."
+                )
             if action == "on":
                 try:
                     plans_dir = self._fixed_plans_dir()
                 except (OSError, ValueError) as exc:
                     return f"Plan mode activation was refused: {exc}."
+                preserved = {
+                    key: state[key]
+                    for key in (
+                        "canonical_ui_storage_key",
+                        "command_session_storage_keys",
+                        "cli_pid",
+                        "session_id_hash",
+                    )
+                    if key in state
+                }
                 state = {
                     "active": True,
                     "entered_at": _utc_now(),
@@ -516,6 +555,7 @@ class PlanModePlugin:
                     "task": remainder,
                     "pending_note": "",
                     "plan_files": state.get("plan_files", []),
+                    **preserved,
                 }
                 if identity.key.startswith("cli:"):
                     state["cli_pid"] = os.getpid()
@@ -702,7 +742,7 @@ class PlanModePlugin:
         with self._lock:
             if identity.key and not identity.non_cli_without_key:
                 if identity.key.startswith("sk:"):
-                    storage_key, state = self._command_state(identity.key)
+                    storage_key, state, _ = self._command_state(identity.key)
                 else:
                     storage_key = _state_storage_key(identity.key)
                     state = self._load_storage_state(storage_key)

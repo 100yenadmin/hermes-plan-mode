@@ -351,6 +351,7 @@ def test_nested_cli_ignores_all_inherited_parent_session_identity(monkeypatch):
         lambda: lambda key, default="": values.get(key, default),
     )
     monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
 
     identity = plugin_mod.derive_session_identity()
 
@@ -524,6 +525,65 @@ def test_tui_commands_reach_ui_state_after_adoption_and_key_rotation(
     session_env["HERMES_UI_SESSION_ID"] = ""
     assert "No approval note" in plugin.command("off")
     session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
+    session_env, plugin, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "rotation-command-before",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on immediate rotation")
+    session_env["HERMES_UI_SESSION_ID"] = "rotation-ui-tab"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "rotation-command-after",
+            "HERMES_UI_SESSION_ID": "",
+        }
+    )
+    response = plugin.command("off")
+    assert "refused" in response.lower()
+    assert "will not guess across tabs" in response
+
+    session_env["HERMES_UI_SESSION_ID"] = "rotation-ui-tab"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    session_env["HERMES_SESSION_KEY"] = "rotation-command-after"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "No approval note" in plugin.command("off")
+    session_env["HERMES_UI_SESSION_ID"] = "rotation-ui-tab"
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_reenabling_linked_tui_state_preserves_command_links(
+    session_env, plugin, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "reenable-command-key",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on first")
+    session_env["HERMES_UI_SESSION_ID"] = "reenable-ui-tab"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode is on" in plugin.command("on second")
+    assert "No approval note" in plugin.command("off")
+
+    session_env["HERMES_UI_SESSION_ID"] = "reenable-ui-tab"
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
