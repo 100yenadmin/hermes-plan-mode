@@ -41,8 +41,8 @@ TUI flow only on a version containing the command-binding fix.
 12. Create a second chat in the same workspace and write a lexically later plan
     there. Back in the first chat, run `/planmode approve`; confirm it approves
     only the first chat's newest plan. Repeat with `/planmode approve <file>`.
-13. In the disposable profile set `skills.inline_shell: true`, restart the
-    surface, enter plan mode, and call `skill_view`; confirm it is blocked.
+13. Enter plan mode and call `skill_view`; confirm it is blocked regardless of
+    the disposable profile's `skills.inline_shell` setting.
 
 CLI compression check: enter plan mode, trigger or wait for compression, then
 repeat a blocked terminal call. It must remain blocked because CLI state is

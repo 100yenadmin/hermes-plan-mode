@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.2 - 2026-09-23
+
+- Distinguish a CLI that merely imports gateway modules from an actually engaged
+  server session, and ignore inherited parent TUI/Desktop identity in child CLIs.
+- Keep TUI command state reachable after stable-UI adoption and session-key
+  rotation, while preserving active CLI fallback state.
+- Limit finalization cleanup to the current process's CLI state and avoid
+  destructive Windows PID probes.
+- Block `skill_view` unconditionally in plan mode; profile config cannot safely
+  prove that inline shell is disabled.
+- Add a real upstream TUI `slash.exec` profile-isolation regression, documenting
+  the confirmed upstream cross-profile routing limitation.
+
 ## 0.1.1 - 2026-09-23
 
 - Refuse activation on legacy server command paths that do not bind a session,

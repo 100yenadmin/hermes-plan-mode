@@ -161,10 +161,19 @@ def test_skill_view_is_blocked_when_inline_shell_is_enabled(
 
     blocked = plugin.pre_tool_call("skill_view", {"name": "unsafe-skill"})
     assert blocked["action"] == "block"
-    assert "inline_shell" in blocked["message"]
+    assert "skill_view is blocked" in blocked["message"]
 
     config.write_text("skills:\n  inline_shell: false\n", encoding="utf-8")
-    assert plugin.pre_tool_call("skill_view", {"name": "safe-skill"}) is None
+    assert plugin.pre_tool_call("skill_view", {"name": "safe-skill"})["action"] == "block"
+
+
+def test_skill_view_is_blocked_by_default(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+
+    blocked = plugin.pre_tool_call("skill_view", {"name": "any-skill"})
+
+    assert blocked["action"] == "block"
 
 
 def test_extra_allowed_tools_extend_allowlist(plugin, session_env, tmp_path):
@@ -303,14 +312,49 @@ def test_nested_cli_ignores_inherited_parent_session_key(monkeypatch, surface):
     assert identity.key == f"cli:{os.getpid()}"
 
 
+def test_nested_cli_ignores_all_inherited_parent_session_identity(monkeypatch):
+    values = {
+        "HERMES_SESSION_KEY": "parent-session-key",
+        "HERMES_SESSION_SOURCE": "tui",
+        "HERMES_SESSION_PLATFORM": "desktop",
+        "HERMES_UI_SESSION_ID": "parent-ui-tab",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        plugin_mod,
+        "_session_reader",
+        lambda: lambda key, default="": values.get(key, default),
+    )
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+
+    identity = plugin_mod.derive_session_identity()
+
+    assert identity.key == f"cli:{os.getpid()}"
+
+
 def test_unbound_server_surface_refuses_activation(session_env, plugin, monkeypatch):
     session_env.clear()
-    monkeypatch.setitem(sys.modules, "tui_gateway.server", ModuleType("tui_gateway.server"))
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: True)
 
     response = plugin.command("on")
 
     assert "refused" in response.lower()
     assert "session binding" in response.lower()
+
+
+def test_cli_still_works_after_gateway_run_is_imported(
+    session_env, plugin, monkeypatch, tmp_path
+):
+    session_env.clear()
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+    monkeypatch.setitem(sys.modules, "gateway.run", ModuleType("gateway.run"))
+
+    response = plugin.command("on imported gateway module")
+
+    assert "Plan mode is on" in response
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
 
 
 def test_legacy_cli_state_blocks_when_turn_derives_session_key(
@@ -334,6 +378,28 @@ def test_legacy_cli_state_blocks_when_turn_derives_session_key(
 
     assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
     assert "Plan mode is ON" in plugin.pre_llm_call()["context"]
+
+
+def test_ui_adoption_never_deletes_active_current_process_cli_state(
+    session_env, plugin, tmp_path
+):
+    session_env.clear()
+    session_env.update(
+        {"HERMES_SESSION_SOURCE": "cli", "TERMINAL_CWD": str(tmp_path)}
+    )
+    assert "Plan mode is on" in plugin.command("on legacy cli")
+    cli_key = f"cli:{os.getpid()}"
+
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "bound-turn-key",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "desktop-tab-9",
+        }
+    )
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    assert plugin._load_state(cli_key).get("active") is True
 
 
 def test_durable_legacy_cli_state_blocks_after_plugin_reload(
@@ -376,10 +442,75 @@ def test_tui_state_survives_session_key_rotation_via_stable_ui_id(
     assert "Plan mode is ON" in plugin.pre_llm_call()["context"]
 
 
+def test_tui_commands_reach_ui_state_after_adoption_and_key_rotation(
+    session_env, plugin, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "command-key-before",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on command continuity")
+
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode: on" in plugin.command("status")
+    assert "remains on" in plugin.command("reject revise the plan")
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
+    assert "The user rejected the plan: revise the plan. Revise it." in plugin.pre_llm_call()["context"]
+
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan approved" in plugin.command("approve")
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
+    assert "The user approved the plan" in plugin.pre_llm_call()["context"]
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode is on" in plugin.command("on after approval")
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "command-key-after",
+            "HERMES_UI_SESSION_ID": "desktop-tab-8",
+        }
+    )
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "No approval note" in plugin.command("off")
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
 def test_session_reset_clears_cli_state(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
     plugin.on_session_reset(platform="cli")
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_tui_reset_clears_adopted_ui_and_linked_command_states(
+    plugin, session_env, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "reset-command-key",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    plugin.command("on")
+    session_env["HERMES_UI_SESSION_ID"] = "reset-ui-tab"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    plugin.on_session_reset(platform="tui")
+
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
@@ -399,6 +530,23 @@ def test_session_finalize_clears_cli_state(plugin, session_env, tmp_path):
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
+def test_session_finalize_never_clears_matching_gateway_session(
+    plugin, session_env, tmp_path
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    plugin.pre_tool_call("read_file", {}, session_id="gateway-session-id")
+    session_env["HERMES_SESSION_KEY"] = ""
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+
+    plugin.on_session_finalize(
+        platform="telegram", session_id="gateway-session-id"
+    )
+
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+
 def test_dead_cli_pid_state_is_pruned(plugin, session_env):
     dead_pid = 99_999_999
     dead_key = f"cli:{dead_pid}"
@@ -411,6 +559,20 @@ def test_dead_cli_pid_state_is_pruned(plugin, session_env):
 
     assert plugin.pre_tool_call("read_file", {"path": "/tmp/x"}) is None
     assert plugin._load_state(dead_key) == {}
+
+
+def test_pid_liveness_never_signals_current_or_windows_processes(
+    plugin, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(plugin_mod.os, "kill", lambda pid, sig: calls.append((pid, sig)))
+
+    assert plugin._pid_is_alive(os.getpid()) is True
+    assert calls == []
+
+    monkeypatch.setattr(plugin_mod.os, "name", "nt")
+    assert plugin._pid_is_alive(12345) is True
+    assert calls == []
 
 
 def test_unbound_gateway_reset_clears_unique_active_session(plugin, session_env, tmp_path):
