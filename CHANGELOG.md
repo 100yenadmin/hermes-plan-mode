@@ -5,11 +5,13 @@
 - Distinguish a CLI that merely imports gateway modules from an actually engaged
   server session, and ignore inherited parent TUI/Desktop identity in child CLIs.
 - Keep TUI command state reachable after stable-UI adoption and session-key
-  rotation, while preserving active CLI fallback state.
+  rotation, while preserving and synchronizing active CLI fallback state.
 - Limit finalization cleanup to the current process's CLI state and avoid
   destructive Windows PID probes.
 - Block `skill_view` unconditionally in plan mode; profile config cannot safely
   prove that inline shell is disabled.
+- Revalidate the fixed plan root before each writer to block post-activation
+  symlink swaps.
 - Add a real upstream TUI `slash.exec` profile-isolation regression, documenting
   the confirmed upstream cross-profile routing limitation.
 

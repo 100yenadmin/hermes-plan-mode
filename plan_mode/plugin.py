@@ -172,6 +172,21 @@ def _path_is_inside(target: str, plans_dir: str) -> bool:
         return False
 
 
+def _plans_dir_is_still_safe(plans_dir: str) -> bool:
+    """Revalidate the fixed plan root immediately before a writer is allowed."""
+    if not isinstance(plans_dir, str) or not os.path.isabs(plans_dir):
+        return False
+    hermes_dir = os.path.dirname(plans_dir)
+    try:
+        return (
+            not os.path.islink(hermes_dir)
+            and not os.path.islink(plans_dir)
+            and os.path.realpath(plans_dir) == plans_dir
+        )
+    except OSError:
+        return False
+
+
 def _patch_targets(args: dict[str, Any]) -> list[str] | None:
     """Extract every replace/V4A patch target; ``None`` means not explicit/safe."""
     mode = str(args.get("mode") or "replace").strip().lower()
@@ -349,10 +364,16 @@ class PlanModePlugin:
             return
         linked = self._linked_command_storage_keys(state)
         command_storage = _state_storage_key(command_key)
+        canonical_storage = _state_storage_key(state_key)
+        if (
+            command_storage in linked
+            and state.get("canonical_ui_storage_key") == canonical_storage
+        ):
+            return
         if command_storage not in linked:
             linked.append(command_storage)
         state["command_session_storage_keys"] = linked[-256:]
-        state["canonical_ui_storage_key"] = _state_storage_key(state_key)
+        state["canonical_ui_storage_key"] = canonical_storage
         self._save_state(state_key, state)
 
     @staticmethod
@@ -401,6 +422,11 @@ class PlanModePlugin:
             cli_state = self._load_state(cli_key)
             if cli_state.get("active"):
                 if identity.key and identity.key.startswith("ui:"):
+                    linked = self._linked_command_storage_keys(cli_state)
+                    cli_storage = _state_storage_key(cli_key)
+                    if cli_storage not in linked:
+                        linked.append(cli_storage)
+                    cli_state["command_session_storage_keys"] = linked[-256:]
                     self._link_command_key(
                         identity.key, cli_state, identity.fallback_key
                     )
@@ -601,6 +627,12 @@ class PlanModePlugin:
                     plans_dir = state.get("plans_dir")
                     if not targets or not isinstance(plans_dir, str):
                         return _block_message(name, "Every write target must be explicit and absolute.")
+                    if not _plans_dir_is_still_safe(plans_dir):
+                        return _block_message(
+                            name,
+                            "The plans directory changed after activation; reactivate plan mode "
+                            "only after restoring a non-symlink plan root.",
+                        )
                     if all(_path_is_inside(target, plans_dir) for target in targets):
                         self._remember_plan_targets(state_key, state, targets)
                         return None

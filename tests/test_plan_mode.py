@@ -215,6 +215,30 @@ def test_symlink_escape_is_blocked(plugin, session_env, tmp_path):
     assert plugin.pre_tool_call("write_file", {"path": str(escaped), "content": "x"})["action"] == "block"
 
 
+def test_plan_root_symlink_swap_after_activation_is_blocked(
+    plugin, session_env, tmp_path
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    plans = tmp_path / ".hermes" / "plans"
+    original = tmp_path / ".hermes" / "plans-original"
+    outside = tmp_path / "outside-after-activation"
+    outside.mkdir()
+    plans.rename(original)
+    try:
+        plans.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    escaped = plans / "plan.md"
+    blocked = plugin.pre_tool_call(
+        "write_file", {"path": str(escaped), "content": "x"}
+    )
+
+    assert blocked["action"] == "block"
+    assert "plans directory" in blocked["message"]
+
+
 @pytest.mark.parametrize("symlink_component", [".hermes", ".hermes/plans"])
 def test_activation_refuses_symlinked_plan_root_component(
     plugin, session_env, tmp_path, symlink_component
@@ -400,6 +424,22 @@ def test_ui_adoption_never_deletes_active_current_process_cli_state(
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
 
     assert plugin._load_state(cli_key).get("active") is True
+
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan approved" in plugin.command("approve")
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-9"
+    assert "The user approved the plan" in plugin.pre_llm_call()["context"]
+    assert plugin.pre_tool_call("terminal", {}) is None
+    assert plugin._load_state(cli_key).get("active") is False
+
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode is on" in plugin.command("on legacy cli again")
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-9"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "No approval note" in plugin.command("off")
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-9"
+    assert plugin.pre_tool_call("terminal", {}) is None
 
 
 def test_durable_legacy_cli_state_blocks_after_plugin_reload(

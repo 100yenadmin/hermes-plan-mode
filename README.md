@@ -134,9 +134,13 @@ either `.hermes` or `.hermes/plans` is a symlink or the final real path differs
 from `<real session cwd>/.hermes/plans`.
 Every plan write target must be explicit and absolute. Containment uses
 `realpath` plus `commonpath`, so `..`, absolute outside paths, symlink escapes,
-and a multi-file patch with any outside target are rejected. Any exception in
-the active `pre_tool_call` callback returns a block directive; Hermes otherwise
-treats plugin-hook exceptions as fail-open.
+and a multi-file patch with any outside target are rejected. The hook also
+revalidates `.hermes` and `.hermes/plans` immediately before allowing each
+writer. A narrow time-of-check/time-of-use race remains because the plugin does
+not own Hermes' eventual file-open operation; do not let side agents or other
+processes mutate the plan root during plan mode. Any exception in the active
+`pre_tool_call` callback returns a block directive; Hermes otherwise treats
+plugin-hook exceptions as fail-open.
 
 ## Known limitations
 
