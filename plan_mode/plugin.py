@@ -124,12 +124,16 @@ def derive_session_identity(platform_hint: str = "") -> SessionIdentity:
     inherited_cli_identity = bool(
         not context_engaged
         and (
-            session_key
-            and session_key
-            == str(os.environ.get("HERMES_SESSION_KEY") or "").strip()
-            or ui_session_id
-            and ui_session_id
-            == str(os.environ.get("HERMES_UI_SESSION_ID") or "").strip()
+            (
+                session_key
+                and session_key
+                == str(os.environ.get("HERMES_SESSION_KEY") or "").strip()
+            )
+            or (
+                ui_session_id
+                and ui_session_id
+                == str(os.environ.get("HERMES_UI_SESSION_ID") or "").strip()
+            )
         )
     )
     if inherited_cli_identity:
@@ -356,7 +360,9 @@ class PlanModePlugin:
             if linked_storage != storage_key:
                 self._save_storage_state(linked_storage, state)
 
-    def _command_state(self, raw_key: str) -> tuple[str, dict[str, Any], bool]:
+    def _command_state(
+        self, raw_key: str, surface: str = ""
+    ) -> tuple[str, dict[str, Any], bool]:
         """Resolve a command-only sk key to the one UI state that linked it."""
         storage_key = _state_storage_key(raw_key)
         if raw_key.startswith("sk:"):
@@ -375,7 +381,14 @@ class PlanModePlugin:
                 candidate, state = matches[0]
                 return candidate, state, False
             direct = self._load_storage_state(storage_key)
-            return storage_key, direct, bool(canonical_active and not direct.get("active"))
+            ui_surface = str(surface or "").strip().lower() in {
+                "tui",
+                "desktop",
+                "dashboard",
+            }
+            return storage_key, direct, bool(
+                ui_surface and canonical_active and not direct.get("active")
+            )
         return storage_key, self._load_storage_state(storage_key), False
 
     def _link_command_key(
@@ -525,7 +538,7 @@ class PlanModePlugin:
 
         with self._lock:
             command_storage_key, state, unresolved_ui_command = self._command_state(
-                identity.key
+                identity.key, identity.surface
             )
             if action != "on" and unresolved_ui_command:
                 return (
@@ -750,7 +763,9 @@ class PlanModePlugin:
         with self._lock:
             if identity.key and not identity.non_cli_without_key:
                 if identity.key.startswith("sk:"):
-                    storage_key, state, _ = self._command_state(identity.key)
+                    storage_key, state, _ = self._command_state(
+                        identity.key, identity.surface
+                    )
                 else:
                     storage_key = _state_storage_key(identity.key)
                     state = self._load_storage_state(storage_key)

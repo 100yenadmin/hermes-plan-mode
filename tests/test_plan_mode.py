@@ -595,6 +595,32 @@ def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
+def test_unrelated_gateway_command_is_not_treated_as_rotated_ui_key(
+    session_env, plugin, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "ui-command-key",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on ui session")
+    session_env["HERMES_UI_SESSION_ID"] = "ui-tab"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "telegram-session-key",
+            "HERMES_SESSION_SOURCE": "telegram",
+            "HERMES_UI_SESSION_ID": "",
+        }
+    )
+
+    assert "Plan mode: off" in plugin.command("status")
+
+
 def test_reenabling_linked_tui_state_preserves_command_links(
     session_env, plugin, tmp_path
 ):
