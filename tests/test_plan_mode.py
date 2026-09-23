@@ -167,32 +167,74 @@ def test_read_allowlist_and_unknown_blocks(plugin, session_env, tmp_path):
     assert plugin.pre_tool_call("totally_new_tool", {})["action"] == "block"
 
 
+def _fake_skill_loader(monkeypatch, loader):
+    module = ModuleType("agent.skill_preprocessing")
+    if loader is not None:
+        module.load_skills_config = loader
+    monkeypatch.setitem(sys.modules, "agent.skill_preprocessing", module)
+
+
 def test_skill_view_is_blocked_when_inline_shell_is_enabled(
     plugin, session_env, tmp_path, monkeypatch
 ):
-    home = tmp_path / "hermes-home"
-    home.mkdir()
-    config = home / "config.yaml"
-    config.write_text("skills:\n  inline_shell: true\n", encoding="utf-8")
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    skills_cfg = {"inline_shell": True}
+    _fake_skill_loader(monkeypatch, lambda: skills_cfg)
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
 
     blocked = plugin.pre_tool_call("skill_view", {"name": "unsafe-skill"})
     assert blocked["action"] == "block"
     assert "skill_view is blocked" in blocked["message"]
+    assert "inline_shell" in blocked["message"]
 
-    config.write_text("skills:\n  inline_shell: false\n", encoding="utf-8")
-    assert plugin.pre_tool_call("skill_view", {"name": "safe-skill"})["action"] == "block"
+    skills_cfg["inline_shell"] = False
+    assert plugin.pre_tool_call("skill_view", {"name": "safe-skill"}) is None
 
 
-def test_skill_view_is_blocked_by_default(plugin, session_env, tmp_path):
+def test_skill_view_is_allowed_when_hermes_reports_inline_shell_off(
+    plugin, session_env, tmp_path, monkeypatch
+):
+    _fake_skill_loader(monkeypatch, lambda: {})
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+
+    assert plugin.pre_tool_call("skill_view", {"name": "any-skill"}) is None
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+    assert plugin.pre_tool_call(
+        "write_file", {"path": str(tmp_path / "outside.md"), "content": "x"}
+    )["action"] == "block"
+
+
+def _raise_loader():
+    raise RuntimeError("config unreadable")
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [None, _raise_loader, lambda: None, lambda: ["inline_shell", False]],
+    ids=["loader-missing", "loader-raises", "returns-none", "returns-non-dict"],
+)
+def test_skill_view_fails_closed_when_hermes_skill_loader_is_unusable(
+    plugin, session_env, tmp_path, monkeypatch, loader
+):
+    _fake_skill_loader(monkeypatch, loader)
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
 
     blocked = plugin.pre_tool_call("skill_view", {"name": "any-skill"})
 
     assert blocked["action"] == "block"
+    assert "skill_view is blocked" in blocked["message"]
+
+
+def test_skill_view_fails_closed_when_skill_module_is_missing(
+    plugin, session_env, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(sys.modules, "agent.skill_preprocessing", None)
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+
+    assert plugin.pre_tool_call("skill_view", {"name": "any-skill"})["action"] == "block"
 
 
 def test_extra_allowed_tools_extend_allowlist(plugin, session_env, tmp_path):

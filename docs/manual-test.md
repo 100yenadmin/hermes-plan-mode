@@ -11,10 +11,13 @@ hermes plugins enable plan-mode
 
 Run the following on each supported surface (CLI, gateway, and TUI):
 
-On Hermes 0.21.3, the TUI/dashboard plugin-command path is intentionally
-unsupported because it does not bind a session. Step 1 must return the clear
-session-binding refusal instead of claiming plan mode is active. Continue the
-TUI flow only on a version containing the command-binding fix.
+Enforced in the classic CLI on released Hermes (≤ 0.21.4, tag `v2026.9.21`).
+Gateway/TUI/Desktop need a Hermes build that includes NousResearch/hermes-agent
+commits `5943347a2a` (gateway) and `35fdb4608a` (TUI/Desktop), which landed on
+`main` after `v2026.9.21` and are in no release tag yet; earlier builds refuse
+`/planmode on` there instead of pretending. On such an earlier build, step 1
+on gateway, TUI or Desktop must return the clear session-binding refusal;
+continue those flows only on a build that includes the matching commit.
 
 1. Start a session in a disposable workspace and run `/planmode on write a
    hello-world plan`.
@@ -41,8 +44,11 @@ TUI flow only on a version containing the command-binding fix.
 12. Create a second chat in the same workspace and write a lexically later plan
     there. Back in the first chat, run `/planmode approve`; confirm it approves
     only the first chat's newest plan. Repeat with `/planmode approve <file>`.
-13. Enter plan mode and call `skill_view`; confirm it is blocked regardless of
-    the disposable profile's `skills.inline_shell` setting.
+13. Enter plan mode and call `skill_view` with the default profile config
+    (`skills.inline_shell` unset or `false`); confirm it is allowed. Set
+    `skills.inline_shell: true` in the disposable profile's `config.yaml`, call
+    `skill_view` again, and confirm it is blocked with a message naming
+    `skills.inline_shell`.
 
 CLI compression check: enter plan mode, trigger or wait for compression, then
 repeat a blocked terminal call. It must remain blocked because CLI state is

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import importlib
-from importlib.metadata import version
 import inspect
 import os
 from pathlib import Path
@@ -25,11 +24,25 @@ def _copy_plugin(destination: Path) -> None:
     )
 
 
+def _gateway_binds_plugin_commands() -> bool:
+    """Feature gate for NousResearch/hermes-agent 5943347a2a (after v2026.9.21)."""
+    from gateway.run_inbound import GatewayInboundMixin
+
+    source = inspect.getsource(GatewayInboundMixin._hm_dispatch_quick_and_plugin_commands)
+    return "_session_env_scope" in source
+
+
+def _tui_binds_plugin_commands() -> bool:
+    """Feature gate for NousResearch/hermes-agent 35fdb4608a (after v2026.9.21)."""
+    from tui_gateway import methods_tools
+
+    return "session" in inspect.signature(methods_tools._run_plugin_command).parameters
+
+
 def test_pinned_upstream_session_seam_is_importable_and_bound_around_commands():
     pytest.importorskip("hermes_cli.plugins")
-    runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])
-    if runtime_version < (0, 21, 4):
-        pytest.skip("source-site assertion targets pinned upstream Hermes 0.21.4+")
+    if not _gateway_binds_plugin_commands():
+        pytest.skip("Hermes build lacks the gateway plugin-command session binding (5943347a2a)")
     from gateway.session_context import get_session_env
     from gateway.run_inbound import GatewayInboundMixin
 
@@ -274,8 +287,7 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
         else:
             response = methods_tools._run_plugin_command(handler, "on regression proof")
 
-        runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])
-        if runtime_version < (0, 21, 4):
+        if "session" not in params:
             assert "refused" in response.lower()
             assert "session binding" in response.lower()
         else:
@@ -370,9 +382,8 @@ def test_real_ui_adoption_survives_gateway_process_restart(tmp_path, monkeypatch
 
 def test_real_tui_resume_rebuild_does_not_clear_plan_mode(tmp_path, monkeypatch):
     pytest.importorskip("hermes_cli.plugins")
-    runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])
-    if runtime_version < (0, 21, 4):
-        pytest.skip("real TUI resume regression targets pinned upstream Hermes 0.21.4+")
+    if not _tui_binds_plugin_commands():
+        pytest.skip("Hermes build lacks the TUI plugin-command session binding (35fdb4608a)")
     home = tmp_path / "hermes-home"
     workspace = tmp_path / "workspace"
     empty_bundled = tmp_path / "empty-bundled"
@@ -449,9 +460,7 @@ def test_real_tui_resume_rebuild_does_not_clear_plan_mode(tmp_path, monkeypatch)
 
 def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypatch):
     pytest.importorskip("hermes_cli.plugins")
-    runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])
-    if runtime_version < (0, 21, 4):
-        pytest.skip("real profile-aware slash.exec regression targets pinned upstream")
+    session_bound = _tui_binds_plugin_commands()
     homes = [tmp_path / "profiles" / "profile-a", tmp_path / "profiles" / "profile-b"]
     workspace = tmp_path / "workspace"
     empty_bundled = tmp_path / "empty-bundled"
@@ -490,7 +499,11 @@ def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypa
         output = result["result"]["output"]
 
         assert "refused" in output.lower()
-        assert "profile" in output.lower()
+        if session_bound:
+            assert "profile" in output.lower()
+        else:
+            # Released builds without 35fdb4608a refuse on the missing binding.
+            assert "session binding" in output.lower()
     finally:
         server._sessions.pop(runtime_id, None)
         plugins._reset_plugin_managers_for_tests()
@@ -544,5 +557,131 @@ def test_real_session_bound_cwd_wins_over_backend_process_cwd(tmp_path, monkeypa
         assert str(backend_cwd / ".hermes" / "plans") not in response
     finally:
         clear_session_vars(session_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+def test_real_skill_view_follows_hermes_inline_shell_config(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    skill_preprocessing = pytest.importorskip("agent.skill_preprocessing")
+    home = tmp_path / "hermes-home"
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    base_config = "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n"
+    (home / "config.yaml").write_text(base_config, encoding="utf-8")
+
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.setenv("TERMINAL_CWD", str(workspace))
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+
+    home_token = set_hermes_home_override(str(home))
+    session_tokens = None
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        plugins.get_plugin_manager().discover_and_load()
+        handler = plugins.get_plugin_command_handler("planmode")
+        assert handler is not None
+        session_tokens = set_session_vars(
+            platform="telegram",
+            source="telegram",
+            session_key="skill-view-key",
+            session_id="skill-view-session",
+            cwd=str(workspace),
+        )
+        assert "Plan mode is on" in handler("on skill proof")
+        block = plugins.get_pre_tool_call_block_message
+        session = {"session_id": "skill-view-session"}
+
+        # Default profile config: the tool's own loader reports inline shell off.
+        assert not skill_preprocessing.load_skills_config().get("inline_shell", False)
+        assert block("skill_view", {"name": "any-skill"}, **session) is None
+        assert block("terminal", {"command": "pwd"}, **session)
+        assert block(
+            "write_file", {"path": str(workspace / "outside.md"), "content": "x"}, **session
+        )
+
+        (home / "config.yaml").write_text(
+            base_config + "skills:\n  inline_shell: true\n", encoding="utf-8"
+        )
+        assert skill_preprocessing.load_skills_config().get("inline_shell") is True
+        message = block("skill_view", {"name": "any-skill"}, **session)
+        assert message and "inline_shell" in message
+
+        (home / "config.yaml").write_text(
+            base_config + "skills:\n  inline_shell: false\n", encoding="utf-8"
+        )
+        assert block("skill_view", {"name": "any-skill"}, **session) is None
+
+        def _raise():
+            raise RuntimeError("config unreadable")
+
+        monkeypatch.setattr(skill_preprocessing, "load_skills_config", _raise)
+        assert block("skill_view", {"name": "any-skill"}, **session)
+        monkeypatch.setitem(sys.modules, "agent.skill_preprocessing", None)
+        assert block("skill_view", {"name": "any-skill"}, **session)
+    finally:
+        if session_tokens is not None:
+            clear_session_vars(session_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+def test_real_extra_allowed_tools_config_path_matches_readme(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    home = tmp_path / "hermes-home"
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n"
+        "  enabled:\n    - plan-mode\n"
+        "  load_timeout_seconds: 0\n"
+        "  entries:\n"
+        "    plan-mode:\n"
+        "      settings:\n"
+        "        plan_mode:\n"
+        "          extra_allowed_tools:\n            - custom_read\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.setenv("TERMINAL_CWD", str(workspace))
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+
+    home_token = set_hermes_home_override(str(home))
+    session_tokens = None
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        plugins.get_plugin_manager().discover_and_load()
+        handler = plugins.get_plugin_command_handler("planmode")
+        assert handler is not None
+        session_tokens = set_session_vars(
+            platform="telegram",
+            source="telegram",
+            session_key="extra-tools-key",
+            session_id="extra-tools-session",
+            cwd=str(workspace),
+        )
+        assert "Plan mode is on" in handler("on extra tools proof")
+        block = plugins.get_pre_tool_call_block_message
+        assert block("custom_read", {}, session_id="extra-tools-session") is None
+        assert block("other_custom_tool", {}, session_id="extra-tools-session")
+    finally:
+        if session_tokens is not None:
+            clear_session_vars(session_tokens)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)

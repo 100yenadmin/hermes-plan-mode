@@ -116,6 +116,34 @@ def _gateway_process_is_admitted() -> bool:
         return False
 
 
+def _skill_view_block_reason() -> str | None:
+    """Return why ``skill_view`` must stay blocked, or ``None`` when it is safe.
+
+    ``skill_view`` preprocesses SKILL.md through
+    ``agent.skill_preprocessing.preprocess_skill_content`` without an explicit
+    ``skills_cfg`` (``tools/skills_tool_plugin.py:117``), so the tool reads the
+    same ``load_skills_config()`` this hook calls in the same process and
+    context.  Inline shell runs only when that value is truthy.  Anything the
+    plugin cannot read through Hermes' own loader fails closed.
+    """
+    try:
+        from agent.skill_preprocessing import load_skills_config
+    except Exception:
+        return (
+            "Hermes' skill config loader (agent.skill_preprocessing.load_skills_config) "
+            "is unavailable, so inline shell cannot be ruled out."
+        )
+    try:
+        skills_cfg = load_skills_config()
+    except Exception as exc:
+        return f"Reading skills.inline_shell failed ({type(exc).__name__})."
+    if not isinstance(skills_cfg, dict):
+        return "Hermes returned an unreadable skills config, so inline shell cannot be ruled out."
+    if skills_cfg.get("inline_shell", False):
+        return "skills.inline_shell is enabled, so viewing a skill can run shell snippets."
+    return None
+
+
 def _runtime_cwd_reader() -> Callable[[], Path] | None:
     """Return Hermes' turn-scoped cwd resolver required by FIXROUND-1 W3."""
     try:
@@ -775,6 +803,9 @@ class PlanModePlugin:
                 call_args = args if isinstance(args, dict) else {}
                 if name in READ_ONLY_TOOLS or name in self._extra_allowed_tools():
                     return None
+                if name == "skill_view":
+                    reason = _skill_view_block_reason()
+                    return _block_message(name, reason) if reason else None
                 if name in PLAN_WRITERS:
                     targets = _write_targets(name, call_args)
                     plans_dir = state.get("plans_dir")

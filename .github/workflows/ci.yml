@@ -20,18 +20,31 @@ jobs:
       - run: pytest -q
 
   hermes-compat:
+    name: hermes-compat (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: v2026.9.14
+            ref: v2026.9.14
+          - name: v2026.9.21
+            ref: v2026.9.21
+          - name: main-38c289c
+            ref: 38c289c0146ed8c8b2b767eca1fff6f5b7e6382e
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
-      - name: Install pinned Hermes and tests
+      - name: Install Hermes ${{ matrix.name }} and tests
+        env:
+          HERMES_REF: ${{ matrix.ref }}
         run: |
           python -m pip install pytest
           git clone --filter=blob:none https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent"
-          git -C "$RUNNER_TEMP/hermes-agent" checkout --detach 38c289c0146ed8c8b2b767eca1fff6f5b7e6382e
+          git -C "$RUNNER_TEMP/hermes-agent" checkout --detach "$HERMES_REF"
           python -m pip install -e "$RUNNER_TEMP/hermes-agent"
       - run: pytest -q
       - run: hermes plugins validate .

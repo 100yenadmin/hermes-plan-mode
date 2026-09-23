@@ -1,9 +1,22 @@
 # Hermes Plan Mode
 
-`plan-mode` adds an enforced, per-session planning mode to Hermes CLI, gateway,
-and TUI sessions. Unlike Hermes' built-in prompt-only `/plan`, this plugin uses
-the `pre_tool_call` policy hook to block implementation tools until the user
-approves the plan.
+`plan-mode` adds an enforced, per-session planning mode to Hermes. Unlike
+Hermes' built-in prompt-only `/plan`, this plugin uses the `pre_tool_call`
+policy hook to block mutating Hermes tools dispatched through `pre_tool_call`
+until the user approves the plan. Tools that bypass `pre_tool_call` are not
+covered; see [Known limitations](#known-limitations).
+
+## Supported surfaces
+
+- **Classic CLI:** enforced on released Hermes (≤ 0.21.4, tag `v2026.9.21`)
+  and on newer builds.
+- **Messaging gateway (Telegram etc.), TUI, and Desktop:** need a Hermes build
+  that includes NousResearch/hermes-agent commits `5943347a2a` (gateway
+  plugin-command session binding) and `35fdb4608a` (TUI/Desktop plugin-command
+  session binding). Both landed on `main` after `v2026.9.21` and are in no
+  release tag yet; `upstream/main@38c289c` (the CI pin) and
+  `upstream/main@e5131dc` include them. Earlier builds refuse `/planmode on`
+  on these surfaces instead of pretending plan mode is active.
 
 ## Commands
 
@@ -35,7 +48,8 @@ The built-in allowlist is derived from Hermes' registered tools at
 
 - file exploration: `read_file`, `search_files`;
 - web research: `web_search`, `web_extract`;
-- skills and history: `skills_list`, `session_search`;
+- skills and history: `skills_list`, `session_search`, and `skill_view` when
+  Hermes reports inline shell off (below);
 - planning/user input: `todo_list`, `clarify`;
 - analysis-only media/browser reads: `vision_analyze`, `video_analyze`,
   `browser_snapshot`, `browser_get_images`, `browser_vision`;
@@ -50,38 +64,78 @@ connector tools, browser mutations, cron/kanban mutations, and every unknown
 tool are blocked.
 
 Administrators may extend the allowlist with the plugin setting
-`plan_mode.extra_allowed_tools` (a list of exact tool names). This is an
-explicit policy override: added tools are trusted as read-only by the operator.
+`plan_mode.extra_allowed_tools` (a list of exact tool names) in the profile's
+`config.yaml`:
 
-`skill_view` is always blocked in plan mode. Skill preprocessing can execute
-inline-shell snippets, and a plugin cannot reliably prove which profile config
-governs a project-plugin call, so config-file guessing is not a safe allowlist
-gate.
+```yaml
+plugins:
+  entries:
+    plan-mode:
+      settings:
+        plan_mode:
+          extra_allowed_tools: [my_read_only_tool]
+```
+
+This is an explicit policy override: added tools are trusted as read-only by
+the operator.
+
+`skill_view` is allowed only while Hermes itself will not run inline shell for
+it. The tool preprocesses SKILL.md through
+`agent.skill_preprocessing.preprocess_skill_content` without an explicit
+`skills_cfg` (`tools/skills_tool_plugin.py:117` on every Hermes from
+`v2026.9.11` through `upstream/main@e5131dc`), so it runs inline shell
+only when `load_skills_config().get("inline_shell")` is truthy
+(`skills.inline_shell`, default `false`). The hook calls that same public
+loader at call time in the same process and context, instead of guessing
+config files. `skill_view` stays blocked when `skills.inline_shell` is true,
+when the loader cannot be imported, when it raises, or when it returns a
+non-dict.
 
 ## Session identity and persistence
 
-The plugin has two narrowly scoped internal dependencies required by the WS2
-contracts: `gateway.session_context.get_session_env` plus
-`session_context_engaged` (`gateway/session_context.py:21-23,173`) for identity,
-and `agent.runtime_cwd.resolve_agent_cwd` (`agent/runtime_cwd.py:90-92`) for the
-turn-scoped workspace required by fix-round W3. Both modules are imported lazily
-and wrapped in `try/except`. If the identity import is unavailable, the plugin
-still loads, `/planmode on` refuses with an unsupported-version explanation,
-and hooks do not block. If the cwd resolver is unavailable, activation uses an
-existing absolute `TERMINAL_CWD` or the classic CLI process cwd.
+Beyond the public plugin context, the plugin reads these internal Hermes
+seams. Each is imported lazily and wrapped in `try/except`; line citations are
+`upstream/main@e5131dc`.
+
+1. `gateway.session_context.get_session_env` (`gateway/session_context.py:173`):
+   session identity. If missing, the plugin still loads, `/planmode on`
+   refuses with an unsupported-version explanation, and hooks do not block
+   because no plan state can be created.
+2. `gateway.session_context.session_context_engaged`
+   (`gateway/session_context.py:21-23`): whether this process has bound a
+   server session. If missing or raising, it is treated as never engaged;
+   server processes are then recognised only by Hermes' gateway admission
+   marker (item 3), and an unbound server command still refuses.
+3. Gateway admission: the `HERMES_GATEWAY_SESSION` environment flag and
+   `gateway.run._gateway_runner_ref`, read only if `gateway.run` is already
+   imported. If the reference is missing, only the environment flag admits a
+   gateway process; a CLI that merely imports gateway code stays a CLI.
+4. `agent.runtime_cwd.resolve_agent_cwd` (`agent/runtime_cwd.py:90-92`): the
+   turn-scoped workspace. If missing, activation uses an existing absolute
+   `TERMINAL_CWD` or the classic CLI process cwd.
+5. `hermes_cli.profiles.get_active_profile_name`: the registration profile when
+   the plugin's Hermes home is not `profiles/<name>`. If missing, the
+   registration profile is taken as `default`, and a bound session from any
+   other profile refuses activation.
+6. `agent.skill_preprocessing.load_skills_config`
+   (`agent/skill_preprocessing.py:22-31`): whether `skill_view` would run
+   inline shell. If missing, raising, or returning a non-dict, `skill_view` is
+   blocked.
 
 The cwd import remains necessary on both target Hermes versions. Their
 `gateway.session_context.set_session_vars(..., cwd=...)` stores cwd only in
-`agent.runtime_cwd` (`gateway/session_context.py:115-144`); cwd is not one of the
+`agent.runtime_cwd` (`gateway/session_context.py:115-146`); cwd is not one of the
 variables exposed by `get_session_env`. Removing that reader would make TUI and
 Desktop plans fall back to the backend process directory instead of the session
 workspace.
 
 The dependency is intentional:
 
-- `gateway/run_inbound.py:1062-1072` binds `_session_env_scope` around plugin
+- `gateway/run_inbound.py:1061-1078` binds `_session_env_scope` around plugin
   command handlers specifically so a handler reading `get_session_env()` sees
-  the correct session (`#108698`).
+  the correct session (`#108698`, commit `5943347a2a`); `_run_plugin_command`
+  (`tui_gateway/methods_tools.py:573-585`) does the same for TUI/Desktop
+  (commit `35fdb4608a`). Neither is in a release tag through `v2026.9.21`.
 - Hermes propagates the same ContextVar state into tool worker threads; the
   acceptance test exercises the real `_pre_tool_block` entry through
   `tools.thread_context.propagate_context_to_thread`, the helper used by the
@@ -108,14 +162,15 @@ has never been engaged in that process. Activation is refused when that
 inherited identity appears inside a gateway/slash-worker process because it
 cannot be assigned safely to one session.
 
-Hermes 0.21.3 does not bind a TUI/dashboard session around plugin command
-handlers. TUI/Desktop session creation sets `HERMES_GATEWAY_SESSION=1`, so even
+Released Hermes through 0.21.4 (`v2026.9.21`) does not bind a TUI/dashboard
+session around plugin command handlers. TUI/Desktop session creation sets `HERMES_GATEWAY_SESSION=1`, so even
 the first unbound `/planmode on` refuses and names the required Hermes fix.
 Its messaging gateway also omits command binding; the gateway-start-only
 live-runner reference makes the first `/planmode on` refuse instead of falling
 back to a process-wide CLI key. The inherited `HERMES_EXEC_ASK` environment
-value alone is not trusted, so nested CLIs remain independent. Hermes 0.21.3
-gateway plan mode is therefore unsupported and fails closed at activation.
+value alone is not trusted, so nested CLIs remain independent. Gateway, TUI
+and Desktop plan mode on released Hermes is therefore unsupported and fails
+closed at activation.
 Importing `gateway.run` alone is not treated as a server signal, so normal CLI
 remains usable after every chat-turn import. The tool and LLM hooks
 also treat an active current-process CLI state as plan mode if a later legacy
@@ -160,31 +215,34 @@ plugin-hook exceptions as fail-open.
 
 Hermes' Codex app-server runtime executes native `exec` and `applyPatch`
 outside `pre_tool_call` (`agent/transports/codex_app_server_session.py:707-708`
-in the pinned upstream source). The documented plugin context exposes no
+at `upstream/main@e5131dc`). The documented plugin context exposes no
 public command-time runtime identifier, so this plugin cannot reliably detect
 and refuse that runtime without another private dependency. Plan mode therefore
 does **not** enforce Codex-native app-server actions. Use a normal Hermes tool
 runtime when enforcement is required.
 
 This plugin performs no network calls, launches no subprocesses, contains no
-self-updater, and registers no tools.
+self-updater, and registers no tools. While plan mode is active, its
+`pre_llm_call` hook adds a short plan-mode note to each turn's context.
 
 TUI `/background` and `btw` side agents are rebound under their task id and do
 not expose a public parent-session identity to plugin hooks
-(`tui_gateway/methods_prompt.py:978` in the pinned upstream source). They can
+(`tui_gateway/methods_prompt.py:978` at `upstream/main@e5131dc`). They can
 therefore run with full tools even while the parent chat is in plan mode; do
 not use those side-agent paths while enforcement is required.
 
 Hermes collects every `pre_tool_call` result before resolving directives, and a
 different plugin's later `modify` directive can rewrite arguments after this
-plugin checked them (`hermes_cli/plugins.py:1870-1889`). Plan mode cannot
+plugin checked them (`hermes_cli/plugins.py:1870-1889` at
+`upstream/main@e5131dc`). Plan mode cannot
 re-validate another plugin's rewritten arguments. Avoid combining it with
 argument-rewriting plugins on plan writers.
 
-Pinned upstream Hermes 0.21.4 resolves the `slash.exec` plugin command handler
+`upstream/main@e5131dc` resolves the `slash.exec` plugin command handler
 before entering the target TUI session's `profile_home` scope
-(`tui_gateway/methods_tools.py:933-964`). `_run_plugin_command` does bind
-`HERMES_SESSION_PROFILE` for the target session (`tui_gateway/server.py:1262-1287`).
+(`tui_gateway/methods_tools.py:933-964`). `_run_plugin_command`
+(`tui_gateway/methods_tools.py:573`) does bind `HERMES_SESSION_PROFILE` for the
+target session through `_set_session_context` (`tui_gateway/server.py:1269-1296`).
 The plugin compares that profile with the Hermes home captured by its registering
 plugin manager and refuses activation on a mismatch, so the wrong launch-profile
 instance cannot claim enforcement. This refusal remains necessary until upstream

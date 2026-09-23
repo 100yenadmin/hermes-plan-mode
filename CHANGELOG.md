@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.6 - 2026-09-23
+
+- Allow `skill_view` in plan mode when Hermes' own
+  `agent.skill_preprocessing.load_skills_config()` reports `inline_shell`
+  off at call time; keep it blocked when inline shell is on or the loader is
+  unavailable, raises, or returns a non-dict.
+- Document the supported surfaces honestly: the classic CLI on released Hermes
+  (≤ 0.21.4); gateway/TUI/Desktop only on builds containing
+  NousResearch/hermes-agent `5943347a2a` and `35fdb4608a` (after
+  `v2026.9.21`). Add disclosures, list every internal Hermes seam with its
+  missing-seam behavior, and fix source citations and the
+  `extra_allowed_tools` config path.
+- Gate real-Hermes tests on the session-binding features instead of the version
+  string, and run CI against Hermes `v2026.9.14`, `v2026.9.21` and the pinned
+  `main` commit.
+
 ## 0.1.5 - 2026-09-23
 
 - Refuse activation when a bound session profile cannot be matched to the
