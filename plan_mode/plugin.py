@@ -501,6 +501,7 @@ class PlanModePlugin:
                     if cli_storage not in linked:
                         linked.append(cli_storage)
                     cli_state["command_session_storage_keys"] = linked[-256:]
+                    cli_state.pop("cli_pid", None)
                     self._link_command_key(
                         identity.key, cli_state, identity.fallback_key
                     )

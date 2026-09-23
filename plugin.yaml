@@ -1,5 +1,5 @@
 name: plan-mode
-version: "0.1.3"
+version: "0.1.4"
 description: "Enforced per-session plan mode for Hermes CLI, gateway, and TUI tool dispatch."
 author: 100yenadmin
 kind: standalone

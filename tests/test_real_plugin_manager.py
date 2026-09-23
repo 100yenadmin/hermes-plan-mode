@@ -245,6 +245,77 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
         reset_hermes_home_override(home_token)
 
 
+def test_real_ui_adoption_survives_gateway_process_restart(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    home = tmp_path / "hermes-home"
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    plans_dir = workspace / ".hermes" / "plans"
+    plans_dir.mkdir(parents=True)
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+
+    home_token = set_hermes_home_override(str(home))
+    turn_tokens = None
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        plugins.get_plugin_manager().discover_and_load()
+        handler = plugins.get_plugin_command_handler("planmode")
+        assert handler is not None
+        instance = handler.__self__
+        cli_pid = os.getpid()
+        instance._save_state(
+            f"cli:{cli_pid}",
+            {
+                "active": True,
+                "entered_at": "2026-09-23T00:00:00+00:00",
+                "plans_dir": str(plans_dir),
+                "plan_files": [],
+                "pending_note": "",
+                "cli_pid": cli_pid,
+                "owner_pid": cli_pid,
+            },
+        )
+
+        turn_tokens = set_session_vars(
+            source="tui",
+            session_key="restart-session-key",
+            session_id="restart-session-key",
+            ui_session_id="restart-ui-tab",
+            cwd=str(workspace),
+        )
+        block = plugins.get_pre_tool_call_block_message
+        assert block("terminal", {"command": "pwd"}, session_id="restart-session-key")
+
+        monkeypatch.setattr(
+            instance,
+            "_pid_is_alive",
+            lambda pid: False if pid == cli_pid else True,
+        )
+        assert block(
+            "write_file",
+            {"path": str(workspace / "outside.md"), "content": "x"},
+            session_id="restart-session-key",
+        )
+    finally:
+        if turn_tokens is not None:
+            clear_session_vars(turn_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
 def test_real_tui_resume_rebuild_does_not_clear_plan_mode(tmp_path, monkeypatch):
     pytest.importorskip("hermes_cli.plugins")
     runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])

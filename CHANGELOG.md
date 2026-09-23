@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 - 2026-09-23
+
+- Preserve adopted TUI/Desktop plan mode across gateway process restarts by
+  keeping CLI-only PID liveness metadata out of the durable UI state.
+
 ## 0.1.3 - 2026-09-23
 
 - Preserve TUI/Desktop plan mode when an agent rebuild emits a reset callback
