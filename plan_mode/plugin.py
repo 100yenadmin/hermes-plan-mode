@@ -88,6 +88,19 @@ def _session_context_is_engaged() -> bool:
         return False
 
 
+def _cron_session_is_active() -> bool:
+    """Return whether Hermes marked this ContextVar-scoped turn as cron."""
+    reader = _session_reader()
+    if reader is None:
+        return False
+    return str(reader("HERMES_CRON_SESSION", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _gateway_process_is_admitted() -> bool:
     """Return whether Hermes admitted this process as a gateway runtime."""
     truthy = {"1", "true", "yes", "on"}
@@ -258,7 +271,14 @@ class PlanModePlugin:
         if home is None or not str(home).strip():
             return None
         path = Path(str(home)).expanduser()
-        return path.name if path.parent.name == "profiles" else "default"
+        if path.parent.name == "profiles":
+            return path.name
+        try:
+            from hermes_cli.profiles import get_active_profile_name
+
+            return str(get_active_profile_name() or "").strip() or None
+        except Exception:
+            return "default"
 
     def register(self) -> None:
         self.ctx.register_command(
@@ -592,6 +612,12 @@ class PlanModePlugin:
             session_profile = str(
                 reader("HERMES_SESSION_PROFILE", "") if reader else ""
             ).strip()
+            if session_profile and self._registration_profile is None:
+                return (
+                    "Plan mode activation was refused: the plugin registration profile "
+                    "is unknown, so it cannot be matched safely to the bound session "
+                    f"profile '{session_profile}'."
+                )
             if (
                 session_profile
                 and self._registration_profile
@@ -723,6 +749,8 @@ class PlanModePlugin:
             if identity.unsupported:
                 return None
             if identity.non_cli_without_key or not identity.key:
+                if _cron_session_is_active():
+                    return None
                 with self._lock:
                     cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
                     durable_active = self._current_process_has_active_state()
@@ -781,6 +809,8 @@ class PlanModePlugin:
             if identity.unsupported:
                 return None
             if identity.non_cli_without_key or not identity.key:
+                if _cron_session_is_active():
+                    return None
                 with self._lock:
                     cli_active = self._load_state(f"cli:{os.getpid()}").get(
                         "active"

@@ -166,6 +166,58 @@ def test_real_plugin_manager_and_dispatch_guard(tmp_path, monkeypatch):
         reset_hermes_home_override(home_token)
 
 
+def test_real_custom_home_accepts_custom_profile_and_enforces_writes(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("hermes_cli.plugins")
+    home = tmp_path / "custom-hermes-home"
+    plugin_dir = home / "plugins" / "plan-mode"
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    _copy_plugin(plugin_dir)
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+
+    home_token = set_hermes_home_override(str(home))
+    session_tokens = None
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        plugins.get_plugin_manager().discover_and_load()
+        session_tokens = set_session_vars(
+            platform="desktop",
+            source="tui",
+            session_key="custom-profile-session",
+            session_id="custom-profile-session",
+            profile="custom",
+            cwd=str(workspace),
+        )
+
+        response = plugins.get_plugin_command_handler("planmode")("on custom home")
+
+        assert "Plan mode is on" in response
+        assert plugins.get_pre_tool_call_block_message(
+            "write_file",
+            {"path": str(workspace / "outside.md"), "content": "x"},
+            session_id="custom-profile-session",
+        )
+    finally:
+        if session_tokens is not None:
+            clear_session_vars(session_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
 def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, monkeypatch):
     pytest.importorskip("hermes_cli.plugins")
     home = tmp_path / "hermes-home"

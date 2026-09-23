@@ -138,6 +138,25 @@ def test_on_falls_back_to_process_cwd_for_invalid_terminal_cwd(plugin, session_e
     assert str(tmp_path / ".hermes" / "plans") in response
 
 
+def test_on_refuses_bound_profile_when_registration_profile_is_unknown(
+    session_env, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_PROFILE": "profile-a",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    ctx = FakeContext()
+    plugin = PlanModePlugin(ctx)
+
+    response = plugin.command("on")
+
+    assert "refused" in response.lower()
+    assert "registration profile" in response.lower()
+    assert ctx.state.values == {}
+
+
 def test_read_allowlist_and_unknown_blocks(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
@@ -348,6 +367,27 @@ def test_unbound_cron_request_ignores_active_state_owned_by_another_process(
 
     assert plugin.pre_tool_call("terminal", {"command": "pwd"}) is None
     assert plugin.pre_llm_call() is None
+
+
+def test_cron_marked_unbound_request_ignores_same_process_plan_mode(
+    plugin, session_env, tmp_path, monkeypatch
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    assert "Plan mode is on" in plugin.command("on")
+    session_env.clear()
+    session_env["HERMES_CRON_SESSION"] = "1"
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: True)
+
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"}) is None
+    assert plugin.pre_llm_call() is None
+
+    session_env.pop("HERMES_CRON_SESSION")
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+
+    session_env.update(
+        {"HERMES_SESSION_KEY": "unit-session", "HERMES_CRON_SESSION": "1"}
+    )
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
 
 
 def test_missing_internal_import_refuses_on_and_hooks_do_not_block(monkeypatch):

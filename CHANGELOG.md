@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5 - 2026-09-23
+
+- Refuse activation when a bound session profile cannot be matched to the
+  plugin registration profile, and recognize Hermes custom homes by the same
+  public profile-name helper Hermes uses.
+- Exempt ContextVar-marked cron runs from only the key-less process-wide guard,
+  while keeping bound plan-mode sessions enforced.
+
 ## 0.1.4 - 2026-09-23
 
 - Preserve adopted TUI/Desktop plan mode across gateway process restarts by
