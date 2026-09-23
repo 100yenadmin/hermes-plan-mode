@@ -1,5 +1,5 @@
 name: plan-mode
-version: "0.1.0"
+version: "0.1.1"
 description: "Enforced per-session plan mode for Hermes CLI, gateway, and TUI tool dispatch."
 author: 100yenadmin
 kind: standalone
@@ -8,4 +8,5 @@ provides_tools: []
 provides_hooks:
   - pre_tool_call
   - pre_llm_call
+  - on_session_finalize
   - on_session_reset

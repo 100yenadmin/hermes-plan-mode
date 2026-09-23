@@ -15,6 +15,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 from typing import Any, Callable
 
@@ -58,6 +59,7 @@ class SessionIdentity:
     unsupported: bool = False
     non_cli_without_key: bool = False
     surface: str = ""
+    fallback_key: str | None = None
 
 
 def _session_reader() -> Callable[[str, str], str] | None:
@@ -71,21 +73,61 @@ def _session_reader() -> Callable[[str, str], str] | None:
     return get_session_env
 
 
+def _runtime_cwd_reader() -> Callable[[], Path] | None:
+    """Return Hermes' turn-scoped cwd resolver required by FIXROUND-1 W3."""
+    try:
+        # W3 explicitly requires the cwd bound by _set_session_context(..., cwd=...).
+        # Import lazily so unsupported Hermes versions refuse/fallback cleanly.
+        from agent.runtime_cwd import resolve_agent_cwd
+    except Exception:
+        return None
+    return resolve_agent_cwd
+
+
 def derive_session_identity(platform_hint: str = "") -> SessionIdentity:
     """Derive one key identically for commands and all registered hooks."""
     reader = _session_reader()
     if reader is None:
         return SessionIdentity(None, unsupported=True)
 
-    session_key = str(reader("HERMES_SESSION_KEY", "") or "").strip()
-    if session_key:
-        return SessionIdentity(f"sk:{session_key}")
-
     surface = (
         str(reader("HERMES_SESSION_PLATFORM", "") or "").strip()
         or str(reader("HERMES_SESSION_SOURCE", "") or "").strip()
         or str(platform_hint or "").strip()
     )
+    session_key = str(reader("HERMES_SESSION_KEY", "") or "").strip()
+    ui_session_id = str(reader("HERMES_UI_SESSION_ID", "") or "").strip()
+    server_surface = any(
+        marker in sys.modules for marker in ("tui_gateway.server", "gateway.run")
+    )
+    inherited_cli_key = bool(
+        session_key
+        and session_key == str(os.environ.get("HERMES_SESSION_KEY") or "").strip()
+        and surface.lower() in {"", "cli", "terminal"}
+    )
+    if inherited_cli_key:
+        if server_surface:
+            return SessionIdentity(
+                None,
+                non_cli_without_key=True,
+                surface=surface or "server",
+            )
+        return SessionIdentity(f"cli:{os.getpid()}", surface=surface or "cli")
+    if ui_session_id:
+        return SessionIdentity(
+            f"ui:{ui_session_id}",
+            surface=surface,
+            fallback_key=f"sk:{session_key}" if session_key else None,
+        )
+    if session_key:
+        return SessionIdentity(f"sk:{session_key}", surface=surface)
+
+    if server_surface:
+        return SessionIdentity(
+            None,
+            non_cli_without_key=True,
+            surface=surface or "server",
+        )
     if surface and surface.lower() not in {"cli", "terminal"}:
         return SessionIdentity(None, non_cli_without_key=True, surface=surface)
     return SessionIdentity(f"cli:{os.getpid()}", surface=surface or "cli")
@@ -167,6 +209,7 @@ class PlanModePlugin:
         )
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
+        self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
         self.ctx.register_hook("on_session_reset", self.on_session_reset)
 
     def _load_state(self, key: str) -> dict[str, Any]:
@@ -190,6 +233,27 @@ class PlanModePlugin:
         self._active_keys = {
             key for key in self._active_keys if _state_storage_key(key) != storage_key
         }
+
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    def _prune_dead_cli_states(self) -> None:
+        for storage_key in list(self._active_storage_keys()):
+            state = self.ctx.state.get(storage_key, {})
+            pid = state.get("cli_pid") if isinstance(state, dict) else None
+            if isinstance(pid, int) and not self._pid_is_alive(pid):
+                self._clear_storage_key(storage_key)
 
     def _save_state(self, key: str, state: dict[str, Any]) -> None:
         state = dict(state)
@@ -225,34 +289,90 @@ class PlanModePlugin:
             )
         if identity.non_cli_without_key or not identity.key:
             return identity, (
-                "Plan mode cannot identify this non-CLI session safely. Upgrade Hermes or "
-                "use a surface that binds HERMES_SESSION_KEY."
+                "Plan mode activation was refused: this server surface lacks the required "
+                "session binding. Upgrade Hermes to a version containing the TUI/gateway "
+                "plugin-command session-binding fix."
             )
         return identity, None
 
+    def _state_for_hook(self, identity: SessionIdentity) -> tuple[str | None, dict[str, Any]]:
+        """Return active state, including the required legacy CLI fail-closed fallback."""
+        if identity.key:
+            state = self._load_state(identity.key)
+            if state.get("active"):
+                return identity.key, state
+        if identity.key and identity.fallback_key:
+            fallback_state = self._load_state(identity.fallback_key)
+            if fallback_state.get("active"):
+                self._save_state(identity.key, fallback_state)
+                self._clear_storage_key(_state_storage_key(identity.fallback_key))
+                return identity.key, fallback_state
+        cli_key = f"cli:{os.getpid()}"
+        if identity.key != cli_key:
+            cli_state = self._load_state(cli_key)
+            if cli_state.get("active"):
+                if identity.key and identity.key.startswith("ui:"):
+                    self._save_state(identity.key, cli_state)
+                    self._clear_storage_key(_state_storage_key(cli_key))
+                    return identity.key, cli_state
+                return cli_key, cli_state
+        return identity.key, self._load_state(identity.key) if identity.key else {}
+
     def _fixed_plans_dir(self) -> str:
+        cwd_reader = _runtime_cwd_reader()
+        raw = str(cwd_reader() if cwd_reader else "").strip()
         reader = _session_reader()
-        raw = str(reader("TERMINAL_CWD", "") if reader else "").strip()
+        if not raw:
+            raw = str(reader("TERMINAL_CWD", "") if reader else "").strip()
         if not raw or not os.path.isabs(raw) or not os.path.isdir(raw):
             raw = os.getcwd()
         base = os.path.realpath(raw)
-        plan_path = os.path.join(base, ".hermes", "plans")
+        hermes_path = os.path.join(base, ".hermes")
+        plan_path = os.path.join(hermes_path, "plans")
+        if os.path.islink(hermes_path) or os.path.islink(plan_path):
+            raise ValueError("the .hermes plan path contains a symlink")
         os.makedirs(plan_path, exist_ok=True)
-        return os.path.realpath(plan_path)
+        expected = os.path.join(os.path.realpath(base), ".hermes", "plans")
+        if (
+            os.path.islink(hermes_path)
+            or os.path.islink(plan_path)
+            or os.path.realpath(plan_path) != expected
+        ):
+            raise ValueError("the .hermes plan path contains a symlink")
+        return expected
 
     @staticmethod
     def _plan_files(state: dict[str, Any]) -> list[str]:
         plans_dir = state.get("plans_dir")
         if not isinstance(plans_dir, str) or not os.path.isdir(plans_dir):
             return []
-        try:
-            return sorted(
-                str(path.resolve())
-                for path in Path(plans_dir).glob("*.md")
-                if path.is_file()
-            )
-        except OSError:
+        remembered = state.get("plan_files")
+        if not isinstance(remembered, list):
             return []
+        files = []
+        for value in remembered[:256]:
+            if (
+                isinstance(value, str)
+                and value.endswith(".md")
+                and _path_is_inside(value, plans_dir)
+                and os.path.isfile(value)
+            ):
+                files.append(os.path.realpath(value))
+        return files
+
+    def _remember_plan_targets(
+        self, key: str, state: dict[str, Any], targets: list[str]
+    ) -> None:
+        remembered = state.get("plan_files")
+        files = [item for item in remembered if isinstance(item, str)] if isinstance(remembered, list) else []
+        for target in targets:
+            resolved = os.path.realpath(target)
+            if not resolved.endswith(".md"):
+                continue
+            files = [item for item in files if item != resolved]
+            files.append(resolved)
+        state["plan_files"] = files[-256:]
+        self._save_state(key, state)
 
     def command(self, raw_args: str) -> str:
         identity, error = self._identity_or_reply()
@@ -268,14 +388,20 @@ class PlanModePlugin:
         with self._lock:
             state = self._load_state(identity.key)
             if action == "on":
-                plans_dir = self._fixed_plans_dir()
+                try:
+                    plans_dir = self._fixed_plans_dir()
+                except (OSError, ValueError) as exc:
+                    return f"Plan mode activation was refused: {exc}."
                 state = {
                     "active": True,
                     "entered_at": _utc_now(),
                     "plans_dir": plans_dir,
                     "task": remainder,
                     "pending_note": "",
+                    "plan_files": state.get("plan_files", []),
                 }
+                if identity.key.startswith("cli:"):
+                    state["cli_pid"] = os.getpid()
                 self._save_state(identity.key, state)
                 task_text = f" Task: {remainder}" if remainder else ""
                 return (
@@ -301,7 +427,21 @@ class PlanModePlugin:
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 files = self._plan_files(state)
-                approved_path = files[-1] if files else str(state.get("plans_dir") or "the plans directory")
+                if remainder:
+                    candidate = remainder if os.path.isabs(remainder) else os.path.join(
+                        str(state.get("plans_dir") or ""), remainder
+                    )
+                    candidate = os.path.realpath(candidate)
+                    if candidate not in files:
+                        return (
+                            "Plan approval was refused: the requested file was not written "
+                            "by this session."
+                        )
+                    approved_path = candidate
+                else:
+                    approved_path = files[-1] if files else str(
+                        state.get("plans_dir") or "the plans directory"
+                    )
                 state["active"] = False
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
@@ -333,16 +473,43 @@ class PlanModePlugin:
             return set()
         return {item.strip() for item in value if isinstance(item, str) and item.strip()}
 
+    def _profile_config_path(self) -> Path | None:
+        manifest_path = str(getattr(getattr(self.ctx, "manifest", None), "path", "") or "")
+        if manifest_path:
+            path = Path(manifest_path).resolve()
+            for parent in (path, *path.parents):
+                if parent.name == "plugins":
+                    return parent.parent / "config.yaml"
+        home = str(os.environ.get("HERMES_HOME") or "").strip()
+        return Path(home) / "config.yaml" if home else None
+
+    def _skill_inline_shell_enabled(self) -> bool:
+        """Read the active profile config directly; unreadable config fails closed."""
+        path = self._profile_config_path()
+        if path is None or not path.exists():
+            return False
+        try:
+            import yaml
+
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            skills = data.get("skills") if isinstance(data, dict) else None
+            return bool(skills.get("inline_shell", False)) if isinstance(skills, dict) else False
+        except Exception:
+            return True
+
     def pre_tool_call(
         self, tool_name: str = "", args: Any = None, **kwargs: Any
     ) -> dict[str, str] | None:
         """Enforce the plan-mode allowlist, failing closed on internal errors."""
         try:
+            with self._lock:
+                self._prune_dead_cli_states()
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
             if identity.unsupported:
                 return None
             if identity.non_cli_without_key or not identity.key:
-                if self._active_keys:
+                cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
+                if self._active_keys or cli_active:
                     return _block_message(
                         tool_name or "unknown tool",
                         "The active session key could not be derived, so this request was blocked fail-closed.",
@@ -350,15 +517,21 @@ class PlanModePlugin:
                 return None
 
             with self._lock:
-                state = self._load_state(identity.key)
+                state_key, state = self._state_for_hook(identity)
                 if not state.get("active"):
                     self._active_keys.discard(identity.key)
                     return None
-                self._active_keys.add(identity.key)
-                self._remember_session_id(identity.key, state, kwargs.get("session_id"))
+                assert state_key is not None
+                self._active_keys.add(state_key)
+                self._remember_session_id(state_key, state, kwargs.get("session_id"))
 
                 name = str(tool_name or "")
                 call_args = args if isinstance(args, dict) else {}
+                if name == "skill_view" and self._skill_inline_shell_enabled():
+                    return _block_message(
+                        name,
+                        "skill_view is blocked because skills.inline_shell is enabled for this profile.",
+                    )
                 if name in READ_ONLY_TOOLS or name in self._extra_allowed_tools():
                     return None
                 if name in PLAN_WRITERS:
@@ -367,6 +540,7 @@ class PlanModePlugin:
                     if not targets or not isinstance(plans_dir, str):
                         return _block_message(name, "Every write target must be explicit and absolute.")
                     if all(_path_is_inside(target, plans_dir) for target in targets):
+                        self._remember_plan_targets(state_key, state, targets)
                         return None
                     return _block_message(
                         name,
@@ -381,11 +555,14 @@ class PlanModePlugin:
             )
 
     def pre_llm_call(self, **kwargs: Any) -> dict[str, str] | None:
+        with self._lock:
+            self._prune_dead_cli_states()
         identity = derive_session_identity(str(kwargs.get("platform") or ""))
         if identity.unsupported:
             return None
         if identity.non_cli_without_key or not identity.key:
-            if self._active_keys:
+            cli_active = self._load_state(f"cli:{os.getpid()}").get("active")
+            if self._active_keys or cli_active:
                 return {
                     "context": (
                         "Plan mode is active in this process, but this turn's session key could not "
@@ -396,16 +573,18 @@ class PlanModePlugin:
 
         try:
             with self._lock:
-                state = self._load_state(identity.key)
+                state_key, state = self._state_for_hook(identity)
                 parts: list[str] = []
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():
                     parts.append(pending.strip())
                     state["pending_note"] = ""
-                    self._save_state(identity.key, state)
+                    assert state_key is not None
+                    self._save_state(state_key, state)
                 if state.get("active"):
-                    self._active_keys.add(identity.key)
-                    self._remember_session_id(identity.key, state, kwargs.get("session_id"))
+                    assert state_key is not None
+                    self._active_keys.add(state_key)
+                    self._remember_session_id(state_key, state, kwargs.get("session_id"))
                     plans_dir = state.get("plans_dir")
                     parts.append(
                         "Plan mode is ON. Explore with the allowed read-only tools and write only "
@@ -433,8 +612,8 @@ class PlanModePlugin:
 
             # Gateway's reset callback may run outside the command's bound
             # ContextVar scope. Match the hashed old session id when possible;
-            # otherwise clear only a unique active session. Never guess among
-            # multiple sessions, because that would weaken another session.
+            # never guess from active-session count because another session's
+            # reset must not disable this one.
             active_storage = self._active_storage_keys()
             old_digest = self._session_id_hash(
                 kwargs.get("old_session_id") or kwargs.get("session_id")
@@ -447,5 +626,6 @@ class PlanModePlugin:
                         matches.append(storage_key)
             if len(matches) == 1:
                 self._clear_storage_key(matches[0])
-            elif not matches and len(active_storage) == 1:
-                self._clear_storage_key(active_storage[0])
+
+    def on_session_finalize(self, **kwargs: Any) -> None:
+        self.on_session_reset(**kwargs)

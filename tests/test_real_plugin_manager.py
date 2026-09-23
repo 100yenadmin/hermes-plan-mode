@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import importlib
 from importlib.metadata import version
 import inspect
 import os
 from pathlib import Path
 import shutil
+import sys
 from types import SimpleNamespace
+from types import ModuleType
 
 import pytest
 
@@ -117,5 +120,203 @@ def test_real_plugin_manager_and_dispatch_guard(tmp_path, monkeypatch):
     finally:
         if session_tokens is not None:
             clear_session_vars(session_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    home = tmp_path / "hermes-home"
+    plugin_dir = home / "plugins" / "plan-mode"
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    _copy_plugin(plugin_dir)
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.delenv("HERMES_SESSION_KEY", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_SOURCE", raising=False)
+    monkeypatch.setitem(sys.modules, "tui_gateway.server", ModuleType("tui_gateway.server"))
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+    from tui_gateway import methods_tools
+
+    home_token = set_hermes_home_override(str(home))
+    turn_tokens = None
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        manager = plugins.get_plugin_manager()
+        manager.discover_and_load()
+        handler = plugins.get_plugin_command_handler("planmode")
+        assert handler is not None
+
+        monkeypatch.setattr(methods_tools, "_tools_mod", importlib.import_module, raising=False)
+        params = inspect.signature(methods_tools._run_plugin_command).parameters
+        if "session" in params:
+            monkeypatch.setattr(
+                methods_tools,
+                "_set_session_context",
+                lambda key, cwd=None: set_session_vars(
+                    source="tui", session_key=key, session_id=key, cwd=cwd or ""
+                ),
+                raising=False,
+            )
+            monkeypatch.setattr(methods_tools, "_clear_session_context", clear_session_vars, raising=False)
+            response = methods_tools._run_plugin_command(
+                handler,
+                "on regression proof",
+                {"session_key": "tui-session-key", "cwd": str(workspace)},
+            )
+        else:
+            clear_session_vars([])
+            response = methods_tools._run_plugin_command(handler, "on regression proof")
+
+        runtime_version = tuple(int(part) for part in version("hermes-agent").split(".")[:3])
+        if runtime_version < (0, 21, 4):
+            assert "refused" in response.lower()
+            assert "session binding" in response.lower()
+        else:
+            assert "Plan mode is on" in response
+            turn_tokens = set_session_vars(
+                source="tui",
+                session_key="tui-session-key",
+                session_id="tui-session-key",
+                ui_session_id="ui-tab",
+                cwd=str(workspace),
+            )
+            assert plugins.get_pre_tool_call_block_message(
+                "terminal", {"command": "pwd"}, session_id="tui-session-key"
+            )
+    finally:
+        if turn_tokens is not None:
+            clear_session_vars(turn_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+def test_real_plugin_state_is_isolated_by_profile_home(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    homes = [tmp_path / "profile-a", tmp_path / "profile-b"]
+    workspace = tmp_path / "workspace"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    empty_bundled.mkdir()
+    for home in homes:
+        _copy_plugin(home / "plugins" / "plan-mode")
+        (home / "config.yaml").write_text(
+            "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setenv("HERMES_HOME", str(homes[0]))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+
+    plugins._reset_plugin_managers_for_tests()
+
+    def use_profile(home: Path, action):
+        home_token = set_hermes_home_override(str(home))
+        session_tokens = set_session_vars(
+            source="tui",
+            session_key="same-session-key",
+            session_id="same-session-key",
+            cwd=str(workspace),
+        )
+        try:
+            manager = plugins.get_plugin_manager()
+            manager.discover_and_load()
+            return action(plugins)
+        finally:
+            clear_session_vars(session_tokens)
+            reset_hermes_home_override(home_token)
+
+    try:
+        response = use_profile(
+            homes[0],
+            lambda loaded: loaded.get_plugin_command_handler("planmode")("on profile A"),
+        )
+        assert "Plan mode is on" in response
+
+        assert use_profile(
+            homes[1],
+            lambda loaded: loaded.get_pre_tool_call_block_message(
+                "terminal", {"command": "pwd"}, session_id="same-session-key"
+            ),
+        ) is None
+        assert "Plan mode: off" in use_profile(
+            homes[1],
+            lambda loaded: loaded.get_plugin_command_handler("planmode")("status"),
+        )
+
+        assert use_profile(
+            homes[0],
+            lambda loaded: loaded.get_pre_tool_call_block_message(
+                "terminal", {"command": "pwd"}, session_id="same-session-key"
+            ),
+        )
+    finally:
+        plugins._reset_plugin_managers_for_tests()
+
+
+def test_real_session_bound_cwd_wins_over_backend_process_cwd(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    home = tmp_path / "hermes-home"
+    plugin_dir = home / "plugins" / "plan-mode"
+    workspace = tmp_path / "session-workspace"
+    backend_cwd = tmp_path / "backend-cwd"
+    empty_bundled = tmp_path / "empty-bundled"
+    workspace.mkdir()
+    backend_cwd.mkdir()
+    empty_bundled.mkdir()
+    _copy_plugin(plugin_dir)
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.delenv("TERMINAL_CWD", raising=False)
+    monkeypatch.chdir(backend_cwd)
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+
+    home_token = set_hermes_home_override(str(home))
+    session_tokens = set_session_vars(
+        source="tui",
+        session_key="cwd-session-key",
+        session_id="cwd-session-key",
+        cwd=str(workspace),
+    )
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        manager = plugins.get_plugin_manager()
+        manager.discover_and_load()
+        handler = plugins.get_plugin_command_handler("planmode")
+        assert handler is not None
+
+        response = handler("on cwd proof")
+
+        assert "Plan mode is on" in response
+        assert str(workspace / ".hermes" / "plans") in response
+        assert str(backend_cwd / ".hermes" / "plans") not in response
+    finally:
+        clear_session_vars(session_tokens)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)

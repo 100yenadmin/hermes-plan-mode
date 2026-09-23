@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
+from types import ModuleType
 
 import pytest
 
@@ -41,6 +43,7 @@ class FakeContext:
 def session_env(monkeypatch):
     values = {"HERMES_SESSION_KEY": "unit-session"}
     monkeypatch.setattr(plugin_mod, "_session_reader", lambda: lambda key, default="": values.get(key, default))
+    monkeypatch.setattr(plugin_mod, "_runtime_cwd_reader", lambda: None)
     return values
 
 
@@ -54,7 +57,12 @@ def plugin(session_env):
 
 def test_registers_exact_surface(plugin):
     assert set(plugin.ctx.commands) == {"planmode"}
-    assert set(plugin.ctx.hooks) == {"pre_tool_call", "pre_llm_call", "on_session_reset"}
+    assert set(plugin.ctx.hooks) == {
+        "pre_tool_call",
+        "pre_llm_call",
+        "on_session_finalize",
+        "on_session_reset",
+    }
 
 
 def test_command_state_machine_and_one_shot_notes(plugin, session_env, tmp_path, monkeypatch):
@@ -68,6 +76,9 @@ def test_command_state_machine_and_one_shot_notes(plugin, session_env, tmp_path,
     assert "Plan mode: on" in plugin.command("status")
 
     plan = plans_dir / "2026-09-23_feature.md"
+    assert plugin.pre_tool_call(
+        "write_file", {"path": str(plan), "content": "# Plan\n"}
+    ) is None
     plan.write_text("# Plan\n", encoding="utf-8")
     assert str(plan) in plugin.command("status")
 
@@ -88,6 +99,38 @@ def test_command_state_machine_and_one_shot_notes(plugin, session_env, tmp_path,
     assert plugin.pre_llm_call() is None
 
 
+def test_approve_uses_only_this_sessions_tracked_plan_files(
+    plugin, session_env, tmp_path
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plans = tmp_path / ".hermes" / "plans"
+
+    session_env["HERMES_SESSION_KEY"] = "session-a"
+    plugin.command("on")
+    plan_a = plans / "2026-09-23_a.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan_a), "content": "A"}) is None
+    plan_a.write_text("A", encoding="utf-8")
+
+    session_env["HERMES_SESSION_KEY"] = "session-b"
+    plugin.command("on")
+    plan_b = plans / "2026-09-23_z.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan_b), "content": "B"}) is None
+    plan_b.write_text("B", encoding="utf-8")
+
+    session_env["HERMES_SESSION_KEY"] = "session-a"
+    response = plugin.command("approve")
+    assert str(plan_a) in response
+    assert str(plan_b) not in response
+
+    plugin.command("on")
+    newer_a = plans / "2026-09-23_newer-a.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(newer_a), "content": "A2"}) is None
+    newer_a.write_text("A2", encoding="utf-8")
+    explicit = plugin.command(f"approve {plan_a.name}")
+    assert str(plan_a) in explicit
+    assert str(newer_a) not in explicit
+
+
 def test_on_falls_back_to_process_cwd_for_invalid_terminal_cwd(plugin, session_env, tmp_path, monkeypatch):
     session_env["TERMINAL_CWD"] = "relative/missing"
     monkeypatch.chdir(tmp_path)
@@ -103,6 +146,25 @@ def test_read_allowlist_and_unknown_blocks(plugin, session_env, tmp_path):
     assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
     assert plugin.pre_tool_call("mcp_linear_update_issue", {})["action"] == "block"
     assert plugin.pre_tool_call("totally_new_tool", {})["action"] == "block"
+
+
+def test_skill_view_is_blocked_when_inline_shell_is_enabled(
+    plugin, session_env, tmp_path, monkeypatch
+):
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    config = home / "config.yaml"
+    config.write_text("skills:\n  inline_shell: true\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+
+    blocked = plugin.pre_tool_call("skill_view", {"name": "unsafe-skill"})
+    assert blocked["action"] == "block"
+    assert "inline_shell" in blocked["message"]
+
+    config.write_text("skills:\n  inline_shell: false\n", encoding="utf-8")
+    assert plugin.pre_tool_call("skill_view", {"name": "safe-skill"}) is None
 
 
 def test_extra_allowed_tools_extend_allowlist(plugin, session_env, tmp_path):
@@ -142,6 +204,27 @@ def test_symlink_escape_is_blocked(plugin, session_env, tmp_path):
     escaped = link / "plan.md"
     assert not _path_is_inside(str(escaped), str(plans))
     assert plugin.pre_tool_call("write_file", {"path": str(escaped), "content": "x"})["action"] == "block"
+
+
+@pytest.mark.parametrize("symlink_component", [".hermes", ".hermes/plans"])
+def test_activation_refuses_symlinked_plan_root_component(
+    plugin, session_env, tmp_path, symlink_component
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    outside = tmp_path / "outside-root"
+    outside.mkdir()
+    link = tmp_path / symlink_component
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    response = plugin.command("on")
+
+    assert "refused" in response.lower()
+    assert "symlink" in response.lower()
+    assert "Plan mode: off" in plugin.command("status")
 
 
 def test_patch_checks_every_target(plugin, session_env, tmp_path):
@@ -202,11 +285,132 @@ def test_cli_process_key_survives_session_id_rotation(monkeypatch):
     assert before == after == f"cli:{os.getpid()}"
 
 
+@pytest.mark.parametrize("surface", ["", "cli"])
+def test_nested_cli_ignores_inherited_parent_session_key(monkeypatch, surface):
+    values = {
+        "HERMES_SESSION_KEY": "parent-session-key",
+        "HERMES_SESSION_SOURCE": surface,
+    }
+    monkeypatch.setenv("HERMES_SESSION_KEY", "parent-session-key")
+    monkeypatch.setattr(
+        plugin_mod,
+        "_session_reader",
+        lambda: lambda key, default="": values.get(key, default),
+    )
+
+    identity = plugin_mod.derive_session_identity()
+
+    assert identity.key == f"cli:{os.getpid()}"
+
+
+def test_unbound_server_surface_refuses_activation(session_env, plugin, monkeypatch):
+    session_env.clear()
+    monkeypatch.setitem(sys.modules, "tui_gateway.server", ModuleType("tui_gateway.server"))
+
+    response = plugin.command("on")
+
+    assert "refused" in response.lower()
+    assert "session binding" in response.lower()
+
+
+def test_legacy_cli_state_blocks_when_turn_derives_session_key(
+    session_env, plugin, tmp_path
+):
+    session_env.clear()
+    session_env.update(
+        {
+            "HERMES_SESSION_SOURCE": "cli",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on")
+
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "tui-turn-key",
+            "HERMES_SESSION_SOURCE": "tui",
+        }
+    )
+
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+    assert "Plan mode is ON" in plugin.pre_llm_call()["context"]
+
+
+def test_durable_legacy_cli_state_blocks_after_plugin_reload(
+    session_env, plugin, tmp_path
+):
+    session_env.clear()
+    session_env.update(
+        {"HERMES_SESSION_SOURCE": "cli", "TERMINAL_CWD": str(tmp_path)}
+    )
+    plugin.command("on")
+
+    reloaded = PlanModePlugin(plugin.ctx)
+    session_env.clear()
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+
+    assert reloaded.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+    assert "Plan mode is active" in reloaded.pre_llm_call()["context"]
+
+
+def test_tui_state_survives_session_key_rotation_via_stable_ui_id(
+    session_env, plugin, tmp_path
+):
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "before-compression",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "desktop-tab-7",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    # Plugin command paths on both target versions omit HERMES_UI_SESSION_ID.
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode is on" in plugin.command("on")
+
+    session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-7"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    session_env["HERMES_SESSION_KEY"] = "after-compression"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    assert "Plan mode is ON" in plugin.pre_llm_call()["context"]
+
+
 def test_session_reset_clears_cli_state(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
     plugin.on_session_reset(platform="cli")
     assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_session_finalize_clears_cli_state(plugin, session_env, tmp_path):
+    session_env.clear()
+    session_env.update(
+        {
+            "HERMES_SESSION_SOURCE": "cli",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    plugin.command("on")
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    plugin.on_session_finalize(platform="cli")
+
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_dead_cli_pid_state_is_pruned(plugin, session_env):
+    dead_pid = 99_999_999
+    dead_key = f"cli:{dead_pid}"
+    plugin._save_state(
+        dead_key,
+        {"active": True, "plans_dir": "/tmp/unused", "cli_pid": dead_pid},
+    )
+    session_env.clear()
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+
+    assert plugin.pre_tool_call("read_file", {"path": "/tmp/x"}) is None
+    assert plugin._load_state(dead_key) == {}
 
 
 def test_unbound_gateway_reset_clears_unique_active_session(plugin, session_env, tmp_path):
@@ -218,6 +422,20 @@ def test_unbound_gateway_reset_clears_unique_active_session(plugin, session_env,
     plugin.on_session_reset(platform="telegram", old_session_id="old-session-id")
     session_env["HERMES_SESSION_KEY"] = "unit-session"
     assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_unbound_reset_without_match_preserves_only_active_session(
+    plugin, session_env, tmp_path
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    session_env["HERMES_SESSION_KEY"] = ""
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+
+    plugin.on_session_reset(platform="telegram", old_session_id="another-session")
+
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
 
 
 def test_unbound_gateway_reset_never_guesses_among_active_sessions(plugin, session_env, tmp_path):

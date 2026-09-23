@@ -11,6 +11,11 @@ hermes plugins enable plan-mode
 
 Run the following on each supported surface (CLI, gateway, and TUI):
 
+On Hermes 0.21.3, the TUI/dashboard plugin-command path is intentionally
+unsupported because it does not bind a session. Step 1 must return the clear
+session-binding refusal instead of claiming plan mode is active. Continue the
+TUI flow only on a version containing the command-binding fix.
+
 1. Start a session in a disposable workspace and run `/planmode on write a
    hello-world plan`.
 2. Confirm the reply prints an absolute
@@ -31,6 +36,13 @@ Run the following on each supported surface (CLI, gateway, and TUI):
    appears once and implementation tools are unblocked.
 10. Re-enter plan mode and run `/new` or `/reset`. Confirm plan mode is cleared
     for the replacement session.
+11. In TUI/Desktop, enter plan mode, trigger `/compress`, then repeat a blocked
+    terminal call. It must remain blocked after the durable session key rotates.
+12. Create a second chat in the same workspace and write a lexically later plan
+    there. Back in the first chat, run `/planmode approve`; confirm it approves
+    only the first chat's newest plan. Repeat with `/planmode approve <file>`.
+13. In the disposable profile set `skills.inline_shell: true`, restart the
+    surface, enter plan mode, and call `skill_view`; confirm it is blocked.
 
 CLI compression check: enter plan mode, trigger or wait for compression, then
 repeat a blocked terminal call. It must remain blocked because CLI state is

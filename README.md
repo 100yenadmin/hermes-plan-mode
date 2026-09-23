@@ -11,8 +11,10 @@ approves the plan.
   enables enforcement.
 - `/planmode status` reports the mode, entry time, fixed directory, and plan
   Markdown files written there.
-- `/planmode approve` turns enforcement off and injects a one-shot instruction
-  on the next turn: `The user approved the plan at <path>. Implement it now.`
+- `/planmode approve [file]` turns enforcement off and injects a one-shot
+  instruction on the next turn: `The user approved the plan at <path>.
+  Implement it now.` Without a file it selects the newest plan write allowed
+  for this session; an explicit file must also belong to this session.
 - `/planmode reject [feedback]` keeps enforcement on and injects the feedback
   once on the next turn.
 - `/planmode off` turns enforcement off without an approval instruction.
@@ -51,13 +53,22 @@ Administrators may extend the allowlist with the plugin setting
 `plan_mode.extra_allowed_tools` (a list of exact tool names). This is an
 explicit policy override: added tools are trusted as read-only by the operator.
 
+`skill_view` is removed from the effective allowlist when the active profile's
+`config.yaml` sets `skills.inline_shell: true`, because skill preprocessing can
+execute inline-shell snippets in that mode. An unreadable profile config also
+blocks `skill_view` fail-closed.
+
 ## Session identity and persistence
 
-The plugin has one sanctioned internal dependency:
-`gateway.session_context.get_session_env` (`gateway/session_context.py:173` in
-the pinned upstream source). It is imported lazily and wrapped in `try/except`.
-If the import is unavailable, the plugin still loads, `/planmode on` refuses
-with an unsupported-version explanation, and hooks do not block.
+The plugin has two narrowly scoped internal dependencies required by the WS2
+contracts: `gateway.session_context.get_session_env`
+(`gateway/session_context.py:173`) for identity, and
+`agent.runtime_cwd.resolve_agent_cwd` (`agent/runtime_cwd.py:90-92`) for the
+turn-scoped workspace required by fix-round W3. Both are imported lazily and
+wrapped in `try/except`. If the identity import is unavailable, the plugin still
+loads, `/planmode on` refuses with an unsupported-version explanation, and
+hooks do not block. If the cwd resolver is unavailable, activation uses an
+existing absolute `TERMINAL_CWD` or the classic CLI process cwd.
 
 The dependency is intentional:
 
@@ -69,9 +80,24 @@ The dependency is intentional:
   `tools.thread_context.propagate_context_to_thread`, the helper used by the
   concurrent executor.
 
-The stable key is `sk:<HERMES_SESSION_KEY>` on gateway/TUI/Desktop surfaces.
-Classic CLI uses `cli:<pid>`, so conversation compression may rotate
-`session_id` without losing plan mode. `on_session_reset` clears the key.
+The stable key is `ui:<HERMES_UI_SESSION_ID>` when a TUI/Desktop turn binds its
+tab id. Because both target versions omit that id on the plugin-command path,
+the first bound turn atomically adopts the command's `sk:<HERMES_SESSION_KEY>`
+state into the stable UI key. Gateway sessions without a UI id continue to use
+the session key. Classic CLI uses `cli:<pid>`, so conversation compression may
+rotate `session_id` without losing plan mode. A nested CLI that merely inherits
+the parent's `HERMES_SESSION_KEY` still uses its own PID key.
+
+Hermes 0.21.3 does not bind a TUI/dashboard session around plugin command
+handlers. On a loaded server surface, `/planmode on` therefore refuses unless
+the command has a real session binding and names the required Hermes fix. The
+tool and LLM hooks also treat an active current-process CLI state as plan mode
+if a later legacy path derives a session key or no key at all.
+
+`on_session_reset` clears only the derived session or an exact hashed old-session
+match; it never guesses based on there being one active session.
+`on_session_finalize` clears CLI state, and durable CLI entries whose PID no
+longer exists are pruned. State remains bounded and profile-scoped.
 State is stored with the bounded, profile-scoped `ctx.state` facade. A hashed
 active-state index lets gateway resets clear a uniquely matching session even
 when the reset callback is outside the command's ContextVar scope; raw session
@@ -83,15 +109,19 @@ its key is available.
 
 ## Containment and failure behavior
 
-At activation, the plugin uses an existing absolute `TERMINAL_CWD`, otherwise
-`os.getcwd()`, creates `.hermes/plans`, and stores its absolute real path.
+At activation, the plugin uses Hermes' turn-scoped cwd resolver—the same cwd
+bound by TUI/gateway `_set_session_context(..., cwd=...)`—then an existing
+absolute `TERMINAL_CWD`, and only uses `os.getcwd()` for classic CLI fallback.
+It refuses cleanly if the directory cannot be created. It also refuses when
+either `.hermes` or `.hermes/plans` is a symlink or the final real path differs
+from `<real session cwd>/.hermes/plans`.
 Every plan write target must be explicit and absolute. Containment uses
 `realpath` plus `commonpath`, so `..`, absolute outside paths, symlink escapes,
 and a multi-file patch with any outside target are rejected. Any exception in
 the active `pre_tool_call` callback returns a block directive; Hermes otherwise
 treats plugin-hook exceptions as fail-open.
 
-## Known limitation: Codex app-server
+## Known limitations
 
 Hermes' Codex app-server runtime executes native `exec` and `applyPatch`
 outside `pre_tool_call` (`agent/transports/codex_app_server_session.py:707-708`
@@ -103,6 +133,18 @@ runtime when enforcement is required.
 
 This plugin performs no network calls, launches no subprocesses, contains no
 self-updater, and registers no tools.
+
+TUI `/background` and `btw` side agents are rebound under their task id and do
+not expose a public parent-session identity to plugin hooks
+(`tui_gateway/methods_prompt.py:978` in the pinned upstream source). They can
+therefore run with full tools even while the parent chat is in plan mode; do
+not use those side-agent paths while enforcement is required.
+
+Hermes collects every `pre_tool_call` result before resolving directives, and a
+different plugin's later `modify` directive can rewrite arguments after this
+plugin checked them (`hermes_cli/plugins.py:1870-1889`). Plan mode cannot
+re-validate another plugin's rewritten arguments. Avoid combining it with
+argument-rewriting plugins on plan writers.
 
 ## Development
 
