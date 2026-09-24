@@ -9,6 +9,17 @@ def service_for(ctx):
     return getter()
 
 
+def clear_mode(ctx):
+    """A revoked presentation route must not prevent native off/reset semantics."""
+    try:
+        service = service_for(ctx)
+        if service is not None:
+            service.set_plan_mode(False)
+    except (ValueError, PermissionError):
+        # Revocation already denies presentation; native state must still clear.
+        pass
+
+
 def remember_publication(service, state, args, result):
     """Trust the current host ref, not the model or a result-shaped string alone."""
     if isinstance(result, str):

@@ -791,10 +791,8 @@ class PlanModePlugin:
 
             if action == "off":
                 if state.get('presentation_bound'):
-                    from .presentation import service_for
-                    service = service_for(self.ctx)
-                    if service is not None:
-                        service.set_plan_mode(False)
+                    from .presentation import clear_mode
+                    clear_mode(self.ctx)
                 state["active"] = False
                 state["pending_note"] = ""
                 self._save_command_state(identity.key, command_storage_key, state)
@@ -975,10 +973,8 @@ class PlanModePlugin:
         if identity.unsupported:
             return
         if identity.key and not identity.non_cli_without_key:
-            from .presentation import service_for
-            service = service_for(self.ctx)
-            if service is not None:
-                service.set_plan_mode(False)
+            from .presentation import clear_mode
+            clear_mode(self.ctx)
         platform = str(kwargs.get("platform") or "").strip().lower()
         with self._lock:
             if platform in {"cli", "terminal"}:

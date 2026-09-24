@@ -76,3 +76,12 @@ def test_native_state_restores_marker_and_reset_clears_it(tmp_path, monkeypatch,
     plugin.pre_llm_call()
     assert service.modes[-1] is False
     assert 'Plan mode: off' in plugin.command('status')
+
+
+def test_revoked_presentation_does_not_block_native_off(tmp_path, monkeypatch, session_env):
+    plugin, service, _ = bound_plugin(tmp_path, monkeypatch, session_env)
+    def revoked(active):
+        raise ValueError('route removed')
+    service.set_plan_mode = revoked
+    plugin.command('off')
+    assert 'Plan mode: off' in plugin.command('status')
