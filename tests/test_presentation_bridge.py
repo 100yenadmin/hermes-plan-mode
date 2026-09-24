@@ -12,6 +12,10 @@ class Service:
         self.modes = []
         self.transitions = []
         self.changed = False
+        self.beginnings = 0
+
+    def begin_proposal(self):
+        self.beginnings += 1
 
     def set_plan_mode(self, active):
         self.modes.append(active)
@@ -54,6 +58,7 @@ def test_bound_approval_uses_published_revision_and_waits_for_next_turn(tmp_path
     assert service.transitions[0]['expected_revision'] == 1
     assert service.transitions[0]['source_sha256'] == 'a' * 64
     assert service.modes == [True, False]
+    assert service.beginnings == 1
     assert 'Plan mode: off' in plugin.command('status')
 
 

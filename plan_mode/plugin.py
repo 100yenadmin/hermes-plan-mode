@@ -710,6 +710,7 @@ class PlanModePlugin:
                 service = service_for(self.ctx)
                 if service is not None:
                     try:
+                        service.begin_proposal()
                         service.set_plan_mode(True)
                     except (ValueError, PermissionError):
                         return "Plan mode activation was refused: the native presentation scope is unavailable."
