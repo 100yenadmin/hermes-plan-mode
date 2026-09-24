@@ -64,3 +64,15 @@ def test_changed_source_refuses_approval_and_keeps_enforcement(tmp_path, monkeyp
     assert 'Plan mode: on' in plugin.command('status')
     assert service.transitions == []
     assert service.modes == [True]
+
+
+def test_native_state_restores_marker_and_reset_clears_it(tmp_path, monkeypatch, session_env):
+    plugin, service, _ = bound_plugin(tmp_path, monkeypatch, session_env)
+    service.modes.clear()  # The presentation service was reopened independently.
+    plugin.pre_llm_call()
+    assert service.modes == [True]
+    plugin.on_session_reset()
+    assert service.modes[-1] is False
+    plugin.pre_llm_call()
+    assert service.modes[-1] is False
+    assert 'Plan mode: off' in plugin.command('status')

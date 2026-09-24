@@ -927,6 +927,15 @@ class PlanModePlugin:
 
             with self._lock:
                 state_key, state = self._state_for_hook(identity)
+                from .presentation import service_for
+                service = service_for(self.ctx)
+                if service is not None:
+                    # The host's presentation marker is ephemeral; native state
+                    # remains authoritative after restart or session reset.
+                    service.set_plan_mode(bool(state.get('active')))
+                    if state.get('active') and not state.get('presentation_bound'):
+                        state['presentation_bound'] = True
+                        self._save_state(state_key, state)
                 parts: list[str] = []
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():
@@ -965,6 +974,11 @@ class PlanModePlugin:
         identity = derive_session_identity(str(kwargs.get("platform") or ""))
         if identity.unsupported:
             return
+        if identity.key and not identity.non_cli_without_key:
+            from .presentation import service_for
+            service = service_for(self.ctx)
+            if service is not None:
+                service.set_plan_mode(False)
         platform = str(kwargs.get("platform") or "").strip().lower()
         with self._lock:
             if platform in {"cli", "terminal"}:
