@@ -321,6 +321,8 @@ class PlanModePlugin:
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
         self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
         self.ctx.register_hook("on_session_reset", self.on_session_reset)
+        if getattr(self.ctx, "work_presentation_capability", None) == 1:
+            self.ctx.register_hook("post_tool_call", self.post_tool_call)
 
     def _load_state(self, key: str) -> dict[str, Any]:
         return self._load_storage_state(_state_storage_key(key))
@@ -704,6 +706,14 @@ class PlanModePlugin:
                 }
                 if identity.key.startswith("cli:"):
                     state["cli_pid"] = os.getpid()
+                from .presentation import service_for
+                service = service_for(self.ctx)
+                if service is not None:
+                    try:
+                        service.set_plan_mode(True)
+                    except (ValueError, PermissionError):
+                        return "Plan mode activation was refused: the native presentation scope is unavailable."
+                    state["presentation_bound"] = True
                 self._save_command_state(identity.key, command_storage_key, state)
                 task_text = f" Task: {remainder}" if remainder else ""
                 return (
@@ -729,7 +739,21 @@ class PlanModePlugin:
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 files = self._plan_files(state)
-                if remainder:
+                if state.get("presentation_bound"):
+                    from .presentation import service_for, transition
+                    service = service_for(self.ctx)
+                    candidate = None
+                    if remainder:
+                        candidate = os.path.realpath(remainder if os.path.isabs(remainder)
+                                                     else os.path.join(state['plans_dir'], remainder))
+                        if candidate not in files:
+                            return "Plan approval was refused: the file does not belong to this session."
+                    try:
+                        approved_path = transition(service, state, 'approved', source_path=candidate)
+                        service.set_plan_mode(False)
+                    except (ValueError, PermissionError):
+                        return "Plan approval was refused: review and publish the current plan revision first."
+                elif remainder:
                     candidate = remainder if os.path.isabs(remainder) else os.path.join(
                         str(state.get("plans_dir") or ""), remainder
                     )
@@ -755,11 +779,22 @@ class PlanModePlugin:
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 feedback = remainder or "No additional feedback was provided."
+                if state.get('published_proposal'):
+                    from .presentation import service_for, transition
+                    try:
+                        transition(service_for(self.ctx), state, 'rejected')
+                    except (ValueError, PermissionError):
+                        return "Plan rejection was refused: the published revision changed; refresh it first."
                 state["pending_note"] = f"The user rejected the plan: {feedback}. Revise it."
                 self._save_command_state(identity.key, command_storage_key, state)
                 return "Plan rejected. Plan mode remains on; the feedback will be injected next turn."
 
             if action == "off":
+                if state.get('presentation_bound'):
+                    from .presentation import service_for
+                    service = service_for(self.ctx)
+                    if service is not None:
+                        service.set_plan_mode(False)
                 state["active"] = False
                 state["pending_note"] = ""
                 self._save_command_state(identity.key, command_storage_key, state)
@@ -810,6 +845,15 @@ class PlanModePlugin:
 
                 name = str(tool_name or "")
                 call_args = args if isinstance(args, dict) else {}
+                if name == 'publish_plan_brief':
+                    from .presentation import service_for
+                    plans_dir = state.get('plans_dir')
+                    path = call_args.get('source_path')
+                    if (service_for(self.ctx) is not None and isinstance(plans_dir, str)
+                            and isinstance(path, str) and _plans_dir_is_still_safe(plans_dir)
+                            and _path_is_inside(path, plans_dir)):
+                        return None
+                    return _block_message(name, 'Publish only this session’s plan through the native presentation capability.')
                 if name in READ_ONLY_TOOLS or name in self._extra_allowed_tools():
                     return None
                 if name == "skill_view":
@@ -840,6 +884,21 @@ class PlanModePlugin:
                 str(tool_name or "unknown tool"),
                 f"The plan-mode safety check failed closed ({type(exc).__name__}).",
             )
+
+    def post_tool_call(self, tool_name='', args=None, result=None, **kwargs):
+        if tool_name != 'publish_plan_brief' or not isinstance(args, dict):
+            return
+        from .presentation import remember_publication, service_for
+        identity = derive_session_identity(str(kwargs.get('platform') or ''))
+        if identity.unsupported or identity.non_cli_without_key or not identity.key:
+            return
+        with self._lock:
+            state_key, state = self._state_for_hook(identity)
+            if not state_key or not state.get('active'):
+                return
+            service = service_for(self.ctx)
+            if service is not None and remember_publication(service, state, args, result):
+                self._save_state(state_key, state)
 
     def pre_llm_call(self, **kwargs: Any) -> dict[str, str] | None:
         try:
@@ -886,6 +945,13 @@ class PlanModePlugin:
                         "YYYY-MM-DD_HHMMSS-<slug>.md. Do not implement or call blocked tools; ask "
                         "the user to approve with /planmode approve when the plan is ready."
                     )
+                    if state.get('presentation_bound'):
+                        parts.append(
+                            'After saving or revising the plan, call publish_plan_brief with its '
+                            'absolute source_path and an audience-safe summary for the shared '
+                            'Telegram conversation. Do not publish raw internal notes, secrets or '
+                            'private paths. Approval is bound to that published revision.'
+                        )
                 return {"context": "\n\n".join(parts)} if parts else None
         except Exception as exc:
             return {
