@@ -1,5 +1,24 @@
 # Hermes Plan Mode
 
+## Optional published plan briefs (development candidate)
+
+On a host with `work_presentation` capability 1 and an enabled, topic-scoped
+Telegram Experience provider, Plan Mode participates in the same native proposal
+journey. After a plan is saved, the agent calls `publish_plan_brief` with a short
+audience-safe summary. The host verifies the source file and records its digest;
+the agent and user do not calculate hashes or copy task identifiers.
+
+`/planmode approve` then targets that exact published revision. A changed file,
+superseded proposal, missing publication or lost scope refuses approval and keeps
+enforcement active. It never silently approves the latest other file. Approval
+still supplies the instruction for the next turn; it is not proof that work has
+started. Native `/plan` without this plugin remains prompt-only planning.
+
+The bridge publishes no raw plan file, transcript or internal comment. Shared
+brief audience and action authority belong to the host. Without this optional
+capability/provider, existing Plan Mode behavior remains unchanged. This source
+integration is not a claim of live Telegram acceptance or stock-host support.
+
 `plan-mode` adds an enforced, per-session planning mode to Hermes. Unlike
 Hermes' built-in prompt-only `/plan`, this plugin uses the `pre_tool_call`
 policy hook to block mutating Hermes tools dispatched through `pre_tool_call`
