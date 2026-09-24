@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.7 - Unreleased
+
+- Optional native work-presentation integration binds Telegram approval to the
+  published plan revision and keeps planning active when source identity changes.
+- Publish explicit audience-safe summaries without exposing raw plan files;
+  approval remains separate from execution on the next turn.
+- Preserve the existing behavior when the optional host capability is absent.
+
 ## 0.1.6 - 2026-09-23
 
 - Allow `skill_view` in plan mode when Hermes' own
