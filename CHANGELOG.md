@@ -2,10 +2,12 @@
 
 ## 0.2.0 - 2026-09-26
 
-- Add the agent-callable `plan_mode` tool (toolset `plan-mode`) with actions
-  `on`, `status` and `off`, so the agent can enter plan mode when the user asks
-  for a plan first. It resolves the session exactly like `/planmode` and
-  refuses without a session identity; enforcement is unchanged.
+- Add an identity-bound native tool `plan_mode` (toolset `plan-mode`, actions
+  `on`, `status` and `off`) that a model can call on any surface where the host
+  exposes plugin tools. It binds to the same session identity as `/planmode`
+  and refuses without one; enforcement is unchanged. Live Telegram use and the
+  model's own tool selection are unverified in this release's automated tests
+  (verified separately on the eva host).
 - Record provenance (`entered_by`: `user` or `agent`). The tool's `off` ends
   only a plan mode the agent entered in the same activation; approval and
   rejection stay slash-command-only. A user `/planmode reject` makes an

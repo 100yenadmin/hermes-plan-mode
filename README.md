@@ -45,9 +45,12 @@ paths under that directory; relative paths are deliberately rejected.
 
 ## Agent-initiated plan mode
 
-The plugin registers one tool, `plan_mode` (toolset `plan-mode`), so that when
-the user asks the agent on any surface, Telegram included, to "write a plan for
-X before doing it", the agent can enter plan mode itself:
+The plugin registers one identity-bound native tool, `plan_mode` (toolset
+`plan-mode`, actions `on|status|off`), that a model can call on any surface
+where the host exposes plugin tools. The tool binds to the same session identity
+as the slash command. Live Telegram use and the model's own tool selection are
+verified separately on the eva host (unverified in this release's automated
+tests).
 
 - `plan_mode(action="on", reason=...)` enters plan mode for the current
   session with the same identity resolution, profile check, plans directory

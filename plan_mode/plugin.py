@@ -832,7 +832,8 @@ class PlanModePlugin:
                 else:
                     approved_path = files[-1]
                 state["active"] = False
-                state.pop("activation_id", None)
+                for field in ("activation_id", "entered_by", "agent_activation_id"):
+                    state.pop(field, None)
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
                 )
