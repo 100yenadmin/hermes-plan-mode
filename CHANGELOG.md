@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0 - 2026-09-26
+
+- Add an identity-bound native tool `plan_mode` (toolset `plan-mode`, actions
+  `on`, `status` and `off`). It binds to the same session identity as
+  `/planmode` and refuses without one; enforcement is unchanged. On hosts with
+  Tool Search on (the Hermes default from v2026.9.24) the tool sits behind
+  `tool_search`: a live check showed a model reaching it only when told to use
+  it. `/planmode on` stays the reliable way in; live Telegram use is not
+  covered by the automated tests.
+- Record provenance (`entered_by`: `user` or `agent`). The tool's `off` ends
+  only a plan mode the agent entered in the same activation; approval and
+  rejection stay slash-command-only. A user `/planmode reject` makes an
+  agent-entered activation user-owned. `plan_mode` is allowed while plan mode is
+  on, and an agent-entered plan mode adds one sentence to the turn note.
+- A UI turn's activation links the tab's session-key alias at once, so the
+  tab's `/planmode status|approve|off` reach it before the next hook.
+- Document the Telegram 60-entry command-menu cap and the
+  `platforms.telegram.extra.command_menu.priority: [planmode]` pin.
+
 ## 0.1.7 - 2026-09-26
 
 - Track a plan write as approvable only after `post_tool_call` reports status

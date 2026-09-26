@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import json
 import os
-from pathlib import Path
 import sys
 from types import ModuleType
 
@@ -28,9 +28,13 @@ class FakeContext:
         self.settings = {}
         self.commands = {}
         self.hooks = {}
+        self.tools = {}
 
     def register_command(self, name, handler, description="", args_hint=""):
         self.commands[name] = handler
+
+    def register_tool(self, name, toolset, schema, handler, **kwargs):
+        self.tools[name] = {"toolset": toolset, "schema": schema, "handler": handler, **kwargs}
 
     def register_hook(self, name, callback):
         self.hooks[name] = callback
@@ -57,6 +61,8 @@ def plugin(session_env):
 
 def test_registers_exact_surface(plugin):
     assert set(plugin.ctx.commands) == {"planmode"}
+    assert set(plugin.ctx.tools) == {"plan_mode"}
+    assert plugin.ctx.tools["plan_mode"]["toolset"] == "plan-mode"
     assert set(plugin.ctx.hooks) == {
         "pre_tool_call",
         "post_tool_call",
@@ -1138,3 +1144,197 @@ def test_custom_home_profile_helper_failure_is_unknown_not_default(monkeypatch, 
 
     assert PlanModePlugin._profile_name_for_home(tmp_path / "custom-home") is None
     assert PlanModePlugin._profile_name_for_home(tmp_path / "profiles" / "eva") == "eva"
+
+
+# --- 0.2.0: agent-callable plan_mode tool -----------------------------------
+
+
+def _tool(plugin, **args):
+    return json.loads(plugin.ctx.tools["plan_mode"]["handler"](args, session_id="s1"))["message"]
+
+
+def _snapshot(plugin):
+    return {key: dict(value) if isinstance(value, dict) else value
+            for key, value in plugin.ctx.state.values.items()}
+
+
+def test_t1_agent_tool_on_enforces_plan_only_writes(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plans = tmp_path / ".hermes" / "plans"
+
+    reply = _tool(plugin, action="on", reason="draft the rollout")
+
+    assert "Plan mode is on" in reply and str(plans) in reply
+    assert plugin._load_state("sk:unit-session")["entered_by"] == "agent"
+    outside = {"path": str(tmp_path / "outside.md"), "content": "x"}
+    assert plugin.pre_tool_call("write_file", outside)["action"] == "block"
+    plan = {"path": str(plans / "2026-09-26_120000-rollout.md"), "content": "# Plan"}
+    assert plugin.pre_tool_call("write_file", plan) is None
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+    assert plugin.pre_tool_call("plan_mode", {"action": "status"}) is None
+
+
+def test_t2_agent_tool_off_ends_its_own_plan_mode_and_keeps_files(
+    plugin, session_env, tmp_path
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tool(plugin, action="on")
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_120000-keep.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "#"}) is None
+    plan.write_text("# Plan\n", encoding="utf-8")
+
+    reply = _tool(plugin, action="off")
+
+    assert "Plan mode is off" in reply
+    state = plugin._load_state("sk:unit-session")
+    assert not state.get("active") and "activation_id" not in state
+    assert "entered_by" not in state
+    assert plan.read_text(encoding="utf-8") == "# Plan\n"
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"}) is None
+    assert plugin.pre_llm_call() is None
+
+
+@pytest.mark.parametrize("provenance", ["user", "legacy", "stale-agent"])
+def test_t3_agent_tool_off_cannot_end_user_plan_mode(
+    plugin, session_env, tmp_path, provenance
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    assert "Plan mode is on" in plugin.command("on")
+    state = plugin._load_state("sk:unit-session")
+    if provenance == "legacy":  # a 0.1.x state carries no provenance
+        state.pop("entered_by", None)
+    elif provenance == "stale-agent":  # agent marker from an earlier activation
+        state.update(entered_by="agent", agent_activation_id="earlier-activation")
+    plugin._save_state("sk:unit-session", state)
+    before = _snapshot(plugin)
+
+    reply = _tool(plugin, action="off")
+
+    assert reply == (
+        "Plan mode was entered by the user; only /planmode approve, reject or off can end it."
+    )
+    assert _snapshot(plugin) == before
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+
+
+@pytest.mark.parametrize("action", ["approve", "reject", "APPROVE", "", "bogus"])
+def test_t4_agent_tool_cannot_approve_or_reject(plugin, session_env, tmp_path, action):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    schema = plugin.ctx.tools["plan_mode"]["schema"]
+    assert schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off"]
+    _tool(plugin, action="on")
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_120000-plan.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "#"}) is None
+    plan.write_text("#", encoding="utf-8")
+    before = _snapshot(plugin)
+
+    reply = _tool(plugin, action=action)
+
+    assert "unsupported" in reply.lower() and "/planmode approve" in reply
+    assert _snapshot(plugin) == before
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+
+
+def test_t5_agent_tool_on_while_user_plan_mode_is_active_reports_status(
+    plugin, session_env, tmp_path
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on user task")
+    before = _snapshot(plugin)
+
+    reply = _tool(plugin, action="on", reason="agent task")
+
+    assert reply.startswith("Plan mode: on")
+    assert _snapshot(plugin) == before
+    assert plugin._load_state("sk:unit-session")["entered_by"] == "user"
+    assert _tool(plugin, action="status") == plugin.command("status")
+
+
+def test_t6_agent_tool_refuses_without_session_identity(
+    session_env, plugin, monkeypatch, tmp_path
+):
+    session_env.clear()
+    session_env.update({"HERMES_SESSION_PLATFORM": "telegram", "TERMINAL_CWD": str(tmp_path)})
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: True)
+
+    reply = _tool(plugin, action="on")
+
+    assert reply.startswith("Plan mode activation was refused")
+    assert "session binding" in reply
+    assert plugin.ctx.state.values == {}
+    assert not (tmp_path / ".hermes").exists()
+
+    monkeypatch.setattr(plugin_mod, "_session_reader", lambda: None)
+    assert "unavailable" in _tool(plugin, action="on")
+    assert plugin.ctx.state.values == {}
+
+
+def test_t7_turn_note_differs_by_provenance(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    agent_note = (
+        "You entered plan mode yourself: when the plan is written, call "
+        "plan_mode(action='off') or tell the user to run /planmode approve to execute it."
+    )
+    _tool(plugin, action="on")
+    note = plugin.pre_llm_call()["context"]
+    assert "Plan mode is ON." in note and note.endswith(agent_note)
+
+    _tool(plugin, action="off")
+    plugin.command("on")
+    note = plugin.pre_llm_call()["context"]
+    assert "Plan mode is ON." in note and agent_note not in note
+
+
+def test_agent_tool_in_ui_turn_is_reachable_by_the_tabs_slash_commands(
+    plugin, session_env, tmp_path
+):
+    session_env.clear()
+    session_env.update({
+        "HERMES_SESSION_SOURCE": "tui", "HERMES_SESSION_KEY": "tab-sk",
+        "HERMES_UI_SESSION_ID": "tab-1", "TERMINAL_CWD": str(tmp_path),
+    })
+    assert "Plan mode is on" in _tool(plugin, action="on")
+
+    del session_env["HERMES_UI_SESSION_ID"]  # TUI slash commands bind only the sk key
+    assert plugin.command("status").startswith("Plan mode: on")
+    assert "Plan mode is off" in plugin.command("off")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-1"
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"}) is None
+
+
+def test_t9_user_reject_hands_agent_plan_mode_to_the_user(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tool(plugin, action="on")
+    activation = plugin._load_state("sk:unit-session")["activation_id"]
+
+    reply = plugin.command("reject add rollback steps")
+
+    assert reply.endswith(
+        "Plan mode is now user-owned; only /planmode approve, reject or off can end it."
+    )
+    state = plugin._load_state("sk:unit-session")
+    assert state["entered_by"] == "user" and "agent_activation_id" not in state
+    assert state["activation_id"] == activation
+    assert _tool(plugin, action="off") == (
+        "Plan mode was entered by the user; only /planmode approve, reject or off can end it."
+    )
+    assert plugin._load_state("sk:unit-session")["active"] is True
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+
+
+def test_user_approve_clears_agent_provenance(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tool(plugin, action="on")
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_120000-plan.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "#"}) is None
+    plan.write_text("#", encoding="utf-8")
+
+    assert "Plan approved" in plugin.command("approve")
+
+    state = plugin._load_state("sk:unit-session")
+    assert not {"activation_id", "entered_by", "agent_activation_id"} & set(state)
+    plugin.command("on")
+    assert _tool(plugin, action="off") == (
+        "Plan mode was entered by the user; only /planmode approve, reject or off can end it."
+    )
+    assert plugin._load_state("sk:unit-session")["active"] is True

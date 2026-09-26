@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import importlib
 import inspect
+import json
 import os
 from pathlib import Path
 import shutil
@@ -812,5 +813,87 @@ def test_real_tui_slash_exec_refuses_cross_profile_off(tmp_path, monkeypatch):
             clear_session_vars(turn_tokens)
         server._sessions.pop(runtime_a, None)
         server._sessions.pop(runtime_b, None)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatch):
+    """T8: the plan_mode tool registers, and a gateway turn's own tool call activates it."""
+    pytest.importorskip("hermes_cli.plugins")
+    home, workspace, bundled = tmp_path / "home", tmp_path / "ws", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")  # an admitted gateway process
+    for key in ("HERMES_SESSION_KEY", "HERMES_SESSION_SOURCE", "HERMES_SESSION_PLATFORM",
+                "HERMES_UI_SESSION_ID", "TERMINAL_CWD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(workspace)  # the gateway binds no cwd; plans fall back to the process cwd
+
+    from gateway.config import Platform
+    from gateway.run import GatewayRunner
+    from gateway.session import SessionContext, SessionSource
+    from gateway.session_context import clear_session_vars
+    from hermes_cli import plugins
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from model_tools import handle_function_call
+    from tools.registry import registry
+    from tools.thread_context import propagate_context_to_thread
+
+    home_token = set_hermes_home_override(str(home))
+    turn_tokens = None
+    plans = workspace / ".hermes" / "plans"
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        manager = plugins.get_plugin_manager()
+        manager.discover_and_load()
+        entry = registry.get_entry("plan_mode", scope=manager.scope_key)
+        assert entry is not None and entry.toolset == "plan-mode"
+        assert "plan_mode" in manager._plugin_tool_names
+        assert entry.schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off"]
+
+        # Bind exactly what a gateway turn binds before the agent runs (run_turn.py:2063).
+        source = SessionSource(platform=Platform.TELEGRAM, chat_id="4242", user_id="7")
+        context = SessionContext(source=source, connected_platforms=[], home_channels={},
+                                 session_key="agent:main:telegram:dm:4242")
+        turn_tokens = GatewayRunner._set_session_env(SimpleNamespace(adapters={}), context)
+        ids = {"session_id": "gateway-turn-session"}
+
+        def call(name, args, call_id):
+            # The agent runs tool calls on a worker carrying the turn's ContextVars.
+            run = propagate_context_to_thread(
+                lambda: handle_function_call(name, args, tool_call_id=call_id, **ids))
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(run).result(timeout=30)
+
+        on = json.loads(call("plan_mode", {"action": "on", "reason": "draft first"}, "c1"))
+        assert "Plan mode is on" in on["message"] and str(plans) in on["message"]
+
+        block = plugins.get_pre_tool_call_block_message
+        assert block("plan_mode", {"action": "status"}, **ids) is None
+        outside = workspace / "outside.md"
+        assert block("write_file", {"path": str(outside), "content": "x"}, **ids)
+        result = call("write_file", {"path": str(outside), "content": "x"}, "c2")
+        assert "Plan mode is on" in result and not outside.exists()
+        assert "Plan mode is on" in call("terminal", {"command": "pwd"}, "c3")
+        plan = plans / "2026-09-26_120000-agent-plan.md"
+        call("write_file", {"path": str(plan), "content": "# Plan"}, "c4")
+        assert plan.read_text(encoding="utf-8") == "# Plan"
+
+        status = json.loads(call("plan_mode", {"action": "status"}, "c5"))["message"]
+        assert "Plan mode: on" in status and str(plan) in status
+        # The user's slash command in the same chat reaches the agent-entered state.
+        assert "Plan approved" in plugins.get_plugin_command_handler("planmode")("approve")
+        assert block("terminal", {"command": "pwd"}, **ids) is None
+    finally:
+        if turn_tokens is not None:
+            clear_session_vars(turn_tokens)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)

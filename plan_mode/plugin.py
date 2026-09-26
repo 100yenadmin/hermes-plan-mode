@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -41,6 +42,30 @@ READ_ONLY_TOOLS = frozenset(
     }
 )
 PLAN_WRITERS = frozenset({"write_file", "patch"})
+PLAN_MODE_TOOL = "plan_mode"
+_TOOL_DESCRIPTION = (
+    "Enter plan mode for this session when the user asks you to write or draft a plan "
+    "before doing the work: while it is on, file writes are allowed only under the "
+    "session's plans directory and every other mutating tool is blocked. action='status' "
+    "reports the state. action='off' ends ONLY a plan mode you entered yourself; a plan "
+    "mode the user entered ends only with /planmode approve|reject|off."
+)
+_TOOL_SCHEMA = {
+    "name": PLAN_MODE_TOOL,
+    "description": _TOOL_DESCRIPTION,
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["on", "status", "off"]},
+            "reason": {"type": "string", "description": "What the plan is for."},
+        },
+        "required": ["action"],
+    },
+}
+_AGENT_NOTE = (
+    "You entered plan mode yourself: when the plan is written, call "
+    "plan_mode(action='off') or tell the user to run /planmode approve to execute it."
+)
 _ACTIVE_INDEX_KEY = "active-index"
 
 _V4A_FILE_RE = re.compile(
@@ -319,6 +344,13 @@ class PlanModePlugin:
             self.command,
             "Enforce plan-only tool access for this session",
             args_hint="on|status|approve|reject|off [task]",
+        )
+        self.ctx.register_tool(
+            name=PLAN_MODE_TOOL,
+            toolset="plan-mode",
+            schema=_TOOL_SCHEMA,
+            handler=self.tool,
+            description=_TOOL_DESCRIPTION,
         )
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
@@ -623,12 +655,49 @@ class PlanModePlugin:
         state["plan_files"] = files[-256:]
         self._save_state(key, state)
 
+    @staticmethod
+    def _status_text(state: dict[str, Any], files: list[str]) -> str:
+        mode = "on" if state.get("active") else "off"
+        entered = state.get("entered_at") or "not set"
+        plans_dir = state.get("plans_dir") or "not set"
+        rendered = "\n".join(f"- {path}" for path in files) or "- none"
+        return (
+            f"Plan mode: {mode}\nEntered at: {entered}\n"
+            f"Plans directory: {plans_dir}\nPlan files:\n{rendered}"
+        )
+
+    @staticmethod
+    def _agent_owned(state: dict[str, Any]) -> bool:
+        """True only for the activation the agent's own ``plan_mode`` call created."""
+        activation = state.get("activation_id")
+        return bool(
+            state.get("active")
+            and state.get("entered_by") == "agent"
+            and activation
+            and state.get("agent_activation_id") == activation
+        )
+
+    def tool(self, args: Any = None, **kwargs: Any) -> str:
+        """Agent-callable ``plan_mode``: on, status or off; approval stays the user's act."""
+        call_args = args if isinstance(args, dict) else {}
+        action = str(call_args.get("action") or "").strip().lower()
+        if action in {"on", "status", "off"}:
+            reason = str(call_args.get("reason") or "").strip()
+            message = self._run_command(action, reason, entered_by="agent")
+        else:
+            message = (
+                "Unsupported plan_mode action: use on, status or off. Approving or "
+                "rejecting a plan is the user's act (/planmode approve or /planmode reject)."
+            )
+        return json.dumps({"message": message}, ensure_ascii=False)
+
     def command(self, raw_args: str) -> str:
         raw = str(raw_args or "").strip()
         action, _, remainder = raw.partition(" ")
-        action = action.lower() or "status"
-        remainder = remainder.strip()
+        return self._run_command(action.lower() or "status", remainder.strip())
 
+    def _run_command(self, action: str, remainder: str, entered_by: str = "user") -> str:
+        """Resolve identity like the slash command, then apply one plan-mode action."""
         identity, error = self._identity_or_reply()
         if error:
             if action == "status":
@@ -692,6 +761,8 @@ class PlanModePlugin:
                     "identity; the plugin will not guess across tabs."
                 )
             if action == "on":
+                if entered_by == "agent" and state.get("active"):
+                    return self._status_text(state, self._plan_files(state))
                 try:
                     plans_dir = self._fixed_plans_dir()
                 except (OSError, ValueError) as exc:
@@ -715,11 +786,16 @@ class PlanModePlugin:
                     "plan_files": state.get("plan_files", []),
                     "owner_pid": os.getpid(),
                     "activation_id": uuid.uuid4().hex,
+                    "entered_by": entered_by,
                     **preserved,
                 }
+                if entered_by == "agent":
+                    state["agent_activation_id"] = state["activation_id"]
                 if identity.key.startswith("cli:"):
                     state["cli_pid"] = os.getpid()
                 self._save_command_state(identity.key, command_storage_key, state)
+                # A UI turn's tool call links its sk: alias now, so the tab's slash commands find it.
+                self._link_command_key(identity.key, state, identity.fallback_key)
                 task_text = f" Task: {remainder}" if remainder else ""
                 return (
                     f"Plan mode is on for this session.{task_text}\n"
@@ -730,15 +806,7 @@ class PlanModePlugin:
                 )
 
             if action == "status":
-                files = self._plan_files(state)
-                mode = "on" if state.get("active") else "off"
-                entered = state.get("entered_at") or "not set"
-                plans_dir = state.get("plans_dir") or "not set"
-                rendered = "\n".join(f"- {path}" for path in files) or "- none"
-                return (
-                    f"Plan mode: {mode}\nEntered at: {entered}\n"
-                    f"Plans directory: {plans_dir}\nPlan files:\n{rendered}"
-                )
+                return self._status_text(state, self._plan_files(state))
 
             if action == "approve":
                 if not state.get("active"):
@@ -764,7 +832,8 @@ class PlanModePlugin:
                 else:
                     approved_path = files[-1]
                 state["active"] = False
-                state.pop("activation_id", None)
+                for field in ("activation_id", "entered_by", "agent_activation_id"):
+                    state.pop(field, None)
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
                 )
@@ -776,12 +845,26 @@ class PlanModePlugin:
                     return "Plan mode is not on for this session."
                 feedback = remainder or "No additional feedback was provided."
                 state["pending_note"] = f"The user rejected the plan: {feedback}. Revise it."
+                # Once the user weighs in, approve/reject governs: the agent can no longer end it.
+                state["entered_by"] = "user"
+                state.pop("agent_activation_id", None)
                 self._save_command_state(identity.key, command_storage_key, state)
-                return "Plan rejected. Plan mode remains on; the feedback will be injected next turn."
+                return (
+                    "Plan rejected. Plan mode remains on; the feedback will be injected next turn. "
+                    "Plan mode is now user-owned; only /planmode approve, reject or off can end it."
+                )
 
             if action == "off":
+                if entered_by == "agent" and not state.get("active"):
+                    return "Plan mode is not on for this session."
+                if entered_by == "agent" and not self._agent_owned(state):
+                    return (
+                        "Plan mode was entered by the user; only /planmode approve, "
+                        "reject or off can end it."
+                    )
                 state["active"] = False
-                state.pop("activation_id", None)
+                for field in ("activation_id", "entered_by", "agent_activation_id"):
+                    state.pop(field, None)
                 state["pending_note"] = ""
                 self._save_command_state(identity.key, command_storage_key, state)
                 return "Plan mode is off for this session. No approval note will be injected."
@@ -831,7 +914,11 @@ class PlanModePlugin:
 
                 name = str(tool_name or "")
                 call_args = args if isinstance(args, dict) else {}
-                if name in READ_ONLY_TOOLS or name in self._extra_allowed_tools():
+                if (
+                    name in READ_ONLY_TOOLS
+                    or name == PLAN_MODE_TOOL
+                    or name in self._extra_allowed_tools()
+                ):
                     return None
                 if name == "skill_view":
                     reason = _skill_view_block_reason()
@@ -936,6 +1023,7 @@ class PlanModePlugin:
                         f"plan Markdown files using absolute paths under {plans_dir}. Name each plan "
                         "YYYY-MM-DD_HHMMSS-<slug>.md. Do not implement or call blocked tools; ask "
                         "the user to approve with /planmode approve when the plan is ready."
+                        + (f" {_AGENT_NOTE}" if self._agent_owned(state) else "")
                     )
                 return {"context": "\n\n".join(parts)} if parts else None
         except Exception as exc:

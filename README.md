@@ -43,6 +43,60 @@ Plans use this convention:
 The command prints the exact absolute directory. Plan writes must use absolute
 paths under that directory; relative paths are deliberately rejected.
 
+## Agent-initiated plan mode
+
+The plugin registers one identity-bound native tool, `plan_mode` (toolset
+`plan-mode`, actions `on|status|off`). It binds to the same session identity as
+the slash command. On hosts with Tool Search on (the Hermes default from
+v2026.9.24), plugin tools sit behind `tool_search`, so a model reaches
+`plan_mode` only after searching for it. In a live check on a v2026.9.24 host
+(classic CLI, GLM-5.3), a model told to use the tool found it with
+`tool_search`, entered plan mode, and its write outside the plans directory was
+blocked. The same model, asked only to "switch into plan mode", did not search
+and never entered it. `/planmode on` stays the reliable way in. Live Telegram
+use is not covered by the automated tests or by that check.
+
+- `plan_mode(action="on", reason=...)` enters plan mode for the current
+  session with the same identity resolution, profile check, plans directory
+  and enforcement as `/planmode on`. If plan mode is already on, it returns
+  the status and changes nothing.
+- `plan_mode(action="status")` returns the same text as `/planmode status`.
+- `plan_mode(action="off")` ends plan mode only when the agent entered it
+  itself (same activation). It never deletes plan files.
+
+What the tool cannot do: approve or reject a plan (the schema offers only `on`,
+`status` and `off`, and the handler refuses anything else), end a plan mode the
+user entered, or activate plan mode when the turn has no session identity (it
+returns the same refusal as the slash command and writes no state).
+
+Provenance rule: each activation records `entered_by` (`user` for the slash
+command, `agent` for the tool). A user-entered plan mode ends only with
+`/planmode approve`, `reject` or `off`; the tool refuses with `Plan mode was
+entered by the user; only /planmode approve, reject or off can end it.` State
+written by 0.1.x counts as user-entered. A `/planmode reject` hands an
+agent-entered plan mode to the user, so the tool can no longer end it. While
+an agent-entered plan mode is on, the turn note adds: call
+`plan_mode(action='off')` or ask the user to run `/planmode approve`.
+`plan_mode` itself is always allowed while plan mode is on.
+
+## Telegram: the command menu
+
+Telegram's bot command menu is capped at 60 entries by default (core commands
+first, then plugin commands, then skills), so `/planmode` may be hidden on busy
+profiles. Typing `/planmode` still works, and `/commands` lists everything.
+Operators can pin it before the cap:
+
+```yaml
+platforms:
+  telegram:
+    extra:
+      command_menu:
+        priority: [planmode]
+```
+
+The default `priority_mode: prepend` puts pinned names ahead of Hermes' own
+priority list. Bare `/planmode` answers with the status.
+
 ## What is allowed
 
 The built-in allowlist is derived from Hermes' registered tools at
@@ -233,7 +287,7 @@ does **not** enforce Codex-native app-server actions. Use a normal Hermes tool
 runtime when enforcement is required.
 
 This plugin performs no network calls, launches no subprocesses, contains no
-self-updater, and registers no tools. While plan mode is active, its
+self-updater, and registers one tool (`plan_mode`, above). While plan mode is active, its
 `pre_llm_call` hook adds a short plan-mode note to each turn's context.
 
 TUI `/background` and `btw` side agents are rebound under their task id and do
