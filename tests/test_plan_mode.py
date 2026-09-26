@@ -59,6 +59,7 @@ def test_registers_exact_surface(plugin):
     assert set(plugin.ctx.commands) == {"planmode"}
     assert set(plugin.ctx.hooks) == {
         "pre_tool_call",
+        "post_tool_call",
         "pre_llm_call",
         "on_session_finalize",
         "on_session_reset",
@@ -129,6 +130,48 @@ def test_approve_uses_only_this_sessions_tracked_plan_files(
     explicit = plugin.command(f"approve {plan_a.name}")
     assert str(plan_a) in explicit
     assert str(newer_a) not in explicit
+
+
+@pytest.mark.parametrize("status", ["error", "blocked", "cancelled"])
+def test_failed_plan_write_never_becomes_approvable(plugin, session_env, tmp_path, status):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    plans = tmp_path / ".hermes" / "plans"
+    good, failed = plans / "2026-09-26_a-good.md", plans / "2026-09-26_b-failed.md"
+    for path, call_id, outcome in ((good, "call-good", "ok"), (failed, "call-bad", status)):
+        args = {"path": str(path), "content": "# Plan\n"}
+        ids = {"session_id": "s1", "tool_call_id": call_id}
+        assert plugin.pre_tool_call("write_file", args, **ids) is None
+        path.write_text("# Plan\n", encoding="utf-8")  # the target exists either way
+        plugin.post_tool_call("write_file", args, status=outcome, **ids)
+
+    assert str(failed) not in plugin.command("status")
+    assert "not written by this session" in plugin.command(f"approve {failed.name}")
+    assert str(good) in plugin.command("approve")
+
+
+def test_plan_write_needs_ok_post_for_the_same_call(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_plan.md"
+    args = {"path": str(plan), "content": "# Plan\n"}
+    assert plugin.pre_tool_call("write_file", args, session_id="s1", tool_call_id="c1") is None
+    plan.write_text("# Plan\n", encoding="utf-8")
+    plugin.post_tool_call("write_file", args, session_id="s1", tool_call_id="c2", status="ok")
+    plugin.post_tool_call("write_file", args, session_id="s2", tool_call_id="c1", status="ok")
+    other = {"path": str(plan.with_name("other.md")), "content": "x"}
+    plugin.post_tool_call("write_file", other, session_id="s1", tool_call_id="c1", status="ok")
+
+    assert "no tracked plan file" in plugin.command("approve")
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+
+def test_approve_refuses_without_a_tracked_plan_file(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    response = plugin.command("approve")
+    assert "Plan approval was refused: this session has no tracked plan file" in response
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
 
 
 def test_on_falls_back_to_process_cwd_for_invalid_terminal_cwd(plugin, session_env, tmp_path, monkeypatch):
@@ -665,6 +708,9 @@ def test_ui_adoption_never_deletes_active_current_process_cli_state(
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
 
     assert plugin._load_state(cli_key).get("active") is True
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_adopted.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "x"}) is None
+    plan.write_text("x", encoding="utf-8")
 
     session_env["HERMES_UI_SESSION_ID"] = ""
     assert "Plan approved" in plugin.command("approve")
@@ -745,6 +791,9 @@ def test_tui_commands_reach_ui_state_after_adoption_and_key_rotation(
     session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
     assert "The user rejected the plan: revise the plan. Revise it." in plugin.pre_llm_call()["context"]
 
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_tab-8.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "x"}) is None
+    plan.write_text("x", encoding="utf-8")
     session_env["HERMES_UI_SESSION_ID"] = ""
     assert "Plan approved" in plugin.command("approve")
     session_env["HERMES_UI_SESSION_ID"] = "desktop-tab-8"
@@ -789,7 +838,10 @@ def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
             "HERMES_UI_SESSION_ID": "",
         }
     )
-    assert "Plan mode: off" in plugin.command("status")
+    status = plugin.command("status")
+    assert "Plan mode: unresolved" in status and "is active" in status
+    assert "will not guess across tabs" in plugin.command("on second state")
+    assert plugin._load_state("sk:rotation-command-after") == {}
     response = plugin.command("off")
     assert "refused" in response.lower()
     assert "will not guess across tabs" in response
@@ -852,6 +904,23 @@ def test_reenabling_linked_tui_state_preserves_command_links(
     assert "No approval note" in plugin.command("off")
 
     session_env["HERMES_UI_SESSION_ID"] = "reenable-ui-tab"
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_evicted_rotation_alias_storage_is_cleared(session_env, plugin, tmp_path):
+    session_env.update({"HERMES_SESSION_KEY": "rot-0", "HERMES_SESSION_SOURCE": "tui"})
+    session_env.update({"HERMES_UI_SESSION_ID": "", "TERMINAL_CWD": str(tmp_path)})
+    assert "Plan mode is on" in plugin.command("on many rotations")
+    session_env["HERMES_UI_SESSION_ID"] = "rot-tab"
+    for index in range(257):  # 257 linked aliases evict rot-0 from the 256 cap
+        session_env["HERMES_SESSION_KEY"] = f"rot-{index}"
+        assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    assert plugin._load_state("sk:rot-0") == {}
+
+    plugin.on_session_reset(platform="tui")
+    session_env.update(
+        {"HERMES_SESSION_KEY": "", "HERMES_UI_SESSION_ID": "", "HERMES_SESSION_PLATFORM": "telegram"}
+    )
     assert plugin.pre_tool_call("terminal", {}) is None
 
 

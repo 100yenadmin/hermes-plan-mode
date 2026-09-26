@@ -10,13 +10,11 @@ covered; see [Known limitations](#known-limitations).
 
 - **Classic CLI:** enforced on released Hermes (≤ 0.21.4, tag `v2026.9.21`)
   and on newer builds.
-- **Messaging gateway (Telegram etc.), TUI, and Desktop:** need a Hermes build
-  that includes NousResearch/hermes-agent commits `5943347a2a` (gateway
-  plugin-command session binding) and `35fdb4608a` (TUI/Desktop plugin-command
-  session binding). Both landed on `main` after `v2026.9.21` and are in no
-  release tag yet; `upstream/main@38c289c` (the CI pin) and
-  `upstream/main@e5131dc` include them. Earlier builds refuse `/planmode on`
-  on these surfaces instead of pretending plan mode is active.
+- **Messaging gateway (Telegram etc.), TUI, and Desktop:** enforced on Hermes
+  `v2026.9.24` (0.21.5), the first release with NousResearch/hermes-agent
+  commits `5943347a2a` (gateway plugin-command session binding) and
+  `35fdb4608a` (TUI/Desktop). Earlier builds refuse `/planmode on` on these
+  surfaces instead of pretending plan mode is active.
 
 ## Commands
 
@@ -27,7 +25,11 @@ covered; see [Known limitations](#known-limitations).
 - `/planmode approve [file]` turns enforcement off and injects a one-shot
   instruction on the next turn: `The user approved the plan at <path>.
   Implement it now.` Without a file it selects the newest plan write allowed
-  for this session; an explicit file must also belong to this session.
+  for this session; an explicit file must also belong to this session. With
+  no tracked plan file, approval is refused. A plan write becomes approvable
+  only when `post_tool_call` reports status `ok` for the same `tool_call_id`;
+  a host that passes no `tool_call_id` (Hermes before 0.21.1) keeps the 0.1.6
+  behaviour and tracks the target when `pre_tool_call` allows it.
 - `/planmode reject [feedback]` keeps enforcement on and injects the feedback
   once on the next turn.
 - `/planmode off` turns enforcement off without an approval instruction.
@@ -140,7 +142,7 @@ The dependency is intentional:
   command handlers specifically so a handler reading `get_session_env()` sees
   the correct session (`#108698`, commit `5943347a2a`); `_run_plugin_command`
   (`tui_gateway/methods_tools.py:573-585`) does the same for TUI/Desktop
-  (commit `35fdb4608a`). Neither is in a release tag through `v2026.9.21`.
+  (commit `35fdb4608a`). Both first shipped in `v2026.9.24` (0.21.5).
 - Hermes propagates the same ContextVar state into tool worker threads; the
   acceptance test exercises the real `_pre_tool_block` entry through
   `tools.thread_context.propagate_context_to_thread`, the helper used by the
@@ -154,9 +156,11 @@ the current hashed `sk:` storage key in the UI state, so `status`, `approve`,
 `reject`, and `off` resolve the same state before and after session-key rotation.
 Re-enabling an already linked state preserves those aliases. If a command using
 a newly rotated key arrives before any bound hook has recorded it, the plugin
-refuses state-changing commands instead of guessing another tab's UI state;
-`status` still reports that the unlinked tab is off. Retry from the owning tab
-after Hermes exposes its stable UI identity. This narrow gap remains until
+refuses `on` and every state-changing command instead of guessing another
+tab's UI state, and `status` reports `unresolved`. The plugin cannot tell that
+key from a tab that never linked, so `/planmode on` in another TUI/Desktop tab
+of the profile is refused while a linked tab has plan mode on. Run one turn in
+the owning tab, then retry. This narrow gap remains until
 Hermes binds `HERMES_UI_SESSION_ID` around plugin commands or emits a public
 rotation mapping.
 Gateway sessions without a UI id continue to use the session key. Classic CLI
@@ -174,7 +178,7 @@ Its messaging gateway also omits command binding; the gateway-start-only
 live-runner reference makes the first `/planmode on` refuse instead of falling
 back to a process-wide CLI key. The inherited `HERMES_EXEC_ASK` environment
 value alone is not trusted, so nested CLIs remain independent. Gateway, TUI
-and Desktop plan mode on released Hermes is therefore unsupported and fails
+and Desktop plan mode on Hermes through 0.21.4 is therefore unsupported and fails
 closed at activation.
 Importing `gateway.run` alone is not treated as a server signal, so normal CLI
 remains usable after every chat-turn import. The tool and LLM hooks
@@ -266,6 +270,12 @@ public old-to-new command-key mapping at that boundary, so a safe in-plugin copy
 would require guessing across tabs. This sequence remains unsupported and is
 covered by a strict expected-failure regression; use the default in-place
 compression or allow one bound turn before rotating compression.
+
+On the messaging gateway, `/planmode on` followed by `/new` before any agent
+turn keeps plan mode on in the new chat; run `/planmode off` to recover. Hermes
+binds an empty `HERMES_SESSION_ID` in the plugin-command scope, so activation
+cannot record the id the reset later reports, and the TUI/Desktop reset passes
+no `old_session_id`. This over-blocks (fail-closed) until Hermes exposes that seam.
 
 ## Development
 

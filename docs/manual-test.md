@@ -11,11 +11,9 @@ hermes plugins enable plan-mode
 
 Run the following on each supported surface (CLI, gateway, and TUI):
 
-Enforced in the classic CLI on released Hermes (≤ 0.21.4, tag `v2026.9.21`).
-Gateway/TUI/Desktop need a Hermes build that includes NousResearch/hermes-agent
-commits `5943347a2a` (gateway) and `35fdb4608a` (TUI/Desktop), which landed on
-`main` after `v2026.9.21` and are in no release tag yet; earlier builds refuse
-`/planmode on` there instead of pretending. On such an earlier build, step 1
+Enforced in the classic CLI on released Hermes. Gateway/TUI/Desktop need Hermes
+`v2026.9.24` (0.21.5) or later; earlier builds refuse `/planmode on` there
+instead of pretending. On such an earlier build, step 1
 on gateway, TUI or Desktop must return the clear session-binding refusal;
 continue those flows only on a build that includes the matching commit.
 
@@ -38,7 +36,7 @@ continue those flows only on a build that includes the matching commit.
 9. Run `/planmode approve`, then send a normal turn. Confirm the approval note
    appears once and implementation tools are unblocked.
 10. Re-enter plan mode and run `/new` or `/reset`. Confirm plan mode is cleared
-    for the replacement session.
+    for the replacement session (gateway: run one turn first; see the README).
 11. In TUI/Desktop, enter plan mode, trigger `/compress`, then repeat a blocked
     terminal call. It must remain blocked after the durable session key rotates.
 12. Create a second chat in the same workspace and write a lexically later plan

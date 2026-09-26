@@ -182,6 +182,56 @@ def test_real_plugin_manager_and_dispatch_guard(tmp_path, monkeypatch):
         reset_hermes_home_override(home_token)
 
 
+def test_real_failed_plan_write_is_not_approvable(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    home, workspace, bundled = tmp_path / "home", tmp_path / "ws", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+    from model_tools import handle_function_call
+
+    home_token = set_hermes_home_override(str(home))
+    session_tokens = None
+    plans = workspace / ".hermes" / "plans"
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        plugins.get_plugin_manager().discover_and_load()
+        session_tokens = set_session_vars(
+            platform="telegram", source="telegram", session_key="write-key",
+            session_id="write-session", cwd=str(workspace),
+        )
+        handler = plugins.get_plugin_command_handler("planmode")
+        assert "Plan mode is on" in handler("on provenance")
+        good, stale = plans / "2026-09-26_a-good.md", plans / "2026-09-26_b-stale.md"
+        ids = {"session_id": "write-session"}
+        handle_function_call("write_file", {"path": str(good), "content": "# Good"}, tool_call_id="c1", **ids)
+        stale.write_text("# Stale", encoding="utf-8")
+        stale.chmod(0o444)
+        plans.chmod(0o555)  # the real write fails on every Hermes version
+        handle_function_call("write_file", {"path": str(stale), "content": "# New"}, tool_call_id="c2", **ids)
+        assert stale.read_text(encoding="utf-8") == "# Stale"
+        assert str(stale) not in handler("status")
+        assert str(good) in handler("approve")
+    finally:
+        if plans.exists():
+            plans.chmod(0o755)
+        if session_tokens is not None:
+            clear_session_vars(session_tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
 def test_real_custom_home_accepts_custom_profile_and_enforces_writes(
     tmp_path, monkeypatch
 ):

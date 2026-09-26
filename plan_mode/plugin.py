@@ -291,6 +291,8 @@ class PlanModePlugin:
         self.ctx = ctx
         self._lock = threading.RLock()
         self._active_keys: set[str] = set()
+        # (session_id, tool_call_id) -> (state key, targets) awaiting post_tool_call.
+        self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str]]] = {}
         manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
         self._registration_profile = self._profile_name_for_home(manager_home)
 
@@ -318,6 +320,7 @@ class PlanModePlugin:
             args_hint="on|status|approve|reject|off [task]",
         )
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
+        self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
         self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
         self.ctx.register_hook("on_session_reset", self.on_session_reset)
@@ -484,6 +487,9 @@ class PlanModePlugin:
             return
         if command_storage not in linked:
             linked.append(command_storage)
+        for evicted in linked[:-256]:
+            if evicted != canonical_storage:
+                self._clear_storage_key(evicted)
         state["command_session_storage_keys"] = linked[-256:]
         state["canonical_ui_storage_key"] = canonical_storage
         self._save_state(state_key, state)
@@ -670,7 +676,14 @@ class PlanModePlugin:
             command_storage_key, state, unresolved_ui_command = self._command_state(
                 identity.key, identity.surface
             )
-            if action not in {"on", "status"} and unresolved_ui_command:
+            if action == "status" and unresolved_ui_command:
+                return (
+                    "Plan mode: unresolved\nA TUI/Desktop plan-mode state is active, but "
+                    "Hermes did not bind the stable UI session ID, so this command's session "
+                    "key is not linked to it and enforcement may apply to this tab. Run one "
+                    "turn in the owning tab, then retry; the plugin will not guess across tabs."
+                )
+            if action != "status" and unresolved_ui_command:
                 return (
                     "Plan mode command was refused: Hermes did not bind the stable UI "
                     "session ID, so this command cannot be matched safely to the tab that "
@@ -729,6 +742,12 @@ class PlanModePlugin:
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 files = self._plan_files(state)
+                if not files:
+                    return (
+                        "Plan approval was refused: this session has no tracked plan file. "
+                        f"Write the plan under {state.get('plans_dir') or '.hermes/plans'} "
+                        "first, or use /planmode off."
+                    )
                 if remainder:
                     candidate = remainder if os.path.isabs(remainder) else os.path.join(
                         str(state.get("plans_dir") or ""), remainder
@@ -741,9 +760,7 @@ class PlanModePlugin:
                         )
                     approved_path = candidate
                 else:
-                    approved_path = files[-1] if files else str(
-                        state.get("plans_dir") or "the plans directory"
-                    )
+                    approved_path = files[-1]
                 state["active"] = False
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
@@ -827,7 +844,16 @@ class PlanModePlugin:
                             "only after restoring a non-symlink plan root.",
                         )
                     if all(_path_is_inside(target, plans_dir) for target in targets):
-                        self._remember_plan_targets(state_key, state, targets)
+                        call_id = str(kwargs.get("tool_call_id") or "")
+                        if not call_id:
+                            # Hosts without tool_call_id keep 0.1.6 pre-write tracking.
+                            self._remember_plan_targets(state_key, state, targets)
+                            return None
+                        pending = self._pending_plan_writes
+                        pending_key = (str(kwargs.get("session_id") or ""), call_id)
+                        pending[pending_key] = (state_key, list(targets))
+                        while len(pending) > 256:
+                            pending.pop(next(iter(pending)))
                         return None
                     return _block_message(
                         name,
@@ -840,6 +866,26 @@ class PlanModePlugin:
                 str(tool_name or "unknown tool"),
                 f"The plan-mode safety check failed closed ({type(exc).__name__}).",
             )
+
+    def post_tool_call(self, tool_name: str = "", args: Any = None, **kwargs: Any) -> None:
+        """Make a pending plan write approvable only after Hermes reports ``ok``."""
+        try:
+            call_id = str(kwargs.get("tool_call_id") or "")
+            with self._lock:
+                pending = self._pending_plan_writes.pop(
+                    (str(kwargs.get("session_id") or ""), call_id), None
+                )
+                if pending is None or kwargs.get("status") != "ok":
+                    return
+                state_key, targets = pending
+                call_args = args if isinstance(args, dict) else {}
+                if _write_targets(str(tool_name or ""), call_args) != targets:
+                    return
+                state = self._load_state(state_key)
+                if state.get("active"):
+                    self._remember_plan_targets(state_key, state, targets)
+        except Exception:
+            return  # An observer failure leaves the write unapprovable (fail-closed).
 
     def pre_llm_call(self, **kwargs: Any) -> dict[str, str] | None:
         try:
