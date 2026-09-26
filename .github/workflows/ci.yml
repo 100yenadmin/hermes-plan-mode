@@ -31,6 +31,8 @@ jobs:
             ref: v2026.9.14
           - name: v2026.9.21
             ref: v2026.9.21
+          - name: v2026.9.24
+            ref: v2026.9.24
           - name: main-38c289c
             ref: 38c289c0146ed8c8b2b767eca1fff6f5b7e6382e
     steps:

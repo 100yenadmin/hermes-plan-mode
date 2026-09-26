@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.7 - 2026-09-26
+
+- Track a plan write as approvable only after `post_tool_call` reports status
+  `ok` for the same `tool_call_id`; failed, blocked or cancelled writes add
+  nothing. Hosts that pass no `tool_call_id` keep the 0.1.6 tracking.
+- Refuse `/planmode approve` when the session has no tracked plan file.
+- With an unlinked rotated TUI/Desktop command key, `status` reports
+  `unresolved` and `on` is refused instead of creating a second state.
+- Clear a rotation alias's stored state when it drops out of the 256-alias cap.
+- Gateway, TUI and Desktop enforcement is released in Hermes `v2026.9.24`
+  (0.21.5); CI adds it. Document the gateway `/planmode on` → `/new` limit.
+
 ## 0.1.6 - 2026-09-23
 
 - Allow `skill_view` in plan mode when Hermes' own
