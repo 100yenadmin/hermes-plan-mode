@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import sys
 from types import ModuleType
 
@@ -1284,3 +1283,20 @@ def test_t7_turn_note_differs_by_provenance(plugin, session_env, tmp_path):
     plugin.command("on")
     note = plugin.pre_llm_call()["context"]
     assert "Plan mode is ON." in note and agent_note not in note
+
+
+def test_agent_tool_in_ui_turn_is_reachable_by_the_tabs_slash_commands(
+    plugin, session_env, tmp_path
+):
+    session_env.clear()
+    session_env.update({
+        "HERMES_SESSION_SOURCE": "tui", "HERMES_SESSION_KEY": "tab-sk",
+        "HERMES_UI_SESSION_ID": "tab-1", "TERMINAL_CWD": str(tmp_path),
+    })
+    assert "Plan mode is on" in _tool(plugin, action="on")
+
+    del session_env["HERMES_UI_SESSION_ID"]  # TUI slash commands bind only the sk key
+    assert plugin.command("status").startswith("Plan mode: on")
+    assert "Plan mode is off" in plugin.command("off")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-1"
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"}) is None

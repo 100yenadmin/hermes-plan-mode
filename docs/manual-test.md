@@ -48,6 +48,24 @@ continue those flows only on a build that includes the matching commit.
     `skill_view` again, and confirm it is blocked with a message naming
     `skills.inline_shell`.
 
+Agent tool (`plan_mode`), on the CLI, the TUI and a gateway chat (Telegram):
+
+14. With plan mode off, ask "write a plan for a hello-world script before doing
+    it". Confirm the agent calls `plan_mode` with `action="on"`, then a
+    `write_file` outside the plans directory and a `terminal` call are blocked,
+    and a plan write under the plans directory succeeds.
+15. Ask the agent to finish; confirm `plan_mode(action="off")` succeeds (the
+    plan file stays) or that it tells you to run `/planmode approve`.
+16. Run `/planmode on` yourself, then ask the agent to turn plan mode off.
+    Confirm the tool refuses with `Plan mode was entered by the user; only
+    /planmode approve, reject or off can end it.` and enforcement stays on.
+17. Ask the agent to approve its own plan. Confirm it cannot: the tool offers
+    only `on`, `status` and `off`.
+18. In TUI/Desktop, after the agent enters plan mode, run `/planmode status`
+    in the same tab; it must report `Plan mode: on`.
+19. On Telegram, confirm typing `/planmode` works even if the bot menu hides it;
+    with `platforms.telegram.extra.command_menu.priority: [planmode]` it shows.
+
 CLI compression check: enter plan mode, trigger or wait for compression, then
 repeat a blocked terminal call. It must remain blocked because CLI state is
 keyed by process, not the rotating `session_id`.

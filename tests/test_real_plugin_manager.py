@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import importlib
 import inspect
+import json
 import os
 from pathlib import Path
 import shutil
@@ -819,8 +820,6 @@ def test_real_tui_slash_exec_refuses_cross_profile_off(tmp_path, monkeypatch):
 def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatch):
     """T8: the plan_mode tool registers, and a gateway turn's own tool call activates it."""
     pytest.importorskip("hermes_cli.plugins")
-    import json
-
     home, workspace, bundled = tmp_path / "home", tmp_path / "ws", tmp_path / "bundled"
     workspace.mkdir()
     bundled.mkdir()
@@ -842,8 +841,8 @@ def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatc
     from gateway.run import GatewayRunner
     from gateway.session import SessionContext, SessionSource
     from gateway.session_context import clear_session_vars
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from hermes_cli import plugins
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from model_tools import handle_function_call
     from tools.registry import registry
     from tools.thread_context import propagate_context_to_thread

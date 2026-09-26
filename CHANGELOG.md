@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 - 2026-09-26
+
+- Add the agent-callable `plan_mode` tool (toolset `plan-mode`) with actions
+  `on`, `status` and `off`, so the agent can enter plan mode when the user asks
+  for a plan first. It resolves the session exactly like `/planmode` and
+  refuses without a session identity; enforcement is unchanged.
+- Record provenance (`entered_by`: `user` or `agent`). The tool's `off` ends
+  only a plan mode the agent entered in the same activation; approval and
+  rejection stay slash-command-only. `plan_mode` is allowed while plan mode is
+  on, and an agent-entered plan mode adds one sentence to the turn note.
+- A UI turn's activation links the tab's session-key alias at once, so the
+  tab's `/planmode status|approve|off` reach it before the next hook.
+- Document the Telegram 60-entry command-menu cap and the
+  `platforms.telegram.extra.command_menu.priority: [planmode]` pin.
+
 ## 0.1.7 - 2026-09-26
 
 - Track a plan write as approvable only after `post_tool_call` reports status
