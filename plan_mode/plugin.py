@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 from typing import Any, Callable
+import uuid
 
 
 READ_ONLY_TOOLS = frozenset(
@@ -291,8 +292,8 @@ class PlanModePlugin:
         self.ctx = ctx
         self._lock = threading.RLock()
         self._active_keys: set[str] = set()
-        # (session_id, tool_call_id) -> (state key, targets) awaiting post_tool_call.
-        self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str]]] = {}
+        # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
+        self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
         manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
         self._registration_profile = self._profile_name_for_home(manager_home)
 
@@ -713,6 +714,7 @@ class PlanModePlugin:
                     "pending_note": "",
                     "plan_files": state.get("plan_files", []),
                     "owner_pid": os.getpid(),
+                    "activation_id": uuid.uuid4().hex,
                     **preserved,
                 }
                 if identity.key.startswith("cli:"):
@@ -762,6 +764,7 @@ class PlanModePlugin:
                 else:
                     approved_path = files[-1]
                 state["active"] = False
+                state.pop("activation_id", None)
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
                 )
@@ -778,6 +781,7 @@ class PlanModePlugin:
 
             if action == "off":
                 state["active"] = False
+                state.pop("activation_id", None)
                 state["pending_note"] = ""
                 self._save_command_state(identity.key, command_storage_key, state)
                 return "Plan mode is off for this session. No approval note will be injected."
@@ -851,7 +855,7 @@ class PlanModePlugin:
                             return None
                         pending = self._pending_plan_writes
                         pending_key = (str(kwargs.get("session_id") or ""), call_id)
-                        pending[pending_key] = (state_key, list(targets))
+                        pending[pending_key] = (state_key, list(targets), state.get("activation_id"))
                         while len(pending) > 256:
                             pending.pop(next(iter(pending)))
                         return None
@@ -877,12 +881,13 @@ class PlanModePlugin:
                 )
                 if pending is None or kwargs.get("status") != "ok":
                     return
-                state_key, targets = pending
+                state_key, targets, activation_id = pending
                 call_args = args if isinstance(args, dict) else {}
                 if _write_targets(str(tool_name or ""), call_args) != targets:
                     return
                 state = self._load_state(state_key)
-                if state.get("active"):
+                # Only the activation that allowed the write may track it.
+                if state.get("active") and state.get("activation_id") == activation_id:
                     self._remember_plan_targets(state_key, state, targets)
         except Exception:
             return  # An observer failure leaves the write unapprovable (fail-closed).

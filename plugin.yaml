@@ -1,6 +1,6 @@
 name: plan-mode
 version: "0.1.7"
-description: "Enforced per-session plan mode: /planmode on blocks mutating Hermes tools dispatched through pre_tool_call, except plan writes under .hermes/plans, until /planmode approve. Enforced in the classic CLI on released Hermes; gateway, TUI and Desktop enforcement is released in Hermes v2026.9.24 (0.21.5), and earlier builds refuse /planmode on there instead of pretending. A plan write becomes approvable only after post_tool_call reports it succeeded. Disclosure — Hermes Codex app-server native exec/applyPatch and TUI /background and btw side agents bypass pre_tool_call and are not enforced; while plan mode is active, pre_llm_call adds a short plan-mode note to each turn's context."
+description: "Enforced plan mode: /planmode on blocks mutating tools via pre_tool_call, except plan writes under .hermes/plans, until /planmode approve. Gateway/TUI/Desktop need Hermes v2026.9.24. A plan is approvable after post_tool_call reports success (hosts without tool_call_id: pre-write tracking). Not enforced: Codex app-server exec/applyPatch, TUI /background and btw. Adds a plan-mode turn note."
 author: 100yenadmin
 kind: standalone
 requires_hermes: ">=0.21.2"

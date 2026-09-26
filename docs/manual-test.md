@@ -9,7 +9,7 @@ cp -R /path/to/hermes-plan-mode "$HERMES_HOME/plugins/plan-mode"
 hermes plugins enable plan-mode
 ```
 
-Run the following on each supported surface (CLI, gateway, and TUI):
+Run the following on each supported surface (CLI, gateway, TUI, and Desktop):
 
 Enforced in the classic CLI on released Hermes. Gateway/TUI/Desktop need Hermes
 `v2026.9.24` (0.21.5) or later; earlier builds refuse `/planmode on` there

@@ -166,6 +166,28 @@ def test_plan_write_needs_ok_post_for_the_same_call(plugin, session_env, tmp_pat
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
 
 
+@pytest.mark.parametrize("reactivate", [False, True])
+def test_plan_write_is_tracked_only_by_the_activation_that_allowed_it(
+    plugin, session_env, tmp_path, reactivate
+):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on first activation")
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_in-flight.md"
+    args, ids = {"path": str(plan), "content": "# Plan\n"}, {"session_id": "s1", "tool_call_id": "c1"}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    plan.write_text("# Plan\n", encoding="utf-8")
+    if reactivate:  # off -> on while the write is in flight
+        plugin.command("off")
+        plugin.command("on second activation")
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+
+    response = plugin.command("approve")
+    if reactivate:
+        assert "no tracked plan file" in response
+    else:
+        assert str(plan) in response
+
+
 def test_approve_refuses_without_a_tracked_plan_file(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
