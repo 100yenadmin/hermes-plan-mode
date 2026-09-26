@@ -1300,3 +1300,23 @@ def test_agent_tool_in_ui_turn_is_reachable_by_the_tabs_slash_commands(
     assert "Plan mode is off" in plugin.command("off")
     session_env["HERMES_UI_SESSION_ID"] = "tab-1"
     assert plugin.pre_tool_call("terminal", {"command": "pwd"}) is None
+
+
+def test_t9_user_reject_hands_agent_plan_mode_to_the_user(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tool(plugin, action="on")
+    activation = plugin._load_state("sk:unit-session")["activation_id"]
+
+    reply = plugin.command("reject add rollback steps")
+
+    assert reply.endswith(
+        "Plan mode is now user-owned; only /planmode approve, reject or off can end it."
+    )
+    state = plugin._load_state("sk:unit-session")
+    assert state["entered_by"] == "user" and "agent_activation_id" not in state
+    assert state["activation_id"] == activation
+    assert _tool(plugin, action="off") == (
+        "Plan mode was entered by the user; only /planmode approve, reject or off can end it."
+    )
+    assert plugin._load_state("sk:unit-session")["active"] is True
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"

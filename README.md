@@ -66,9 +66,11 @@ Provenance rule: each activation records `entered_by` (`user` for the slash
 command, `agent` for the tool). A user-entered plan mode ends only with
 `/planmode approve`, `reject` or `off`; the tool refuses with `Plan mode was
 entered by the user; only /planmode approve, reject or off can end it.` State
-written by 0.1.x counts as user-entered. While an agent-entered plan mode is
-on, the turn note adds: call `plan_mode(action='off')` or ask the user to run
-`/planmode approve`. `plan_mode` itself is always allowed while plan mode is on.
+written by 0.1.x counts as user-entered. A `/planmode reject` hands an
+agent-entered plan mode to the user, so the tool can no longer end it. While
+an agent-entered plan mode is on, the turn note adds: call
+`plan_mode(action='off')` or ask the user to run `/planmode approve`.
+`plan_mode` itself is always allowed while plan mode is on.
 
 ## Telegram: the command menu
 

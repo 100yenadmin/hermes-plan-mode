@@ -8,7 +8,8 @@
   refuses without a session identity; enforcement is unchanged.
 - Record provenance (`entered_by`: `user` or `agent`). The tool's `off` ends
   only a plan mode the agent entered in the same activation; approval and
-  rejection stay slash-command-only. `plan_mode` is allowed while plan mode is
+  rejection stay slash-command-only. A user `/planmode reject` makes an
+  agent-entered activation user-owned. `plan_mode` is allowed while plan mode is
   on, and an agent-entered plan mode adds one sentence to the turn note.
 - A UI turn's activation links the tab's session-key alias at once, so the
   tab's `/planmode status|approve|off` reach it before the next hook.

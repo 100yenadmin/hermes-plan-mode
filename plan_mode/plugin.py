@@ -844,8 +844,14 @@ class PlanModePlugin:
                     return "Plan mode is not on for this session."
                 feedback = remainder or "No additional feedback was provided."
                 state["pending_note"] = f"The user rejected the plan: {feedback}. Revise it."
+                # Once the user weighs in, approve/reject governs: the agent can no longer end it.
+                state["entered_by"] = "user"
+                state.pop("agent_activation_id", None)
                 self._save_command_state(identity.key, command_storage_key, state)
-                return "Plan rejected. Plan mode remains on; the feedback will be injected next turn."
+                return (
+                    "Plan rejected. Plan mode remains on; the feedback will be injected next turn. "
+                    "Plan mode is now user-owned; only /planmode approve, reject or off can end it."
+                )
 
             if action == "off":
                 if entered_by == "agent" and not state.get("active"):
