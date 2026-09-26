@@ -46,11 +46,15 @@ paths under that directory; relative paths are deliberately rejected.
 ## Agent-initiated plan mode
 
 The plugin registers one identity-bound native tool, `plan_mode` (toolset
-`plan-mode`, actions `on|status|off`), that a model can call on any surface
-where the host exposes plugin tools. The tool binds to the same session identity
-as the slash command. Live Telegram use and the model's own tool selection are
-verified separately on the eva host (unverified in this release's automated
-tests).
+`plan-mode`, actions `on|status|off`). It binds to the same session identity as
+the slash command. On hosts with Tool Search on (the Hermes default from
+v2026.9.24), plugin tools sit behind `tool_search`, so a model reaches
+`plan_mode` only after searching for it. In a live check on a v2026.9.24 host
+(classic CLI, GLM-5.3), a model told to use the tool found it with
+`tool_search`, entered plan mode, and its write outside the plans directory was
+blocked. The same model, asked only to "switch into plan mode", did not search
+and never entered it. `/planmode on` stays the reliable way in. Live Telegram
+use is not covered by the automated tests or by that check.
 
 - `plan_mode(action="on", reason=...)` enters plan mode for the current
   session with the same identity resolution, profile check, plans directory

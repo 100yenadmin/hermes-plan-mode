@@ -3,11 +3,12 @@
 ## 0.2.0 - 2026-09-26
 
 - Add an identity-bound native tool `plan_mode` (toolset `plan-mode`, actions
-  `on`, `status` and `off`) that a model can call on any surface where the host
-  exposes plugin tools. It binds to the same session identity as `/planmode`
-  and refuses without one; enforcement is unchanged. Live Telegram use and the
-  model's own tool selection are unverified in this release's automated tests
-  (verified separately on the eva host).
+  `on`, `status` and `off`). It binds to the same session identity as
+  `/planmode` and refuses without one; enforcement is unchanged. On hosts with
+  Tool Search on (the Hermes default from v2026.9.24) the tool sits behind
+  `tool_search`: a live check showed a model reaching it only when told to use
+  it. `/planmode on` stays the reliable way in; live Telegram use is not
+  covered by the automated tests.
 - Record provenance (`entered_by`: `user` or `agent`). The tool's `off` ends
   only a plan mode the agent entered in the same activation; approval and
   rejection stay slash-command-only. A user `/planmode reject` makes an
