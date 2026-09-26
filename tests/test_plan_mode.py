@@ -1320,3 +1320,21 @@ def test_t9_user_reject_hands_agent_plan_mode_to_the_user(plugin, session_env, t
     )
     assert plugin._load_state("sk:unit-session")["active"] is True
     assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+
+
+def test_user_approve_clears_agent_provenance(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tool(plugin, action="on")
+    plan = tmp_path / ".hermes" / "plans" / "2026-09-26_120000-plan.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "#"}) is None
+    plan.write_text("#", encoding="utf-8")
+
+    assert "Plan approved" in plugin.command("approve")
+
+    state = plugin._load_state("sk:unit-session")
+    assert not {"activation_id", "entered_by", "agent_activation_id"} & set(state)
+    plugin.command("on")
+    assert _tool(plugin, action="off") == (
+        "Plan mode was entered by the user; only /planmode approve, reject or off can end it."
+    )
+    assert plugin._load_state("sk:unit-session")["active"] is True
