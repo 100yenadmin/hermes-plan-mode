@@ -21,7 +21,7 @@ def _copy_plugin(destination: Path) -> None:
     shutil.copytree(
         REPO_ROOT,
         destination,
-        ignore=shutil.ignore_patterns(".git", ".pytest_cache", "__pycache__", "*.pyc"),
+        ignore=shutil.ignore_patterns(".git", ".pytest_cache", ".lane-evidence", "__pycache__", "*.pyc"),
     )
 
 
@@ -857,7 +857,7 @@ def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatc
         entry = registry.get_entry("plan_mode", scope=manager.scope_key)
         assert entry is not None and entry.toolset == "plan-mode"
         assert "plan_mode" in manager._plugin_tool_names
-        assert entry.schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off"]
+        assert entry.schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off", "submit"]
 
         # Bind exactly what a gateway turn binds before the agent runs (run_turn.py:2063).
         source = SessionSource(platform=Platform.TELEGRAM, chat_id="4242", user_id="7")
@@ -897,3 +897,186 @@ def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatc
             clear_session_vars(turn_tokens)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)
+
+
+@pytest.fixture
+def real_submit_host(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    approval = pytest.importorskip("tools.approval")
+    if not callable(getattr(approval, "request_tool_approval", None)):
+        pytest.skip("Hermes lacks request_tool_approval")
+    from tools import approval_context
+    from tools.terminal_tool import set_approval_callback
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import plugins
+    from model_tools import handle_function_call
+
+    home, workspace, bundled = tmp_path / "home", tmp_path / "ws", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\napprovals:\n  mode: manual\n",
+        encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+    for key in ("HERMES_GATEWAY_SESSION", "HERMES_EXEC_ASK", "HERMES_YOLO_MODE", "HERMES_CRON_SESSION", "HERMES_SINGLE_QUERY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(approval, "_YOLO_MODE_FROZEN", False, raising=False)
+    monkeypatch.setattr(approval, "is_current_session_yolo_enabled", lambda: False)
+    monkeypatch.setattr(approval_context, "_get_approval_mode", lambda: "manual")
+    monkeypatch.setattr(approval, "is_approved", lambda *_: False)
+    home_token = set_hermes_home_override(str(home))
+    tokens = set_session_vars(source="cli", session_key="submit-session", session_id="submit-session", cwd=str(workspace))
+    approval_token = approval_context.set_current_session_key("submit-session")
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        plugins.get_plugin_manager().discover_and_load()
+        command = plugins.get_plugin_command_handler("planmode")
+        assert command is not None
+        assert "Plan mode is on" in command("on submit proof")
+        path = workspace / ".hermes" / "plans" / "plan.md"
+        handle_function_call("write_file", {"path": str(path), "content": "# Plan\n\n## Implement\n## Verify"}, session_id="submit-session", tool_call_id="write-1")
+        assert path.exists() and str(path) in command("status")
+        yield SimpleNamespace(
+            approval=approval, context=approval_context, plugins=plugins, command=command,
+            callback=set_approval_callback,
+            submit=lambda: handle_function_call("plan_mode", {"action": "submit"}, session_id="submit-session", tool_call_id="submit-1"))
+    finally:
+        set_approval_callback(None)
+        approval.unregister_gateway_notify("submit-session")
+        approval.clear_session("submit-session")
+        approval_context.reset_current_session_key(approval_token)
+        clear_session_vars(tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+def test_u1_real_cli_approval_same_call(real_submit_host):
+    host = real_submit_host
+    answers = []
+    host.callback(lambda *a, **kw: answers.append((a, kw)) or "once")
+    result = json.loads(host.submit())
+    assert answers and result["approved"] and "todo_list" in result["message"]
+    assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="submit-session") is None
+
+
+def test_u1_real_cli_deny_keeps_planning(real_submit_host):
+    host = real_submit_host
+    host.callback(lambda *a, **kw: "deny")
+    result = host.submit()
+    assert "BLOCKED" in result
+    assert host.plugins.get_pre_tool_call_block_message("terminal", {}, session_id="submit-session")
+    notes = host.plugins.invoke_hook("pre_llm_call", session_id="submit-session")
+    assert any("review feedback, not a safety refusal" in note.get("context", "") for note in notes if isinstance(note, dict))
+
+
+@pytest.mark.parametrize("mode", ["yolo", "off"])
+def test_u1_real_auto_approval_keeps_planning(real_submit_host, monkeypatch, mode):
+    host = real_submit_host
+    if mode == "yolo":
+        monkeypatch.setattr(host.approval, "is_current_session_yolo_enabled", lambda: True)
+    else:
+        monkeypatch.setattr(host.context, "_get_approval_mode", lambda: "off")
+    host.callback(lambda *a, **kw: pytest.fail("automatic approval must not prompt"))
+    result = json.loads(host.submit())
+    assert "No human approval was recorded" in result["message"]
+    assert "awaiting" in host.command("status")
+    assert host.plugins.get_pre_tool_call_block_message("terminal", {}, session_id="submit-session")
+
+
+def test_u1_real_gateway_callback_approves(real_submit_host, monkeypatch):
+    host = real_submit_host
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+    notifications = []
+
+    def notify(data):
+        notifications.append(data)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            count = pool.submit(host.approval.resolve_gateway_approval,
+                                "submit-session", "once", request_id=data["request_id"]).result(timeout=5)
+            assert count == 1
+
+    host.approval.register_gateway_notify("submit-session", notify)
+    result = json.loads(host.submit())
+    assert result["approved"] and len(notifications) == 1
+    assert notifications[0]["pattern_key"].startswith("plugin_rule:plan-mode:")
+    assert host.plugins.get_pre_tool_call_block_message("terminal", {}, session_id="submit-session") is None
+
+
+@pytest.fixture
+def real_u2_host(tmp_path, monkeypatch):
+    plugins = pytest.importorskip("hermes_cli.plugins")
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home, workspace, bundled = tmp_path / "home", tmp_path / "workspace", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    home_token = set_hermes_home_override(str(home))
+    tokens = None
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        manager = plugins.get_plugin_manager()
+        manager.discover_and_load()
+        assert manager._plugins["plan-mode"].enabled
+        command = plugins.get_plugin_command_handler("planmode")
+        assert command is not None
+        tokens = set_session_vars(platform="telegram", source="telegram", session_key="u2-session",
+                                  session_id="u2-session", cwd=str(workspace))
+        yield SimpleNamespace(plugins=plugins, manager=manager, command=command)
+    finally:
+        if tokens is not None:
+            clear_session_vars(tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+@pytest.mark.parametrize("prefix", ["", "[Alice] ", '[Replying to: "x"]\n\n'])
+def test_u2_real_core_prompt_enforced(real_u2_host, prefix):
+    prompt_module = pytest.importorskip("agent.plan_prompt")
+    builder = getattr(prompt_module, "build_plan_prompt", None)
+    if not callable(builder):
+        pytest.skip("Hermes lacks build_plan_prompt")
+    host = real_u2_host
+    notes = host.plugins.invoke_hook("pre_llm_call", user_message=prefix + builder("ship it"),
+                                     platform="telegram", session_id="u2-session", is_first_turn=True)
+    assert "Plan mode: on" in host.command("status")
+    assert host.command.__self__._load_state("sk:u2-session")["task"] == "ship it"
+    assert any("This overrides the /plan instruction" in note.get("context", "")
+               for note in notes if isinstance(note, dict))
+    assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="u2-session")
+
+
+def test_u2_real_telegram_menu_rule(real_u2_host):
+    commands = pytest.importorskip("hermes_cli.commands_platforms")
+    requires = getattr(commands, "_requires_argument", None)
+    if not callable(requires):
+        pytest.skip("Hermes lacks the private _requires_argument menu rule")
+    hint = real_u2_host.plugins.get_plugin_commands()["planmode"]["args_hint"]
+    assert hint == "[on|status|show|approve|reject|done|off] [task]"
+    assert requires(hint) is False
+    assert "planmode" in {name for name, _ in commands.telegram_bot_commands()}
+
+
+def test_u2_real_hint_section_accepted(real_u2_host):
+    host = real_u2_host
+    if not callable(getattr(host.plugins.PluginContext, "register_system_prompt_section", None)):
+        pytest.skip("Hermes lacks register_system_prompt_section")
+    accessor = getattr(host.plugins, "render_system_prompt_sections", None)
+    if callable(accessor):
+        sections = accessor({"session_id": "u2-session", "platform": "telegram"})
+        section = next((section for section in sections if section.id == "plan-mode.hint"), None)
+        assert section is not None
+        assert "plan_mode" in section.content and len(section.content) <= 200
+    else:
+        assert host.manager._plugins["plan-mode"].enabled

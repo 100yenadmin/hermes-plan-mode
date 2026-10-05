@@ -1,6 +1,6 @@
 name: plan-mode
-version: "0.2.0"
-description: "Enforced plan mode: /planmode on blocks mutating tools via pre_tool_call, except plan writes under .hermes/plans, until /planmode approve. Gateway/TUI/Desktop need Hermes v2026.9.24. A plan is approvable after post_tool_call reports success (hosts without tool_call_id: pre-write tracking). Not enforced: Codex app-server exec/applyPatch, TUI /background and btw. Adds a plan-mode turn note. The plan_mode tool lets the agent enter plan mode itself (on/status/off); approval stays /planmode approve."
+version: "0.3.0"
+description: "Enforced plan mode with Claude Code-style approval on every interactive Hermes surface. /plan or /planmode on blocks mutating tools dispatched through pre_tool_call, except plan writes under .hermes/plans. The agent submits the plan with plan_mode(submit) and you approve it through Hermes' own approval prompt (buttons, card, CLI panel or /approve); it then implements in the same turn and tracks todo_list progress. Deny keeps planning. Gateway/TUI/Desktop need Hermes v2026.9.24. Not enforced: Codex app-server exec/applyPatch, TUI /background and btw."
 author: 100yenadmin
 kind: standalone
 requires_hermes: ">=0.21.2"
@@ -10,5 +10,8 @@ provides_hooks:
   - pre_tool_call
   - post_tool_call
   - pre_llm_call
+  - transform_llm_output
+  - pre_approval_request
+  - post_approval_response
   - on_session_finalize
   - on_session_reset
