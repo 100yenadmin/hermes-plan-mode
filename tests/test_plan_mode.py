@@ -1768,11 +1768,11 @@ def test_u2_executing_pointer_without_revision(plugin, submitted_plan):
 def test_u2_todo_progress_and_completion(plugin, executing_plan, tool):
     todos = [{"content": "x" * 70, "status": "in_progress"}, {"status": "completed"}, {"status": "cancelled"}]
     result = {"todos": todos, "revision": 2, "summary": {"total": 3, "completed": 1, "cancelled": 1}}
-    plugin.post_tool_call(tool, status="ok", result=json.dumps(result))
+    plugin.post_tool_call(tool, {"todos": []}, status="ok", result=json.dumps(result))
     assert plugin._load_state("sk:unit-session")["progress"] == {"total": 3, "completed": 1, "cancelled": 1, "current": "x" * 60}
     todos[0]["status"] = "completed"
     result["summary"]["completed"] = 2
-    plugin.post_tool_call(tool, status="ok", result=json.dumps(result))
+    plugin.post_tool_call(tool, {"todos": []}, status="ok", result=json.dumps(result))
     state = plugin._load_state("sk:unit-session")
     assert not _EXECUTION_FIELDS & state.keys()
     assert state["submission"]["status"] == "approved"
@@ -1883,8 +1883,8 @@ def test_u2_local_surfaces_no_footer(plugin, submitted_plan, platform):
 
 
 def test_u2_footer_limits_opt_out_and_unresolved(plugin, submitted_plan, session_env, monkeypatch):
-    assert plugin.transform_llm_output(response_text="x" * 3001, platform="telegram") is None
-    assert plugin.transform_llm_output(response_text="x" * 3000, platform="telegram") is not None
+    assert plugin.transform_llm_output(response_text="x" * 1801, platform="telegram") is None
+    assert plugin.transform_llm_output(response_text="x" * 1800, platform="telegram") is not None
     for key in ("footer", "plan_mode.footer"):
         plugin.ctx.settings[key] = "off"
         assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
@@ -1901,10 +1901,10 @@ def test_u2_executing_footer_progress(plugin, executing_plan):
     state.pop("approved_revision")
     plugin._save_state("sk:unit-session", state)
     assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Executing approved plan")
-    plugin.post_tool_call("todo_list", status="ok", result=json.dumps({"todos": [
+    plugin.post_tool_call("todo_list", {"todos": []}, status="ok", result=json.dumps({"todos": [
         {"status": "completed"}, {"status": "cancelled"}, {"status": "in_progress", "content": "Build"}]}))
     assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Plan progress 2/3 · now: Build")
-    plugin.post_tool_call("todo", status="ok", result=json.dumps({"todos": [{"status": "pending"}]}))
+    plugin.post_tool_call("todo", {"todos": []}, status="ok", result=json.dumps({"todos": [{"status": "pending"}]}))
     assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Plan progress 0/1")
 
 
@@ -2041,3 +2041,74 @@ def test_u1_title_drops_a_leading_plan_label(tmp_path):
     result = approval_text("# Plan: Add power\n\n1. Do it\n", str(tmp_path / "p.md"), 1, "cli")
     assert result.startswith("Plan rev 1 (p.md): Add power.")
     assert approval_text("# Plan: Add power\n", str(tmp_path / "p.md"), 1, "telegram").startswith("Plan rev 1: Add power")
+
+
+# U2 review fixes: the executing phase ends on every path and reaches only the chat it belongs to.
+def test_u2r_gateway_unbound_reset_ends_execution(plugin, session_env, executing_plan):
+    plugin.pre_llm_call(session_id="s1", platform="telegram")  # records the session id while executing
+    session_env["HERMES_SESSION_KEY"] = ""
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+    plugin.on_session_reset(platform="telegram", old_session_id="s1", new_session_id="s2")
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    session_env.pop("HERMES_SESSION_PLATFORM")
+    assert plugin.pre_llm_call(session_id="s2", platform="telegram") is None
+    assert plugin.transform_llm_output("hello in the new chat", platform="telegram") is None
+    assert plugin.ctx.state.get("executing-index", []) == []
+
+
+def _tui_env(session_env, bound):
+    session_env.update({"HERMES_SESSION_KEY": "tui-key", "HERMES_SESSION_SOURCE": "tui",
+                        "HERMES_UI_SESSION_ID": "tab-1" if bound else ""})
+
+
+def _tui_approved(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tui_env(session_env, True)
+    assert "Plan mode is ON" in plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)["context"]
+    path = tmp_path / ".hermes" / "plans" / "p.md"
+    args = {"path": str(path), "content": "# P\n1. a\n"}
+    ids = {"session_id": "s1", "tool_call_id": "w1"}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    path.write_text(args["content"], encoding="utf-8")
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    directive = _submit(plugin)
+    _decision(plugin, directive)
+    assert _submit_result(plugin)["approved"]
+
+
+@pytest.mark.parametrize("command", ["done", "off"])
+def test_u2r_tui_done_and_off_reach_the_hook_copy(plugin, session_env, tmp_path, command):
+    _tui_approved(plugin, session_env, tmp_path)
+    _tui_env(session_env, False)  # TUI plugin commands bind only the session key
+    plugin.command(command)
+    _tui_env(session_env, True)
+    assert plugin.pre_llm_call() is None
+
+
+def test_u2r_tui_status_follows_todo_completion(plugin, session_env, tmp_path):
+    _tui_approved(plugin, session_env, tmp_path)
+    plugin.post_tool_call("todo_list", {"todos": []}, status="ok",
+                          result=json.dumps({"todos": [{"status": "completed"}]}))
+    assert plugin.pre_llm_call() is None
+    _tui_env(session_env, False)
+    assert "Phase: off" in plugin.command("status")
+
+
+def test_u2r_subagent_turns_get_no_footer_note_or_activation(plugin, session_env, executing_plan):
+    assert plugin.transform_llm_output("child summary", platform="subagent") is None
+    assert plugin.pre_llm_call(platform="subagent", user_message="do step 2") is None
+    plugin.command("done")
+    assert plugin.pre_llm_call(platform="subagent", user_message="Goal:\n" + _BUILTIN_PROMPT) is None
+    assert not plugin._load_state("sk:unit-session").get("active")
+
+
+def test_u2r_desktop_tab_resumed_from_chat_gets_no_footer(plugin, session_env, submitted_plan):
+    _tui_env(session_env, True)
+    plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)
+    assert plugin.transform_llm_output("desktop reply", platform="telegram") is None
+
+
+def test_u2r_todo_read_does_not_end_execution(plugin, session_env, executing_plan):
+    old = {"todos": [{"id": "1", "content": "old", "status": "completed"}]}
+    plugin.post_tool_call("todo_list", {}, status="ok", result=json.dumps(old))
+    assert plugin._load_state("sk:unit-session")["phase"] == "executing"

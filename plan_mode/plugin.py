@@ -79,6 +79,10 @@ _AGENT_NOTE = (
     "plan_mode(action='off') before submitting. Once you submit a plan, only the user can end plan mode."
 )
 _ACTIVE_INDEX_KEY = "active-index"
+_EXECUTING_INDEX_KEY = "executing-index"
+_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress")
+_FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
+_NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _TODO_HINT = (
     "mirror the plan's steps into todo_list, called as todo_list(todos=[{\"id\": \"1\", \"content\": \"...\", "
     "\"status\": \"in_progress\"}, ...]), and update the statuses with merge=true as you work."
@@ -400,8 +404,22 @@ class PlanModePlugin:
     def _set_active_storage_keys(self, values: list[str]) -> None:
         self.ctx.state.set(_ACTIVE_INDEX_KEY, sorted(set(values))[:256])
 
+    def _executing_storage_keys(self) -> list[str]:
+        value = self.ctx.state.get(_EXECUTING_INDEX_KEY, [])
+        if not isinstance(value, list):
+            return []
+        return [item for item in value[:256] if isinstance(item, str) and item.startswith("session:")]
+
+    def _mark_executing(self, storage_key: str, executing: bool) -> None:
+        current = self._executing_storage_keys()
+        if executing == (storage_key in current):
+            return
+        values = current + [storage_key] if executing else [item for item in current if item != storage_key]
+        self.ctx.state.set(_EXECUTING_INDEX_KEY, values[-256:])
+
     def _clear_storage_key(self, storage_key: str) -> None:
         self.ctx.state.set(storage_key, {})
+        self._mark_executing(storage_key, False)
         self._set_active_storage_keys(
             [item for item in self._active_storage_keys() if item != storage_key]
         )
@@ -463,6 +481,7 @@ class PlanModePlugin:
     ) -> None:
         state = dict(state)
         self.ctx.state.set(storage_key, state)
+        self._mark_executing(storage_key, state.get("phase") == "executing")
         active_storage = self._active_storage_keys()
         if state.get("active"):
             if key_hint and state.get("owner_pid") == os.getpid():
@@ -918,6 +937,7 @@ class PlanModePlugin:
                     return "There is no executing plan to finish."
                 self._clear_execution(state)
                 self._save_command_state(identity.key, command_storage_key, state)
+                self._sync_execution_family(command_storage_key, state)
                 return "The executing plan is done."
 
             if action == "submit" and entered_by == "agent":
@@ -1028,14 +1048,37 @@ class PlanModePlugin:
                 state.pop("submission", None)
                 self._clear_execution(state)
                 self._save_command_state(identity.key, command_storage_key, state)
+                self._sync_execution_family(command_storage_key, state)
                 return "Plan mode is off for this session. No approval note will be injected."
 
         return "Usage: /planmode on [task] | status | show [file] | approve [file] | reject [feedback] | done | off"
 
     @staticmethod
     def _clear_execution(state: dict[str, Any]) -> None:
-        for field in ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress"):
+        for field in _EXECUTION_FIELDS:
             state.pop(field, None)
+
+    def _sync_execution_family(self, storage_key: str, state: dict[str, Any]) -> None:
+        """Copy the execution fields to the state's linked copies.
+
+        TUI/Desktop keep a ``ui:`` copy that hooks read and ``sk:`` copies that commands read; only an active state
+        links them, so the executing phase is mirrored here explicitly. Planning copies are never touched.
+        """
+        related = set(self._linked_command_storage_keys(state))
+        canonical = state.get("canonical_ui_storage_key")
+        if isinstance(canonical, str) and canonical.startswith("session:"):
+            related.add(canonical)
+        related.discard(storage_key)
+        for other in related:
+            copy = self._load_storage_state(other)
+            if not copy or copy.get("active"):
+                continue
+            for field in _EXECUTION_FIELDS:
+                if field in state:
+                    copy[field] = state[field]
+                else:
+                    copy.pop(field, None)
+            self._save_storage_state(other, copy)
 
     def _config(self, name: str, default: Any) -> Any:
         value = self.ctx.get_config(f"plan_mode.{name}", None)
@@ -1182,6 +1225,8 @@ class PlanModePlugin:
             call_id = str(kwargs.get("tool_call_id") or "")
             with self._lock:
                 if tool_name in {"todo_list", "todo"} and kwargs.get("status") == "ok":
+                    if not isinstance((args if isinstance(args, dict) else {}).get("todos"), list):
+                        return  # A read can return an earlier task's finished list; only writes count.
                     identity = derive_session_identity(str(kwargs.get("platform") or ""))
                     if not identity.key or identity.unsupported or identity.non_cli_without_key:
                         return
@@ -1194,6 +1239,7 @@ class PlanModePlugin:
                                 self._clear_execution(state)
                             assert state_key is not None
                             self._save_state(state_key, state)
+                            self._sync_execution_family(_state_storage_key(state_key), state)
                     return
                 call_args = args if isinstance(args, dict) else {}
                 if tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit":
@@ -1246,6 +1292,8 @@ class PlanModePlugin:
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
             if identity.unsupported:
                 return None
+            if str(kwargs.get("platform") or "").strip().lower() in _NO_TURN_NOTE_PLATFORMS:
+                return None  # Delegate children share the parent's identity; the parent's turn owns notes.
             if identity.non_cli_without_key or not identity.key:
                 if _cron_session_is_active():
                     return None
@@ -1270,8 +1318,8 @@ class PlanModePlugin:
                 builtin = (self._config("enforce_builtin_plan", True) is not False
                            and isinstance(message, str) and "[/plan — plan mode]" in message
                            and "For this turn, you are in PLAN MODE — planning only." in message)
-                # User-authored markers can only restrict the user's own session;
-                # the model cannot author user_message to activate this path.
+                # The marker can only restrict this session, never relax it. Delegate goals (model-authored)
+                # are excluded above by platform.
                 if builtin and not state.get("active"):
                     task = message.partition("Task to plan:")[2]
                     task = re.split(r"\n\s*\n", task.lstrip("\r\n"), maxsplit=1)[0].strip()[:500]
@@ -1302,8 +1350,12 @@ class PlanModePlugin:
                         self._clear_execution(state)
                     else:
                         parts.append(executing_pointer(state))
+                    digest = self._session_id_hash(kwargs.get("session_id"))
+                    if digest:
+                        state["session_id_hash"] = digest  # lets an unbound gateway reset find this state
                     assert state_key is not None
                     self._save_state(state_key, state)
+                    self._sync_execution_family(_state_storage_key(state_key), state)
                 return {"context": "\n\n".join(parts)} if parts else None
         except Exception as exc:
             return {
@@ -1317,11 +1369,13 @@ class PlanModePlugin:
         try:
             platform = str(kwargs.get("platform") or "").strip().lower()
             if (self._config("footer", "auto") == "off" or not platform
-                    or platform in LOCAL_PLATFORMS or len(response_text) > 3000):
+                    or platform in LOCAL_PLATFORMS or len(response_text) > _FOOTER_MAX_CHARS):
                 return None
             identity = derive_session_identity(platform)
             if identity.unsupported or identity.non_cli_without_key or not identity.key:
                 return None
+            if identity.key.startswith("ui:"):
+                return None  # A TUI/Desktop tab, even when the session was resumed from a chat platform.
             with self._lock:
                 _, state = self._state_for_hook(identity)
                 return response_footer(response_text, state)
@@ -1359,7 +1413,7 @@ class PlanModePlugin:
             # ContextVar scope. Match the hashed old session id when possible;
             # never guess from active-session count because another session's
             # reset must not disable this one.
-            active_storage = self._active_storage_keys()
+            active_storage = list(dict.fromkeys(self._active_storage_keys() + self._executing_storage_keys()))
             old_digest = self._session_id_hash(
                 kwargs.get("old_session_id")
             )

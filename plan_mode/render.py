@@ -14,7 +14,7 @@ BUILTIN_OVERRIDE = (
 )
 LOCAL_PLATFORMS = frozenset({
     "cli", "terminal", "tui", "desktop", "dashboard", "api_server", "webhook",
-    "acp", "local", "batch", "cron",
+    "acp", "local", "batch", "cron", "subagent", "curator",
 })
 
 
