@@ -246,7 +246,9 @@ plugins:
 - **Session-key edge cases.** With `compression.in_place: false`, `/planmode on` then `/compress` before any agent
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
-  linked tab has plan mode on; retry from the owning tab after one turn there.
+  linked tab has plan mode on; retry from the owning tab after one turn there. If a TUI session key rotates, or the
+  session is reopened in a new tab, while a plan executes, `/planmode done` may not reach that tab and the execution
+  pointer can stay until the todos finish or 100 turns pass.
 - **No autonomy choice at approval** (Hermes has no per-mode edit-accept setting) and **no
   clear-context-and-implement** (not reachable from a plugin).
 - **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs
@@ -256,8 +258,8 @@ plugins:
 - **Footer limits.** Chat platforms only: never CLI, TUI, Desktop (also not for a chat session resumed in Desktop),
   API server, webhook, cron or delegate subagents. Only on replies of 1800 chars or fewer, because adding a footer to
   a longer streamed reply could re-send part of it.
-- **Other output transforms.** Hermes keeps only the first plugin's `transform_llm_output` result. While the footer
-  shows, another plugin's output transform (for example a redactor) may not run on that reply; set
+- **Other output transforms.** Hermes runs every plugin's `transform_llm_output` but uses only the first returned
+  text. While the footer shows, another plugin's transformed reply (for example a redactor's) may be discarded; set
   `plan_mode.footer: off` if you rely on one.
 - **Telegram, Slack and Discord approval text** is a short summary; the full plan comes from the agent's reply or
   `/planmode show`.

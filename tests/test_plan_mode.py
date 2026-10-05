@@ -2156,3 +2156,71 @@ def test_r2_tui_typed_approve_while_open_clears_flag_on_every_copy(plugin, sessi
     for key in ("ui:tab-1", "sk:tui-key"):
         state = plugin._load_state(key)
         assert "approved_while_open" not in state and state.get("phase") == "executing", key
+
+
+# Codex review R3 #1: a reused session-key alias belongs to the tab that claimed it last.
+def _r3_start(plugin, env, tmp, tab, key, sid, name):
+    env.update(HERMES_SESSION_KEY=key, HERMES_SESSION_SOURCE="tui", HERMES_UI_SESSION_ID="", TERMINAL_CWD=str(tmp))
+    assert "Plan mode is on" in plugin.command("on " + name)
+    env["HERMES_UI_SESSION_ID"] = tab
+    assert "Plan mode is ON" in plugin.pre_llm_call(session_id=sid)["context"]
+    path = tmp / ".hermes/plans" / (name + ".md")
+    args = {"path": str(path), "content": "# " + name + "\n1. implement\n"}
+    ids = {"session_id": sid, "tool_call_id": name}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    path.write_text(args["content"])
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan approved" in plugin.command("approve")
+    env["HERMES_UI_SESSION_ID"] = tab
+    assert str(path) in plugin.pre_llm_call(session_id=sid)["context"]
+    return str(path)
+
+
+
+
+def test_r3_reused_alias_overwrites_other_execution(plugin, session_env, tmp_path):
+    a = _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+    session_env["HERMES_SESSION_KEY"] = "new-a"
+    plugin.pre_llm_call(session_id="new-sid-a")
+    bb = _r3_start(plugin, session_env, tmp_path, "tab-b", "old-a", "sid-b", "B")
+    assert plugin._load_state("sk:old-a")["approved_path"] == bb
+    session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
+    plugin.pre_llm_call(session_id="new-sid-a")
+    assert plugin._load_state("sk:old-a")["approved_path"] == bb, plugin._load_state("sk:old-a")
+
+
+def test_r3_finished_nonempty_alias_not_resurrected(plugin, session_env, tmp_path):
+    _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+    session_env["HERMES_SESSION_KEY"] = "new-a"
+    plugin.pre_llm_call(session_id="new-sid-a")
+    _r3_start(plugin, session_env, tmp_path, "tab-b", "old-a", "sid-b", "B")
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "executing plan is done" in plugin.command("done")
+    assert plugin._load_state("sk:old-a").get("phase") is None
+    session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
+    plugin.pre_llm_call(session_id="new-sid-a")
+    assert plugin._load_state("sk:old-a").get("phase") is None
+
+
+
+def test_r3_reset_old_family_does_not_clear_reassigned_alias(plugin, session_env, tmp_path):
+    _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+    session_env["HERMES_SESSION_KEY"] = "new-a"
+    plugin.pre_llm_call(session_id="new-sid-a")
+    bb = _r3_start(plugin, session_env, tmp_path, "tab-b", "old-a", "sid-b", "B")
+    session_env.update(HERMES_SESSION_KEY="", HERMES_UI_SESSION_ID="", HERMES_SESSION_SOURCE="telegram")
+    plugin.on_session_reset(platform="telegram", old_session_id="new-sid-a")
+    assert plugin._load_state("sk:old-a").get("approved_path") == bb
+
+
+def test_r3_nonempty_off_copy_is_not_resurrected_with_new_pending_note(plugin, session_env, tmp_path):
+    _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+    session_env["HERMES_SESSION_KEY"] = "new-a"
+    plugin.pre_llm_call(session_id="new-sid-a")
+    _r3_start(plugin, session_env, tmp_path, "tab-b", "old-a", "sid-b", "B")
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode is off" in plugin.command("off")
+    session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
+    plugin.pre_llm_call(session_id="new-sid-a")
+    assert plugin._load_state("sk:old-a").get("phase") is None

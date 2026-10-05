@@ -37,7 +37,7 @@
   executing, a one-line pointer to the approved plan is added each turn until the todo list is all completed or
   cancelled (todo writes only; a read of an earlier list does not count), `/planmode done|off`, a new activation,
   `/new` or `/reset` (also when the gateway runs the reset hook outside the session), or 100 turns. On TUI/Desktop
-  the tab's command and hook copies stay in step.
+  the tab's command and hook copies stay in step, except after a session-key rotation or a reopen in a new tab.
 - A ≤200-char system-prompt hint names `plan_mode` for multi-step or risky changes (`plan_mode.agent_hint`, default
   true; skipped where the host has no prompt-section API).
 - Add `/planmode show [file]` (read-only, ≤3500 chars) and `/planmode done`. `/planmode status` reports the phase
