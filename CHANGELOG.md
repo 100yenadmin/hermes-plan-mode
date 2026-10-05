@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 - 2026-10-06
+
+- Fix: enabling plan-mode in two profiles of one Hermes install no longer breaks Hermes' dependency sync. The
+  plugin's `pyproject.toml` declared a setuptools build backend, so Hermes' package manager kept its project name
+  (`hermes-plan-mode`) for every copy. Two enabled copies were then two workspace members with one name, and
+  `uv lock` refused the workspace: source-update completion failed on every start. The plugin has no dependencies
+  and was never built, so the build backend is gone. Hermes now treats each copy as a metadata-only member with a
+  per-profile name. Nothing else changes.
+
 ## 0.3.0 - 2026-10-05
 
 - Add `plan_mode(action="submit", path?, summary?)`. It asks the user to approve the plan through Hermes' own
