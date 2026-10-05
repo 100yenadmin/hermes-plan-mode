@@ -2273,9 +2273,12 @@ def test_r3_nonempty_off_copy_is_not_resurrected_with_new_pending_note(plugin, s
 
 # Live TUI check (0.3.2): the Ink card prints the approval text as its title with no line cap, so a full plan pushed
 # the choices off-screen. Surfaces without a gateway platform (CLI, TUI, Desktop) get the one-line prompt.
-def test_v032_tui_submission_uses_one_line_card_text(plugin, session_env, tmp_path):
+@pytest.mark.parametrize("bound_platform", ["", "desktop", "tui"])
+def test_v032_tui_submission_uses_one_line_card_text(plugin, session_env, tmp_path, bound_platform):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     _tui_env(session_env, True)
+    if bound_platform:
+        session_env["HERMES_SESSION_PLATFORM"] = bound_platform
     plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)
     path = tmp_path / ".hermes" / "plans" / "p.md"
     args = {"path": str(path), "content": "# Big plan\n" + "\n".join(f"{i}. step {i}" for i in range(1, 80))}
