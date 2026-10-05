@@ -78,11 +78,11 @@ platform.
 ## Install
 
 ```bash
-hermes plugins install 100yenadmin/hermes-plan-mode --ref <v0.3.0 commit sha> --enable
+hermes plugins install 100yenadmin/hermes-plan-mode --ref <latest release commit sha> --enable
 hermes gateway restart        # only if you run the messaging gateway
 ```
 
-`--ref` takes the exact 40-character commit SHA of a release (see the release notes), not a tag. Without
+`--ref` takes the exact 40-character commit SHA of the latest release (see its release notes), not a tag. Without
 `--enable`, run `hermes plugins enable plan-mode`. Restart running CLI, TUI and Desktop sessions so they load the
 plugin.
 
