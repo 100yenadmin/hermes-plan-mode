@@ -2021,10 +2021,27 @@ def test_u1_card_answer_after_typed_off_writes_nothing(plugin, submitted_plan):
 def test_pr7_typed_approve_while_card_open_does_not_inject(plugin, submitted_plan):
     directive = _submit(plugin)
     reply = plugin.command("approve")
-    assert "Plan approved" in reply and "open approval prompt" in reply
+    assert "Plan approved" in reply and "open prompt" in reply and "does not cancel" in reply
     assert plugin.ctx.injected == []
     _decision(plugin, directive)
     assert _submit_result(plugin)["approved"] is True
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="ok")
+    assert plugin.ctx.injected == []
+
+
+# CodeRabbit on PR #7: a deny or timeout blocks the submit call, so the typed approval starts the work from there.
+@pytest.mark.parametrize("card", ["deny", "timeout"])
+def test_pr7_typed_approve_then_card_blocked_starts_the_work_once(plugin, submitted_plan, card):
+    directive = _submit(plugin)
+    plugin.command("approve")
+    if card == "deny":
+        _decision(plugin, directive, "deny")
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    assert plugin.ctx.injected == [(f"Implement the approved plan at {submitted_plan}.", {"session_key": "unit-session"})]
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    assert len(plugin.ctx.injected) == 1
+    state = plugin._load_state("sk:unit-session")
+    assert state["phase"] == "executing" and "Implement it now" in state["pending_note"]
 
 
 @pytest.mark.parametrize("card", ["approve", "deny"])
@@ -2039,6 +2056,7 @@ def test_pr7_done_while_card_open_cancels_the_resume(plugin, submitted_plan, car
     else:
         _decision(plugin, directive, "deny")
         plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    assert plugin.ctx.injected == []
     state = plugin._load_state("sk:unit-session")
     assert "approved_while_open" not in state and state.get("phase") != "executing"
     assert "Implement" not in (state.get("pending_note") or "")

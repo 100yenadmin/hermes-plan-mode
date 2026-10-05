@@ -1014,19 +1014,11 @@ class PlanModePlugin:
                 self._forget_submission(state)
                 self._save_command_state(identity.key, command_storage_key, state)
                 if card_open and "approved_while_open" in state:
-                    # The suspended submit call resumes with the implementation; injecting would start a second one.
-                    return (f"Plan approved. Plan mode is off. The agent implements {approved_path} as soon as the "
-                            "open approval prompt is answered or times out.")
-                started = False
-                try:
-                    inject = getattr(self.ctx, "inject_message", None)
-                    if callable(inject):
-                        reader = _session_reader()
-                        session_key = reader("HERMES_SESSION_KEY", "") if reader else None
-                        content = f"Implement the approved plan at {approved_path}."
-                        started = inject(content, session_key=session_key) if session_key else inject(content)
-                except Exception:
-                    pass
+                    # Approving the open prompt resumes this turn; a deny or timeout starts the work from post_tool_call.
+                    return (f"Plan approved. Plan mode is off. Approving the open prompt continues this turn with "
+                            f"{approved_path}; denying it or letting it time out does not cancel this approval, and the "
+                            "work then starts in the next turn.")
+                started = self._start_implementation(approved_path)
                 ending = "Starting implementation now." if started else "Send any message to start."
                 return f"Plan approved. Plan mode is off. Next turn will implement {approved_path}. {ending}"
 
@@ -1074,6 +1066,19 @@ class PlanModePlugin:
     def _clear_execution(state: dict[str, Any]) -> None:
         for field in _EXECUTION_FIELDS:
             state.pop(field, None)
+
+    def _start_implementation(self, approved_path: str) -> bool:
+        """Ask Hermes to queue the implementation turn; False when the host cannot inject."""
+        try:
+            inject = getattr(self.ctx, "inject_message", None)
+            if not callable(inject):
+                return False
+            reader = _session_reader()
+            session_key = reader("HERMES_SESSION_KEY", "") if reader else None
+            content = f"Implement the approved plan at {approved_path}."
+            return bool(inject(content, session_key=session_key) if session_key else inject(content))
+        except Exception:
+            return False
 
     def _sync_execution_family(self, storage_key: str, state: dict[str, Any]) -> None:
         """Copy the execution fields to the state's linked copies.
@@ -1268,10 +1273,16 @@ class PlanModePlugin:
                     if not submission or str(submission.get("tool_call_id") or "") != call_id:
                         return
                     entry = self._ledger.take(submission["rule_key"])
-                    if state.pop("approved_while_open", None):
+                    opened = state.pop("approved_while_open", None)
+                    if opened:
                         assert state_key is not None
                         self._save_state(state_key, state)
                         self._sync_execution_family(_state_storage_key(state_key), state)
+                        if (kwargs.get("status") != "ok" and opened == submission.get("rule_key")
+                                and submission.get("status") == "approved" and not state.get("active")
+                                and state.get("phase") == "executing" and state.get("approved_path")):
+                            # Typed approve while the prompt was open, then deny or timeout: start the approved work.
+                            self._start_implementation(str(state["approved_path"]))
                     if state.get("active") and kwargs.get("status") != "ok" and submission.get("status") == "pending":
                         revision = submission["revision"]
                         if entry and entry.get("choice") == "deny":
