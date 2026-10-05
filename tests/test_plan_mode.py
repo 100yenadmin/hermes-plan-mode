@@ -244,7 +244,7 @@ def test_on_refuses_bound_profile_when_registration_profile_is_unknown(
     assert ctx.state.values == {}
 
 
-@pytest.mark.parametrize("action", ["off", "approve", "reject revise it", "done"])
+@pytest.mark.parametrize("action", ["off", "approve", "reject revise it", "done", "show"])
 def test_mutating_commands_refuse_cross_profile_session(
     plugin, session_env, tmp_path, action
 ):
