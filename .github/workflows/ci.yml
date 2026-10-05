@@ -61,4 +61,6 @@ jobs:
       - run: pytest -q -rs
       - run: hermes plugins validate .
       - run: hermes plugins doctor . --ci
-      - run: hermes plugins compat .
+      - name: hermes plugins compat (when the host has it)
+        run: |
+          if hermes plugins --help | grep -qw compat; then hermes plugins compat .; else echo "compat not available on this host"; fi

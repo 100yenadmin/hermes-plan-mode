@@ -75,8 +75,8 @@ _TOOL_SCHEMA = {
     },
 }
 _AGENT_NOTE = (
-    "You entered plan mode yourself: when the plan is written, call "
-    "plan_mode(action='off') or tell the user to run /planmode approve to execute it."
+    "You entered plan mode yourself: if the task turns out not to need a plan, you may call "
+    "plan_mode(action='off') before submitting. Once you submit a plan, only the user can end plan mode."
 )
 _ACTIVE_INDEX_KEY = "active-index"
 
@@ -728,6 +728,17 @@ class PlanModePlugin:
 
     def _complete_submission(self, raw_key: str, storage_key: str, state: dict[str, Any]) -> dict:
         submission = state.get("submission")
+        opened = state.pop("approved_while_open", None)
+        if (opened and isinstance(submission, dict) and opened == submission.get("rule_key")
+                and submission.get("status") == "approved" and not state.get("active")):
+            state["pending_note"] = ""
+            self._save_command_state(raw_key, storage_key, state)
+            return {"message": f"The user approved plan rev {submission['revision']} at {submission['path']} with "
+                    "/planmode approve. Plan mode is off. Implement it now: mirror the plan's steps into todo_list "
+                    "and keep their statuses current as you work.",
+                    "approved": True, "path": submission["path"], "revision": submission["revision"]}
+        if opened:
+            self._save_command_state(raw_key, storage_key, state)
         if not state.get("active") or not submission or submission.get("status") != "pending":
             return {"message": "There is nothing awaiting approval."}
         entry = self._ledger.take(submission["rule_key"])
@@ -914,10 +925,8 @@ class PlanModePlugin:
                     return "Plan mode is not on for this session."
                 files = self._plan_files(state)
                 submission = state.get("submission") or {}
-                pinned = not remainder and (
-                    submission.get("status") == "awaiting" or (
-                        submission.get("status") == "pending"
-                        and not self._ledger.is_inflight(submission.get("rule_key"))))
+                pinned = not remainder and submission.get("status") in {"pending", "awaiting"}
+                card_open = pinned and self._ledger.is_inflight(submission.get("rule_key"))
                 if pinned:
                     try:
                         unchanged = plan_digest(submission["path"])[0] == submission["digest"]
@@ -962,6 +971,9 @@ class PlanModePlugin:
                         if plan_digest(approved_path)[0] == submission["digest"]:
                             submission["status"] = "approved"
                             state["approved_revision"] = submission["revision"]
+                            if card_open:
+                                # The open card's call resumes and reports this approval once.
+                                state["approved_while_open"] = submission["rule_key"]
                     except (OSError, ValueError):
                         pass
                 self._forget_submission(state)
@@ -1053,13 +1065,17 @@ class PlanModePlugin:
         except ValueError as exc:
             return _block_message(PLAN_MODE_TOOL, str(exc))
         revision = int(state.get("revision") or 0) + 1
-        rule_key = make_rule_key(state["activation_id"], revision, digest)
+        rule_key = make_rule_key(state.get("activation_id") or "", revision, digest)
         self._forget_submission(state)
         state["revision"] = revision
         state["submission"] = {
             "revision": revision, "digest": digest, "path": path, "rule_key": rule_key,
             "tool_call_id": tool_call_id or None, "status": "pending", "submitted_at": _utc_now(),
         }
+        # Submitting asks the user, so from here only the user's approve, reject or off ends plan mode.
+        state["entered_by"] = "user"
+        state.pop("agent_activation_id", None)
+        state.pop("approved_while_open", None)
         self._save_state(state_key, state)
         self._ledger.mark_inflight(rule_key, tool_call_id)
         reader = _session_reader()
@@ -1180,7 +1196,10 @@ class PlanModePlugin:
                     if not submission or str(submission.get("tool_call_id") or "") != call_id:
                         return
                     entry = self._ledger.take(submission["rule_key"])
-                    if kwargs.get("status") != "ok" and submission.get("status") == "pending":
+                    if state.pop("approved_while_open", None):
+                        assert state_key is not None
+                        self._save_state(state_key, state)
+                    if state.get("active") and kwargs.get("status") != "ok" and submission.get("status") == "pending":
                         revision = submission["revision"]
                         if entry and entry.get("choice") == "deny":
                             submission["status"] = "rejected"

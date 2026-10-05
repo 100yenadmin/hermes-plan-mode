@@ -1288,8 +1288,8 @@ def test_t6_agent_tool_refuses_without_session_identity(
 def test_t7_turn_note_differs_by_provenance(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     agent_note = (
-        "You entered plan mode yourself: when the plan is written, call "
-        "plan_mode(action='off') or tell the user to run /planmode approve to execute it."
+        "You entered plan mode yourself: if the task turns out not to need a plan, you may call "
+        "plan_mode(action='off') before submitting. Once you submit a plan, only the user can end plan mode."
     )
     _tool(plugin, action="on")
     note = plugin.pre_llm_call()["context"]
@@ -1926,3 +1926,91 @@ def test_plan_file_stamp_format():
     from datetime import datetime
     from plan_mode.render import plan_file_stamp
     assert plan_file_stamp(datetime(2026, 1, 2, 3, 4, 5)) == "2026-01-02_030405"
+
+
+# U1 review fixes: submission ownership, legacy state, typed approval while the card is open.
+def _agent_plan(plugin, session_env, tmp_path, name="plan.md"):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tool(plugin, action="on")
+    path = tmp_path / ".hermes" / "plans" / name
+    args = {"path": str(path), "content": "# Plan\n\n1. Do it\n"}
+    ids = {"session_id": "s1", "tool_call_id": "write-" + name}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    path.write_text(args["content"], encoding="utf-8")
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    return path
+
+
+@pytest.mark.parametrize("outcome", ["deny", "timeout", "yolo"])
+def test_u1_submit_hands_agent_entered_plan_mode_to_the_user(plugin, session_env, tmp_path, outcome):
+    _agent_plan(plugin, session_env, tmp_path)
+    assert "plan_mode(action='off')" in plugin.pre_llm_call()["context"]
+    directive = _submit(plugin)
+    if outcome == "yolo":
+        assert "No human approval" in _submit_result(plugin)["message"]
+    else:
+        if outcome == "deny":
+            _decision(plugin, directive, "deny")
+        plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["entered_by"] == "user" and "agent_activation_id" not in state
+    assert _tool(plugin, action="off") == (
+        "Plan mode was entered by the user; only /planmode approve, reject or off can end it."
+    )
+    assert plugin._load_state("sk:unit-session")["active"] is True
+    assert "plan_mode(action='off')" not in plugin.pre_llm_call()["context"]
+    assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
+
+
+def test_u1_legacy_state_without_activation_id_can_submit(plugin, submitted_plan):
+    state = plugin._load_state("sk:unit-session")
+    state.pop("activation_id")
+    plugin._save_state("sk:unit-session", state)
+    directive = _submit(plugin)
+    assert re.fullmatch(r"plan-mode:00000000:1:[0-9a-f]{8}:[0-9a-f]{8}", directive["rule_key"])
+    _decision(plugin, directive)
+    assert _submit_result(plugin)["approved"] is True
+
+
+def _second_plan(plugin, tmp_path):
+    other = tmp_path / ".hermes" / "plans" / "zz-newer.md"
+    args = {"path": str(other), "content": "# Other"}
+    ids = {"session_id": "s1", "tool_call_id": "write-other"}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    other.write_text(args["content"], encoding="utf-8")
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    return other
+
+
+@pytest.mark.parametrize("card", ["approve", "deny", "timeout"])
+def test_u1_typed_approve_while_card_open_targets_the_submission(plugin, submitted_plan, tmp_path, card):
+    _second_plan(plugin, tmp_path)
+    directive = _submit(plugin, path=str(submitted_plan))
+    assert plugin._ledger.is_inflight(directive["rule_key"])
+    assert "Plan approved" in plugin.command("approve")
+    state = plugin._load_state("sk:unit-session")
+    assert state["approved_path"] == str(submitted_plan) and state["approved_revision"] == 1
+    if card == "approve":
+        _decision(plugin, directive)
+        result = _submit_result(plugin)
+        assert result["approved"] is True and result["path"] == str(submitted_plan)
+        assert "nothing awaiting approval" in _submit_result(plugin)["message"].lower()
+    else:
+        if card == "deny":
+            _decision(plugin, directive, "deny")
+        plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] is False and state["phase"] == "executing"
+    assert state["submission"]["status"] == "approved" and "approved_while_open" not in state
+    note = state.get("pending_note") or ""
+    assert "did not approve" not in note and "was not answered" not in note
+
+
+def test_u1_card_answer_after_typed_off_writes_nothing(plugin, submitted_plan):
+    directive = _submit(plugin)
+    plugin.command("off")
+    _decision(plugin, directive, "deny")
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] is False and not state.get("pending_note")
+    assert plugin.pre_llm_call() is None
