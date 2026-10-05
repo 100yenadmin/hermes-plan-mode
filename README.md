@@ -110,7 +110,7 @@ typed approval the plugin asks Hermes to start the work at once:
 - Gateway and TUI/Desktop on Hermes main: only with `allow_gateway_injection: true` (see Configuration).
 - TUI/Desktop on v2026.9.24: not available.
 
-When you type it while the approval prompt is still open, the waiting agent turn continues with the implementation as soon as that prompt is answered or times out; nothing extra is queued. `/planmode done` before then cancels that continuation.
+When you type it while the approval prompt is still open, approving that prompt continues the waiting turn with the implementation. Denying the prompt or letting it time out does not cancel your typed approval: the work then starts in the next turn (queued where injection is available, otherwise with your next message). `/planmode done` before then cancels it.
 
 Otherwise the reply says "Send any message to start", and your next message starts implementation.
 

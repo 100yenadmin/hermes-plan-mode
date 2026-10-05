@@ -23,9 +23,10 @@
 - "Always" behaves like once for plans, but Hermes core writes a `plugin_rule:plan-mode:…` entry to
   `command_allowlist` in `config.yaml`. The approval card says "command" and times out after 300 s by default
   (`approvals.timeout`). Plain `/approve` resolves the oldest pending prompt; `/approve all` approves everything.
-- Typed `/planmode approve` approves the submitted revision (also while its prompt is still open: the waiting turn
-  then implements it once the prompt is answered or times out, whatever the answer, and nothing else is queued), else
-  the newest plan (v0.2 behavior), then asks Hermes to start the work via `ctx.inject_message`. This works on the CLI, and on the gateway and TUI/Desktop
+- Typed `/planmode approve` approves the submitted revision, else the newest plan (v0.2 behavior), then asks Hermes
+  to start the work via `ctx.inject_message`. Typed while its prompt is still open, approving the prompt continues
+  that turn; a deny or timeout does not cancel the typed approval, and the work starts in the next turn. It never
+  starts twice. This works on the CLI, and on the gateway and TUI/Desktop
   (Hermes main) only with `plugins.entries.plan-mode.allow_gateway_injection: true`; otherwise the next message
   starts it.
 - Core `/plan` now turns on enforced plan mode for the session before the agent's first tool call
