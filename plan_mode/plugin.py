@@ -823,7 +823,7 @@ class PlanModePlugin:
                 "only exposed inherited session identity, so activation cannot be "
                 "bound safely to one session."
             )
-        if action in {"on", "off", "approve", "reject", "submit"}:
+        if action in {"on", "off", "approve", "reject", "submit", "done"}:
             # Every state-mutating command must run in the plugin instance of the
             # session's own profile; status stays read-only and is not gated.
             refused = (
