@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2 - 2026-10-06
+
+- Fix: the TUI/Desktop approval card now shows a one-line prompt ("Plan rev N (file) …approve to start
+  implementing, deny to keep planning"), like the classic CLI panel. The Ink card prints the approval text as its
+  title without a line limit. In a live TUI run, the full plan pushed the approve/deny choices below the visible area
+  of a normal terminal. The full plan is still the agent's reply just above the card, and `/planmode show` still
+  prints it.
+
 ## 0.3.1 - 2026-10-06
 
 - Fix: enabling plan-mode in two profiles of one Hermes install no longer breaks Hermes' dependency sync. The

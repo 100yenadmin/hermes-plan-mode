@@ -332,6 +332,10 @@ def _write_targets(tool_name: str, args: dict[str, Any]) -> list[str] | None:
     return None
 
 
+# Session platforms whose approval prompt is the CLI panel or the TUI/Desktop card, not a chat message.
+_LOCAL_PROMPT_PLATFORMS = frozenset({"", "cli", "terminal", "tui", "desktop", "local"})
+
+
 class PlanModePlugin:
     """State machine and dispatch guard registered by the plugin."""
 
@@ -1151,7 +1155,10 @@ class PlanModePlugin:
         self._ledger.mark_inflight(rule_key, tool_call_id)
         reader = _session_reader()
         platform = reader("HERMES_SESSION_PLATFORM", "") if reader else ""
-        if not platform and identity is not None and str(identity.key or "").startswith("cli:"):
+        if str(platform).strip().lower() in _LOCAL_PROMPT_PLATFORMS:
+            # No gateway platform (or a local one): the classic CLI panel or the TUI/Desktop card. Both show this
+            # text as one prompt line (the TUI prints it as the card's title), so a full plan would push the choices
+            # off-screen; the turn note already put the full plan in the reply above.
             platform = "cli"
         return {"action": "approve", "message": approval_text(text, path, revision, platform, args.get("summary") or ""), "rule_key": rule_key}
 

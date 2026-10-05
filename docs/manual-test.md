@@ -73,9 +73,10 @@ Plan approval (v0.3), on the CLI, the TUI/Desktop and a gateway chat:
     call is blocked in that first turn, and the agent writes
     `<plans-dir>/YYYY-MM-DD_HHMMSS-<slug>.md` with the timestamp from the note.
 21. Confirm the agent shows the full plan in its reply, then Hermes' approval
-    prompt appears with `Plan rev 1`: one line on the CLI, the full plan on
-    TUI/Desktop and text platforms (about 1000 chars on WhatsApp Cloud), a
-    short summary on Telegram, Slack and Discord.
+    prompt appears with `Plan rev 1`: one line on the CLI and TUI/Desktop
+    (with the choices fully visible), the full plan on text platforms (capped
+    at 1000 chars on WhatsApp Cloud, with a note giving the full-plan path),
+    a short summary on Telegram, Slack and Discord.
 22. Deny. Confirm plan mode stays on, the agent asks what to change (or uses
     the gateway `/deny <reason>` text), revises and submits `Plan rev 2`.
 23. Edit the plan file by hand while the prompt is open, then approve. Confirm
