@@ -61,7 +61,7 @@ platform.
 | Surface | Approval prompt | Clarifying questions | Mode footer |
 |---|---|---|---|
 | CLI | approval panel with a one-line summary; the full plan is printed just above it | interactive picker | no |
-| TUI / Desktop | approval card with the full plan text | the app's question prompt | no |
+| TUI / Desktop | approval card with a one-line summary; the full plan is the reply just above it | the app's question prompt | no |
 | Telegram, Slack, Discord | native buttons, short summary (title + up to 6 step titles) | native buttons | yes |
 | Feishu, Teams | native buttons, full plan text | numbered list | yes |
 | Matrix | reactions to approve or deny, full plan text | numbered list | yes |
