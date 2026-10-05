@@ -110,6 +110,8 @@ typed approval the plugin asks Hermes to start the work at once:
 - Gateway and TUI/Desktop on Hermes main: only with `allow_gateway_injection: true` (see Configuration).
 - TUI/Desktop on v2026.9.24: not available.
 
+When you type it while the approval prompt is still open, the waiting agent turn continues with the implementation as soon as that prompt is answered or times out; nothing extra is queued. `/planmode done` before then cancels that continuation.
+
 Otherwise the reply says "Send any message to start", and your next message starts implementation.
 
 **Telegram command menu.** Telegram's bot menu holds 60 entries by default (core commands first, then plugin
