@@ -1005,3 +1005,78 @@ def test_u1_real_gateway_callback_approves(real_submit_host, monkeypatch):
     assert result["approved"] and len(notifications) == 1
     assert notifications[0]["pattern_key"].startswith("plugin_rule:plan-mode:")
     assert host.plugins.get_pre_tool_call_block_message("terminal", {}, session_id="submit-session") is None
+
+
+@pytest.fixture
+def real_u2_host(tmp_path, monkeypatch):
+    plugins = pytest.importorskip("hermes_cli.plugins")
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home, workspace, bundled = tmp_path / "home", tmp_path / "workspace", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    home_token = set_hermes_home_override(str(home))
+    tokens = None
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        manager = plugins.get_plugin_manager()
+        manager.discover_and_load()
+        assert manager._plugins["plan-mode"].enabled
+        command = plugins.get_plugin_command_handler("planmode")
+        assert command is not None
+        tokens = set_session_vars(platform="telegram", source="telegram", session_key="u2-session",
+                                  session_id="u2-session", cwd=str(workspace))
+        yield SimpleNamespace(plugins=plugins, manager=manager, command=command)
+    finally:
+        if tokens is not None:
+            clear_session_vars(tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
+
+
+@pytest.mark.parametrize("prefix", ["", "[Alice] ", '[Replying to: "x"]\n\n'])
+def test_u2_real_core_prompt_enforced(real_u2_host, prefix):
+    prompt_module = pytest.importorskip("agent.plan_prompt")
+    builder = getattr(prompt_module, "build_plan_prompt", None)
+    if not callable(builder):
+        pytest.skip("Hermes lacks build_plan_prompt")
+    host = real_u2_host
+    notes = host.plugins.invoke_hook("pre_llm_call", user_message=prefix + builder("ship it"),
+                                     platform="telegram", session_id="u2-session", is_first_turn=True)
+    assert "Plan mode: on" in host.command("status")
+    assert host.command.__self__._load_state("sk:u2-session")["task"] == "ship it"
+    assert any("This overrides the /plan instruction" in note.get("context", "")
+               for note in notes if isinstance(note, dict))
+    assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="u2-session")
+
+
+def test_u2_real_telegram_menu_rule(real_u2_host):
+    commands = pytest.importorskip("hermes_cli.commands_platforms")
+    requires = getattr(commands, "_requires_argument", None)
+    if not callable(requires):
+        pytest.skip("Hermes lacks the private _requires_argument menu rule")
+    hint = real_u2_host.plugins.get_plugin_commands()["planmode"]["args_hint"]
+    assert hint == "[on|status|show|approve|reject|done|off] [task]"
+    assert requires(hint) is False
+    assert "planmode" in {name for name, _ in commands.telegram_bot_commands()}
+
+
+def test_u2_real_hint_section_accepted(real_u2_host):
+    host = real_u2_host
+    if not callable(getattr(host.plugins.PluginContext, "register_system_prompt_section", None)):
+        pytest.skip("Hermes lacks register_system_prompt_section")
+    accessor = getattr(host.plugins, "render_system_prompt_sections", None)
+    if callable(accessor):
+        sections = accessor({"session_id": "u2-session", "platform": "telegram"})
+        section = next((section for section in sections if section.id == "plan-mode.hint"), None)
+        assert section is not None
+        assert "plan_mode" in section.content and len(section.content) <= 200
+    else:
+        assert host.manager._plugins["plan-mode"].enabled

@@ -30,17 +30,23 @@ class FakeContext:
         self.commands = {}
         self.hooks = {}
         self.tools = {}
+        self.sections = {}
+        self.command_hints = {}
         self.injected = []
         self.inject_result = True
 
     def register_command(self, name, handler, description="", args_hint=""):
         self.commands[name] = handler
+        self.command_hints[name] = args_hint
 
     def register_tool(self, name, toolset, schema, handler, **kwargs):
         self.tools[name] = {"toolset": toolset, "schema": schema, "handler": handler, **kwargs}
 
     def register_hook(self, name, callback):
         self.hooks[name] = callback
+
+    def register_system_prompt_section(self, id, content, **kwargs):
+        self.sections[id] = {"content": content, **kwargs}
 
     def inject_message(self, content, **kwargs):
         self.injected.append((content, kwargs))
@@ -74,6 +80,7 @@ def test_registers_exact_surface(plugin):
         "pre_tool_call",
         "post_tool_call",
         "pre_llm_call",
+        "transform_llm_output",
         "pre_approval_request",
         "post_approval_response",
         "on_session_finalize",
@@ -106,8 +113,8 @@ def test_command_state_machine_and_one_shot_notes(plugin, session_env, tmp_path,
 
     assert "Plan approved" in plugin.command("approve")
     approve_note = plugin.pre_llm_call()
-    assert approve_note == {"context": f"The user approved the plan at {plan}. Implement it now."}
-    assert plugin.pre_llm_call() is None
+    assert approve_note["context"].startswith(f"The user approved the plan at {plan}. Implement it now.\n\nExecuting the approved plan")
+    assert plugin.pre_llm_call()["context"].startswith("Executing the approved plan")
     assert "not on" in plugin.command("approve")
 
     plugin.command("on again")
@@ -1286,12 +1293,12 @@ def test_t7_turn_note_differs_by_provenance(plugin, session_env, tmp_path):
     )
     _tool(plugin, action="on")
     note = plugin.pre_llm_call()["context"]
-    assert "Plan mode is ON." in note and note.endswith(agent_note)
+    assert "Plan mode is ON:" in note and note.endswith(agent_note)
 
     _tool(plugin, action="off")
     plugin.command("on")
     note = plugin.pre_llm_call()["context"]
-    assert "Plan mode is ON." in note and agent_note not in note
+    assert "Plan mode is ON:" in note and agent_note not in note
 
 
 def test_agent_tool_in_ui_turn_is_reachable_by_the_tabs_slash_commands(
@@ -1643,3 +1650,262 @@ def test_u1_ledger_bounded_observer_safe_and_single_use():
     assert ledger.take(key) is None
     ledger.record_response(pattern_key="plugin_rule:" + key, choice="once")
     assert ledger.take(key) is None  # late responses cannot recreate consumed entries
+
+
+# U2: core entry, turn notes and text-first rendering.
+_BUILTIN_PROMPT = (
+    "[/plan — plan mode]\n\nFor this turn, you are in PLAN MODE — planning only."
+    "\n\nTask to plan:\nship it\n\nOffer execution later."
+)
+_OVERRIDE = "This overrides the /plan instruction to offer execution: submit the plan with plan_mode instead."
+_EXECUTION_FIELDS = {"phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress"}
+
+
+@pytest.mark.parametrize("prefix", ["", "[Alice] ", '[Replying to: "x"]\n\n'])
+def test_u2_builtin_plan_enforced_before_first_tool(plugin, session_env, tmp_path, prefix):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    note = plugin.pre_llm_call(user_message=prefix + _BUILTIN_PROMPT)["context"]
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["entered_by"] == "user"
+    assert state["task"] == "ship it"
+    assert "Plan mode is ON:" in note and note.endswith(_OVERRIDE)
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    assert _OVERRIDE not in plugin.pre_llm_call()["context"]
+
+
+@pytest.mark.parametrize("message", ["[/plan — plan mode]", "For this turn, you are in PLAN MODE — planning only."])
+def test_u2_builtin_needs_both_markers(plugin, message):
+    assert plugin.pre_llm_call(user_message=message) is None
+    assert not plugin._load_state("sk:unit-session").get("active")
+
+
+@pytest.mark.parametrize("key", ["plan_mode.enforce_builtin_plan", "enforce_builtin_plan"])
+def test_u2_builtin_can_be_disabled(plugin, key):
+    plugin.ctx.settings[key] = False
+    assert plugin.pre_llm_call(user_message=_BUILTIN_PROMPT) is None
+    assert not plugin._load_state("sk:unit-session").get("active")
+
+
+def test_u2_builtin_keeps_existing_activation_and_submission(plugin, submitted_plan):
+    _submit(plugin)
+    before = plugin._load_state("sk:unit-session")
+    note = plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)["context"]
+    assert plugin._load_state("sk:unit-session") == before
+    assert note.endswith(_OVERRIDE)
+
+
+@pytest.mark.parametrize("task, expected", [("", ""), ("  first\nsecond\n\nignored", "first\nsecond"), ("x" * 600, "x" * 500)])
+def test_u2_builtin_task_extraction(plugin, session_env, tmp_path, task, expected):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    prompt = _BUILTIN_PROMPT.split("Task to plan:")[0]
+    if task:
+        prompt += "Task to plan:\n" + task
+    plugin.pre_llm_call(user_message=prompt)
+    assert plugin._load_state("sk:unit-session")["task"] == expected
+
+
+@pytest.mark.parametrize("refusal", ["profile", "identity"])
+def test_u2_builtin_refusal_injects_nothing(plugin, session_env, tmp_path, monkeypatch, refusal):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    if refusal == "profile":
+        plugin._registration_profile = "profile-a"
+        session_env["HERMES_SESSION_PROFILE"] = "profile-b"
+    else:
+        session_env.clear()
+        monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: True)
+    assert plugin.pre_llm_call(user_message=_BUILTIN_PROMPT) is None
+    assert plugin.ctx.state.values == {}
+
+
+def test_u2_exact_planning_note_and_pending_first(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    plans = tmp_path / ".hermes" / "plans"
+    expected = (
+        f"Plan mode is ON: only read-only tools work, and files may be written only under {plans}.\n"
+        "1. Explore with read-only tools. If a requirement is genuinely ambiguous, ask with the clarify tool (up to 4 short choices, recommended first) instead of guessing.\n"
+        f"2. Write the plan as Markdown at an absolute path under {plans}, named YYYY-MM-DD_HHMMSS-<slug>.md, with numbered steps.\n"
+        '3. Show the complete plan in your reply, then call plan_mode(action="submit") on its own to ask the user to approve it (if plan_mode is not loaded, find it with tool_search "plan_mode"). Approval starts implementation in this same turn.\n'
+        '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'
+        "In group chats, keep secrets and private details out of the plan."
+    )
+    assert plugin.pre_llm_call() == {"context": expected}
+    plugin.command("reject smaller")
+    assert plugin.pre_llm_call() == {"context": "The user rejected the plan: smaller. Revise it.\n\n" + expected}
+    assert plugin.pre_llm_call() == {"context": expected}
+
+
+@pytest.fixture
+def executing_plan(plugin, submitted_plan):
+    directive = _submit(plugin)
+    _decision(plugin, directive)
+    assert _submit_result(plugin)["approved"]
+    return submitted_plan
+
+
+def test_u2_executing_pointer_and_turn_expiry(plugin, executing_plan):
+    expected = f"Executing the approved plan {executing_plan} (rev 1). Keep todo_list statuses current; re-read the plan if your context was compacted."
+    assert plugin.pre_llm_call() == {"context": expected}
+    state = plugin._load_state("sk:unit-session")
+    assert state["executing_turns"] == 1
+    state["executing_turns"] = 99
+    plugin._save_state("sk:unit-session", state)
+    assert plugin.pre_llm_call() == {"context": expected}
+    assert plugin._load_state("sk:unit-session")["executing_turns"] == 100
+    assert plugin.pre_llm_call() is None
+    assert not _EXECUTION_FIELDS & plugin._load_state("sk:unit-session").keys()
+
+
+def test_u2_executing_pointer_without_revision(plugin, submitted_plan):
+    plugin.command("approve")
+    note = plugin.pre_llm_call()["context"]
+    assert f"Executing the approved plan {submitted_plan}." in note and "(rev" not in note
+
+
+@pytest.mark.parametrize("tool", ["todo_list", "todo"])
+def test_u2_todo_progress_and_completion(plugin, executing_plan, tool):
+    todos = [{"content": "x" * 70, "status": "in_progress"}, {"status": "completed"}, {"status": "cancelled"}]
+    result = {"todos": todos, "revision": 2, "summary": {"total": 3, "completed": 1, "cancelled": 1}}
+    plugin.post_tool_call(tool, status="ok", result=json.dumps(result))
+    assert plugin._load_state("sk:unit-session")["progress"] == {"total": 3, "completed": 1, "cancelled": 1, "current": "x" * 60}
+    todos[0]["status"] = "completed"
+    result["summary"]["completed"] = 2
+    plugin.post_tool_call(tool, status="ok", result=json.dumps(result))
+    state = plugin._load_state("sk:unit-session")
+    assert not _EXECUTION_FIELDS & state.keys()
+    assert state["submission"]["status"] == "approved"
+    assert plugin.pre_llm_call() is None
+
+
+@pytest.mark.parametrize("result", ["bad json", "[]", "null", '{"todos": 42}', '{"summary": {"total": "bad"}}'])
+def test_u2_malformed_todo_ignored(plugin, executing_plan, result):
+    before = _snapshot(plugin)
+    plugin.post_tool_call("todo_list", status="ok", result=result)
+    assert _snapshot(plugin) == before
+
+
+def test_u2_todo_empty_failed_and_planning_do_not_end_execution(plugin, executing_plan):
+    plugin.post_tool_call("todo_list", status="ok", result=json.dumps({"todos": [], "summary": {"total": 0}}))
+    assert plugin._load_state("sk:unit-session")["phase"] == "executing"
+    before = _snapshot(plugin)
+    plugin.post_tool_call("todo_list", status="error", result='{"todos": [{"status": "completed"}]}')
+    assert _snapshot(plugin) == before
+    plugin.command("on")
+    before = _snapshot(plugin)
+    plugin.post_tool_call("todo_list", status="ok", result='{"todos": [{"status": "completed"}]}')
+    assert _snapshot(plugin) == before
+
+
+@pytest.mark.parametrize("action", ["done", "off", "on", "reset"])
+def test_u2_execution_cleanup(plugin, executing_plan, action):
+    state = plugin._load_state("sk:unit-session")
+    state.update(executing_turns=7, progress={"total": 2})
+    plugin._save_state("sk:unit-session", state)
+    if action == "reset":
+        plugin.on_session_reset()
+    else:
+        plugin.command(action)
+    assert not _EXECUTION_FIELDS & plugin._load_state("sk:unit-session").keys()
+
+
+def test_u2_done_has_no_approval_effect(plugin, submitted_plan):
+    _submit(plugin)
+    before = _snapshot(plugin)
+    assert "executing" in plugin.command("done").lower()
+    assert _snapshot(plugin) == before
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+
+def test_u2_hint_and_command_hint_registered(plugin):
+    section = plugin.ctx.sections["plan-mode.hint"]
+    assert section["position"] == "after_memory"
+    assert section["content"] == 'For multi-step or risky changes you can enter enforced plan mode with the plan_mode tool (action "on"; find it with tool_search) and submit a plan for the user\'s approval before building.'
+    assert len(section["content"]) <= 200
+    assert plugin.ctx.command_hints["planmode"] == "[on|status|show|approve|reject|done|off] [task]"
+
+
+@pytest.mark.parametrize("key", ["agent_hint", "plan_mode.agent_hint"])
+def test_u2_hint_opt_out(session_env, key):
+    ctx = FakeContext()
+    ctx.settings[key] = False
+    PlanModePlugin(ctx).register()
+    assert ctx.sections == {} and "plan_mode" in ctx.tools
+
+
+@pytest.mark.parametrize("capability", ["missing", "raises"])
+def test_u2_hint_registration_fail_open(session_env, capability):
+    ctx = FakeContext()
+    ctx.register_system_prompt_section = None if capability == "missing" else _raise_loader
+    PlanModePlugin(ctx).register()
+    assert "plan_mode" in ctx.tools and "transform_llm_output" in ctx.hooks
+
+
+def test_u2_show_default_explicit_and_read_only(plugin, submitted_plan, session_env):
+    assert plugin.command("show").endswith(submitted_plan.read_text())
+    _submit(plugin)
+    newer = submitted_plan.with_name("newer.md")
+    plugin.pre_tool_call("write_file", {"path": str(newer)})
+    newer.write_text("# Newer")
+    before = _snapshot(plugin)
+    assert plugin.command("show").startswith(f"Plan: {submitted_plan} (rev 1, pending)\n\n")
+    for argument in (submitted_plan.name, str(submitted_plan)):
+        assert plugin.command("show " + argument).endswith(submitted_plan.read_text())
+    assert plugin.command("show newer.md").endswith("# Newer")
+    session_env["HERMES_SESSION_PROFILE"] = "different-profile"
+    assert plugin.command("show").endswith(submitted_plan.read_text())
+    assert _snapshot(plugin) == before
+
+
+def test_u2_show_no_plan_foreign_and_truncation(plugin, session_env, tmp_path):
+    assert "no" in plugin.command("show").lower() and "plan" in plugin.command("show").lower()
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    path = tmp_path / ".hermes" / "plans" / "large.md"
+    plugin.pre_tool_call("write_file", {"path": str(path)})
+    path.write_text("# Plan\n" + "x" * 4000)
+    reply = plugin.command("show")
+    assert len(reply) <= 3500 and reply.endswith(f"… (truncated; full plan at {path})")
+    session_env["HERMES_SESSION_KEY"] = "other-session"
+    plugin.command("on")
+    assert "not written by this session" in plugin.command("show " + str(path))
+
+
+@pytest.mark.parametrize("platform", ["telegram", "TELEGRAM", "slack", "discord", "mattermost"])
+def test_u2_planning_footer(plugin, submitted_plan, platform):
+    assert plugin.transform_llm_output(response_text="Plan draft  ", platform=platform) == "Plan draft\n\n⏸ Plan mode: nothing changes until you approve the plan."
+
+
+@pytest.mark.parametrize("platform", ["", "cli", "terminal", "tui", "desktop", "dashboard", "api_server", "webhook", "acp", "local", "batch", "cron"])
+def test_u2_local_surfaces_no_footer(plugin, submitted_plan, platform):
+    assert plugin.transform_llm_output(response_text="Draft", platform=platform) is None
+
+
+def test_u2_footer_limits_opt_out_and_unresolved(plugin, submitted_plan, session_env, monkeypatch):
+    assert plugin.transform_llm_output(response_text="x" * 3001, platform="telegram") is None
+    assert plugin.transform_llm_output(response_text="x" * 3000, platform="telegram") is not None
+    for key in ("footer", "plan_mode.footer"):
+        plugin.ctx.settings[key] = "off"
+        assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
+        plugin.ctx.settings.clear()
+    session_env["HERMES_SESSION_KEY"] = "other-session"
+    assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
+    monkeypatch.setattr(plugin, "_load_state", _raise_loader)
+    assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
+
+
+def test_u2_executing_footer_progress(plugin, executing_plan):
+    assert plugin.transform_llm_output(response_text="Working", platform="telegram") == "Working\n\nExecuting approved plan rev 1"
+    state = plugin._load_state("sk:unit-session")
+    state.pop("approved_revision")
+    plugin._save_state("sk:unit-session", state)
+    assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Executing approved plan")
+    plugin.post_tool_call("todo_list", status="ok", result=json.dumps({"todos": [
+        {"status": "completed"}, {"status": "cancelled"}, {"status": "in_progress", "content": "Build"}]}))
+    assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Plan progress 2/3 · now: Build")
+    plugin.post_tool_call("todo", status="ok", result=json.dumps({"todos": [{"status": "pending"}]}))
+    assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Plan progress 0/1")
+
+
+@pytest.mark.parametrize("ending", ["⏸ Plan mode: already shown", "Plan progress 1/2", "Executing approved plan rev 1"])
+def test_u2_footer_never_double_appends(plugin, submitted_plan, ending):
+    assert plugin.transform_llm_output(response_text="Draft\n\n" + ending + "  \n", platform="telegram") is None

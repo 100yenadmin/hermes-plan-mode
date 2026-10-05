@@ -22,6 +22,10 @@ from typing import Any, Callable
 import uuid
 
 from .approval import DecisionLedger, approval_text, is_human_approval, make_rule_key, plan_digest
+from .render import (
+    AGENT_HINT, BUILTIN_OVERRIDE, LOCAL_PLATFORMS, executing_pointer,
+    plan_text, planning_note, response_footer, todo_progress,
+)
 
 READ_ONLY_TOOLS = frozenset(
     {
@@ -348,7 +352,7 @@ class PlanModePlugin:
             "planmode",
             self.command,
             "Enforce plan-only tool access for this session",
-            args_hint="on|status|approve|reject|off [task]",
+            args_hint="[on|status|show|approve|reject|done|off] [task]",
         )
         self.ctx.register_tool(
             name=PLAN_MODE_TOOL,
@@ -360,10 +364,17 @@ class PlanModePlugin:
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
+        self.ctx.register_hook("transform_llm_output", self.transform_llm_output)
         self.ctx.register_hook("pre_approval_request", self._ledger.record_presented)
         self.ctx.register_hook("post_approval_response", self._ledger.record_response)
         self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
         self.ctx.register_hook("on_session_reset", self.on_session_reset)
+        try:
+            register_section = getattr(self.ctx, "register_system_prompt_section", None)
+            if self._config("agent_hint", True) is not False and callable(register_section):
+                register_section("plan-mode.hint", AGENT_HINT, position="after_memory", max_chars=200)
+        except Exception:
+            pass  # A cosmetic discovery hint must not prevent enforcement registration.
 
     def _load_state(self, key: str) -> dict[str, Any]:
         return self._load_storage_state(_state_storage_key(key))
@@ -863,6 +874,34 @@ class PlanModePlugin:
             if action == "status":
                 return self._status_text(state, self._plan_files(state))
 
+            if action == "show":
+                files = self._plan_files(state)
+                submission = state.get("submission") or {}
+                path = (os.path.realpath(remainder if os.path.isabs(remainder) else
+                        os.path.join(str(state.get("plans_dir") or ""), remainder))
+                        if remainder else submission.get("path") or (files[-1] if files else ""))
+                if not path:
+                    return "This session has no tracked plan to show."
+                if path not in files:
+                    return "Plan display was refused: the requested file was not written by this session."
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as stream:
+                        text = stream.read(3501)
+                except OSError:
+                    return "The tracked plan file could not be read."
+                matched = submission.get("path") == path
+                revision = submission.get("revision", 0) if matched else state.get("revision", 0)
+                status = submission.get("status", "planning") if matched else (
+                    "planning" if state.get("active") else state.get("phase") or "off")
+                return plan_text(path, text, revision, status)
+
+            if action == "done":
+                if state.get("phase") != "executing":
+                    return "There is no executing plan to finish."
+                self._clear_execution(state)
+                self._save_command_state(identity.key, command_storage_key, state)
+                return "The executing plan is done."
+
             if action == "submit" and entered_by == "agent":
                 return self._complete_submission(identity.key, command_storage_key, state)
 
@@ -967,12 +1006,21 @@ class PlanModePlugin:
                     state.pop(field, None)
                 state["pending_note"] = ""
                 self._forget_submission(state)
-                for field in ("submission", "phase", "approved_path", "approved_revision", "approved_at"):
-                    state.pop(field, None)
+                state.pop("submission", None)
+                self._clear_execution(state)
                 self._save_command_state(identity.key, command_storage_key, state)
                 return "Plan mode is off for this session. No approval note will be injected."
 
-        return "Usage: /planmode on [task] | status | approve | reject [feedback] | off"
+        return "Usage: /planmode on [task] | status | show [file] | approve [file] | reject [feedback] | done | off"
+
+    @staticmethod
+    def _clear_execution(state: dict[str, Any]) -> None:
+        for field in ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress"):
+            state.pop(field, None)
+
+    def _config(self, name: str, default: Any) -> Any:
+        value = self.ctx.get_config(f"plan_mode.{name}", None)
+        return self.ctx.get_config(name, default) if value is None else value
 
     def _extra_allowed_tools(self) -> set[str]:
         value = self.ctx.get_config("plan_mode.extra_allowed_tools", None)
@@ -1104,6 +1152,20 @@ class PlanModePlugin:
         try:
             call_id = str(kwargs.get("tool_call_id") or "")
             with self._lock:
+                if tool_name in {"todo_list", "todo"} and kwargs.get("status") == "ok":
+                    identity = derive_session_identity(str(kwargs.get("platform") or ""))
+                    if not identity.key or identity.unsupported or identity.non_cli_without_key:
+                        return
+                    state_key, state = self._state_for_hook(identity)
+                    if state.get("phase") == "executing":
+                        progress = todo_progress(kwargs.get("result"))
+                        if progress is not None:
+                            state["progress"] = progress
+                            if progress["total"] > 0 and progress["completed"] + progress["cancelled"] == progress["total"]:
+                                self._clear_execution(state)
+                            assert state_key is not None
+                            self._save_state(state_key, state)
+                    return
                 call_args = args if isinstance(args, dict) else {}
                 if tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit":
                     identity = derive_session_identity(str(kwargs.get("platform") or ""))
@@ -1172,6 +1234,19 @@ class PlanModePlugin:
 
             with self._lock:
                 state_key, state = self._state_for_hook(identity)
+                message = kwargs.get("user_message")
+                builtin = (self._config("enforce_builtin_plan", True) is not False
+                           and isinstance(message, str) and "[/plan — plan mode]" in message
+                           and "For this turn, you are in PLAN MODE — planning only." in message)
+                # User-authored markers can only restrict the user's own session;
+                # the model cannot author user_message to activate this path.
+                if builtin and not state.get("active"):
+                    task = message.partition("Task to plan:")[2]
+                    task = re.split(r"\n\s*\n", task.lstrip("\r\n"), maxsplit=1)[0].strip()[:500]
+                    self._run_command("on", task, entered_by="user")
+                    state_key, state = self._state_for_hook(identity)
+                    if not state.get("active"):
+                        return None  # Refusal text is never injected into a turn.
                 parts: list[str] = []
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():
@@ -1183,14 +1258,20 @@ class PlanModePlugin:
                     assert state_key is not None
                     self._active_keys.add(state_key)
                     self._remember_session_id(state_key, state, kwargs.get("session_id"))
-                    plans_dir = state.get("plans_dir")
-                    parts.append(
-                        "Plan mode is ON. Explore with the allowed read-only tools and write only "
-                        f"plan Markdown files using absolute paths under {plans_dir}. Name each plan "
-                        "YYYY-MM-DD_HHMMSS-<slug>.md. Do not implement or call blocked tools; ask "
-                        "the user to approve with /planmode approve when the plan is ready."
-                        + (f" {_AGENT_NOTE}" if self._agent_owned(state) else "")
-                    )
+                    note = planning_note(state.get("plans_dir"))
+                    if self._agent_owned(state):
+                        note += f" {_AGENT_NOTE}"
+                    if builtin:
+                        note += f" {BUILTIN_OVERRIDE}"
+                    parts.append(note)
+                elif state.get("phase") == "executing":
+                    state["executing_turns"] = int(state.get("executing_turns") or 0) + 1
+                    if state["executing_turns"] > 100:
+                        self._clear_execution(state)
+                    else:
+                        parts.append(executing_pointer(state))
+                    assert state_key is not None
+                    self._save_state(state_key, state)
                 return {"context": "\n\n".join(parts)} if parts else None
         except Exception as exc:
             return {
@@ -1199,6 +1280,21 @@ class PlanModePlugin:
                     f"({type(exc).__name__}); tool calls will fail closed."
                 )
             }
+
+    def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
+        try:
+            platform = str(kwargs.get("platform") or "").strip().lower()
+            if (self._config("footer", "auto") == "off" or not platform
+                    or platform in LOCAL_PLATFORMS or len(response_text) > 3000):
+                return None
+            identity = derive_session_identity(platform)
+            if identity.unsupported or identity.non_cli_without_key or not identity.key:
+                return None
+            with self._lock:
+                _, state = self._state_for_hook(identity)
+                return response_footer(response_text, state)
+        except Exception:
+            return None  # Cosmetic output transforms fail open.
 
     def on_session_reset(self, **kwargs: Any) -> None:
         identity = derive_session_identity(str(kwargs.get("platform") or ""))
