@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from types import ModuleType
 
@@ -29,6 +30,8 @@ class FakeContext:
         self.commands = {}
         self.hooks = {}
         self.tools = {}
+        self.injected = []
+        self.inject_result = True
 
     def register_command(self, name, handler, description="", args_hint=""):
         self.commands[name] = handler
@@ -38,6 +41,10 @@ class FakeContext:
 
     def register_hook(self, name, callback):
         self.hooks[name] = callback
+
+    def inject_message(self, content, **kwargs):
+        self.injected.append((content, kwargs))
+        return self.inject_result
 
     def get_config(self, key, default=None):
         return self.settings.get(key, default)
@@ -67,6 +74,8 @@ def test_registers_exact_surface(plugin):
         "pre_tool_call",
         "post_tool_call",
         "pre_llm_call",
+        "pre_approval_request",
+        "post_approval_response",
         "on_session_finalize",
         "on_session_reset",
     }
@@ -1221,7 +1230,7 @@ def test_t3_agent_tool_off_cannot_end_user_plan_mode(
 def test_t4_agent_tool_cannot_approve_or_reject(plugin, session_env, tmp_path, action):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     schema = plugin.ctx.tools["plan_mode"]["schema"]
-    assert schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off"]
+    assert schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off", "submit"]
     _tool(plugin, action="on")
     plan = tmp_path / ".hermes" / "plans" / "2026-09-26_120000-plan.md"
     assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "#"}) is None
@@ -1338,3 +1347,299 @@ def test_user_approve_clears_agent_provenance(plugin, session_env, tmp_path):
         "Plan mode was entered by the user; only /planmode approve, reject or off can end it."
     )
     assert plugin._load_state("sk:unit-session")["active"] is True
+
+
+# U1: submit uses a recorded human decision, never an automatic tool allowance.
+@pytest.fixture
+def submitted_plan(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    assert "Plan mode is on" in plugin.command("on approval proof")
+    path = tmp_path / ".hermes" / "plans" / "plan.md"
+    args = {"path": str(path), "content": "# Approval plan\n\n## Inspect\n## Implement\n## Verify\n"}
+    ids = {"session_id": "s1", "tool_call_id": "write-plan"}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    path.write_text(args["content"], encoding="utf-8")
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    return path
+
+
+def _submit(plugin, call_id="submit-1", **args):
+    directive = plugin.pre_tool_call(
+        "plan_mode", {"action": "submit", **args}, session_id="s1", tool_call_id=call_id)
+    assert directive and directive["action"] == "approve"
+    return directive
+
+
+def _decision(plugin, directive, choice="once", **kwargs):
+    plugin.ctx.hooks["post_approval_response"](
+        pattern_key="plugin_rule:" + directive["rule_key"], choice=choice,
+        tool_call_id=kwargs.pop("tool_call_id", "submit-1"), **kwargs)
+
+
+def _submit_result(plugin):
+    return json.loads(plugin.tool({"action": "submit"}, tool_call_id="submit-1", session_id="s1"))
+
+
+def test_u1_schema_and_search_description(plugin):
+    tool = plugin.ctx.tools["plan_mode"]
+    props = tool["schema"]["parameters"]["properties"]
+    assert props["action"]["enum"] == ["on", "status", "off", "submit"]
+    assert {"path", "summary"} <= props.keys()
+    description = tool["description"]
+    assert len(description) < 900
+    assert "submit" in description[:500] and "ALONE" in description[:500]
+    assert "user" in description[:500] and "off" in description[:500]
+
+
+def test_u1_submit_rule_key_unique_and_revision_monotonic(plugin, submitted_plan):
+    first = _submit(plugin, path=submitted_plan.name, summary="Approval proof")
+    assert re.fullmatch(r"plan-mode:[a-z0-9]{8}:1:[a-f0-9]{8}:[a-f0-9]{8}", first["rule_key"])
+    assert plugin._load_state("sk:unit-session")["submission"]["path"] == str(submitted_plan)
+    assert "awaiting approval (rev 1)" in plugin.command("status")
+    _submit_result(plugin)  # no human: consume and permit resubmission
+    second = _submit(plugin, call_id="submit-2")
+    assert second["rule_key"] != first["rule_key"]
+    assert plugin._load_state("sk:unit-session")["revision"] == 2
+
+
+@pytest.mark.parametrize("platform", ["telegram", "SLACK", "discord"])
+def test_u1_compact_approval_text(platform, tmp_path):
+    from plan_mode.approval import approval_text
+    text = "# **Ship it**\n\n1. **Inspect**\n   - nested detail\n2. `Implement`\n## Verify\n" + "## Long step " + "x" * 400
+    result = approval_text(text, tmp_path / "plan.md", 3, platform)
+    assert len(result) <= 250
+    assert result.startswith("Plan rev 3: Ship it")
+    assert "1. Inspect\n2. Implement\n3. Verify" in result
+    assert "nested detail" not in result
+    assert result.endswith("…")
+    assert not any(marker in result for marker in "#*`")
+    titled = approval_text(text, tmp_path / "plan.md", 3, platform, "  My\n title  ")
+    assert titled.startswith("Plan rev 3: My title")
+    fallback = approval_text("first line\nsecond line", tmp_path / "plan.md", 1, platform)
+    assert "Plan rev 1: plan.md\n1. first line\n2. second line" == fallback
+
+
+def test_u1_full_approval_text_and_truncation(tmp_path):
+    from plan_mode.approval import approval_text
+    path = tmp_path / "plan.md"
+    text = "# Plan\n\nWhole detailed plan"
+    for platform in ("", "cli", "tui", "desktop", "mattermost"):
+        assert approval_text(text, path, 4, platform).endswith("\n\n" + text)
+    result = approval_text("x" * 4000, path, 4, "cli")
+    assert len(result) <= 3500
+    assert result.endswith(f"\n… (truncated; full plan: {path})")
+
+
+def test_u1_digest_cap_decode_and_rule_sanitization(tmp_path):
+    from plan_mode.approval import make_rule_key, plan_digest
+    path = tmp_path / "plan.md"
+    path.write_bytes(b"a\xff")
+    digest, text = plan_digest(path)
+    assert len(digest) == 64 and text == "a\ufffd"
+    assert re.fullmatch(r"[a-z0-9:-]+", make_rule_key("A-*?[", 1, digest))
+    path.write_bytes(b"x" * (1024 * 1024))
+    assert len(plan_digest(path)[1]) == 1024 * 1024
+    path.write_bytes(b"x" * (1024 * 1024 + 1))
+    with pytest.raises(ValueError):
+        plan_digest(path)
+
+
+@pytest.mark.parametrize("choice", ["once", "session", "always"])
+def test_u1_human_approval_turns_off_in_same_call(plugin, submitted_plan, choice):
+    directive = _submit(plugin)
+    plugin.ctx.hooks["pre_approval_request"](pattern_key="plugin_rule:" + directive["rule_key"])
+    _decision(plugin, directive, choice)
+    result = _submit_result(plugin)
+    assert result["approved"] is True and result["revision"] == 1
+    assert result["path"] == str(submitted_plan) and "todo_list" in result["message"]
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] is False and state["phase"] == "executing"
+    assert state["approved_revision"] == 1 and state["approved_at"]
+    assert state["pending_note"] == "" and state["submission"]["status"] == "approved"
+    assert not {"activation_id", "entered_by", "agent_activation_id"} & state.keys()
+    assert plugin.pre_tool_call("terminal", {}) is None
+    assert "executing (rev 1:" in plugin.command("status")
+    assert "nothing awaiting approval" in _submit_result(plugin)["message"].lower()
+    assert plugin._ledger.take(directive["rule_key"]) is None
+
+
+@pytest.mark.parametrize("decision", ["cancelled", "mismatch", "unrelated", "none"])
+def test_u1_only_correlated_human_decision_approves(plugin, submitted_plan, decision):
+    directive = _submit(plugin)
+    if decision == "cancelled":
+        _decision(plugin, directive, cancelled="turn ended")
+    elif decision == "mismatch":
+        _decision(plugin, directive, tool_call_id="another-call")
+    elif decision == "unrelated":
+        plugin.ctx.hooks["post_approval_response"](pattern_key="plugin_rule:other", choice="once")
+    result = _submit_result(plugin)
+    assert "No human approval was recorded" in result["message"]
+    assert "approvals.mode: off" in result["message"]
+    assert plugin._load_state("sk:unit-session")["submission"]["status"] == "awaiting"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    assert plugin._ledger.take(directive["rule_key"]) is None
+
+
+def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submitted_plan):
+    _submit(plugin)
+    assert "No human approval" in _submit_result(plugin)["message"]
+    newer = submitted_plan.with_name("newer.md")
+    plugin.pre_tool_call("write_file", {"path": str(newer)})
+    newer.write_text("# Newer", encoding="utf-8")
+    reply = plugin.command("approve")
+    assert str(submitted_plan) in reply and str(newer) not in reply
+    assert reply.endswith("Starting implementation now.")
+    assert plugin.ctx.injected == [(f"Implement the approved plan at {submitted_plan}.", {"session_key": "unit-session"})]
+    assert plugin._load_state("sk:unit-session")["approved_revision"] == 1
+
+
+@pytest.mark.parametrize("inject_kind", ["false", "missing", "raises", "cli"])
+def test_u1_typed_approval_injection_fallback(plugin, session_env, submitted_plan, inject_kind):
+    if inject_kind == "false":
+        plugin.ctx.inject_result = False
+    elif inject_kind == "missing":
+        plugin.ctx.inject_message = None
+    elif inject_kind == "raises":
+        plugin.ctx.inject_message = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("unavailable"))
+    else:
+        session_env["HERMES_SESSION_KEY"] = ""
+        state = plugin._load_state("sk:unit-session")
+        plugin._save_state(f"cli:{os.getpid()}", state)
+    reply = plugin.command("approve")
+    assert reply.endswith("Starting implementation now." if inject_kind == "cli" else "Send any message to start.")
+    if inject_kind == "cli":
+        assert plugin.ctx.injected == [(f"Implement the approved plan at {submitted_plan}.", {})]
+
+
+def test_u1_edited_plan_is_stale_even_after_human_approval(plugin, submitted_plan):
+    directive = _submit(plugin)
+    _decision(plugin, directive)
+    submitted_plan.write_text("# Edited plan", encoding="utf-8")
+    assert "changed after rev 1 was submitted" in _submit_result(plugin)["message"]
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "stale"
+
+
+@pytest.mark.parametrize("choice", ["deny", "timeout", "cancelled", "notify_failed", None])
+def test_u1_blocked_submit_note_once_and_typed_fallback(plugin, submitted_plan, choice):
+    directive = _submit(plugin)
+    if choice is not None:
+        _decision(plugin, directive, choice)
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"]
+    expected_status = "rejected" if choice == "deny" else "awaiting"
+    assert state["submission"]["status"] == expected_status
+    assert f"Last submission: rev 1 {expected_status}" in plugin.command("status")
+    expected = (
+        "The user did not approve plan rev 1. A plan denial is review feedback, not a safety refusal: "
+        "if no reason was given, ask what to change; then revise the plan file and submit a complete new revision."
+        if choice == "deny" else
+        "Plan rev 1 was not answered (the approval prompt timed out or was withdrawn). "
+        "Tell the user they can run /planmode approve to approve rev 1, or reply with changes."
+    )
+    assert expected in plugin.pre_llm_call()["context"]
+    assert expected not in plugin.pre_llm_call()["context"]
+    assert plugin._ledger.take(directive["rule_key"]) is None
+    if choice != "deny":
+        assert "Plan approved" in plugin.command("approve")
+
+
+def test_u1_typed_approval_refuses_changed_submission_but_explicit_file_works(plugin, submitted_plan):
+    _submit(plugin)
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", status="blocked")
+    submitted_plan.write_text("# Changed", encoding="utf-8")
+    reply = plugin.command("approve")
+    assert "Plan rev 1 changed after it was submitted" in reply
+    assert plugin._load_state("sk:unit-session")["active"]
+    assert "Plan approved" in plugin.command(f"approve {submitted_plan.name}")
+
+
+def test_u1_second_inflight_submit_blocks_but_restart_allows(plugin, submitted_plan):
+    from plan_mode.approval import DecisionLedger
+    first = _submit(plugin)
+    block = plugin.pre_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-2")
+    assert block["action"] == "block" and "already open" in block["message"]
+    # A blocked duplicate must not consume the original prompt's decision.
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-2", status="blocked")
+    assert plugin._ledger.is_inflight(first["rule_key"])
+    plugin._ledger = DecisionLedger()
+    second = _submit(plugin, call_id="submit-2")
+    assert first["rule_key"] != second["rule_key"]
+    assert plugin._load_state("sk:unit-session")["revision"] == 2
+
+
+@pytest.mark.parametrize("scenario", ["off", "missing-key", "unsupported", "untracked", "oversized"])
+def test_u1_submit_fail_closed_with_reason(plugin, session_env, submitted_plan, tmp_path, monkeypatch, scenario):
+    args = {"action": "submit"}
+    if scenario == "off":
+        plugin.command("off")
+    elif scenario == "missing-key":
+        session_env.update(HERMES_SESSION_KEY="", HERMES_SESSION_PLATFORM="telegram")
+    elif scenario == "unsupported":
+        monkeypatch.setattr(plugin_mod, "_session_reader", lambda: None)
+    elif scenario == "untracked":
+        other = tmp_path / "untracked.md"
+        other.write_text("# Plan", encoding="utf-8")
+        args["path"] = str(other)
+    else:
+        submitted_plan.write_bytes(b"x" * (1024 * 1024 + 1))
+    block = plugin.pre_tool_call("plan_mode", args, tool_call_id="submit-1")
+    assert block and block["action"] == "block" and block["message"]
+
+
+def test_u1_on_off_clear_submission_keep_revision_and_reject_marks(plugin, submitted_plan):
+    _submit(plugin)
+    plugin.command("reject smaller")
+    assert plugin._load_state("sk:unit-session")["submission"]["status"] == "rejected"
+    plugin.command("off")
+    state = plugin._load_state("sk:unit-session")
+    assert "submission" not in state and "phase" not in state
+    plugin.command("on")
+    assert "submission" not in plugin._load_state("sk:unit-session")
+    _submit(plugin)
+    assert plugin._load_state("sk:unit-session")["revision"] == 2
+    plugin._ledger.take(plugin._load_state("sk:unit-session")["submission"]["rule_key"])
+    assert "Plan approved" in plugin.command("approve")  # restart-style pending without inflight
+    plugin.command("on")
+    state = plugin._load_state("sk:unit-session")
+    assert not {"submission", "phase", "approved_path", "approved_revision", "approved_at"} & state.keys()
+    _submit(plugin)
+    assert plugin._load_state("sk:unit-session")["revision"] == 3
+
+
+@pytest.mark.parametrize("event", ["reset", "finalize"])
+def test_u1_session_cleanup_discards_submission_and_ledger(plugin, session_env, submitted_plan, event):
+    state = plugin._load_state("sk:unit-session")
+    session_env["HERMES_SESSION_KEY"] = ""
+    plugin._save_state(f"cli:{os.getpid()}", state)
+    directive = _submit(plugin)
+    if event == "reset":
+        plugin.on_session_reset(platform="cli")
+    else:
+        plugin.on_session_finalize(platform="cli")
+    assert plugin._load_state(f"cli:{os.getpid()}") == {}
+    assert plugin._ledger.take(directive["rule_key"]) is None
+
+
+def test_u1_ledger_bounded_observer_safe_and_single_use():
+    from plan_mode.approval import DecisionLedger, is_human_approval
+    ledger = DecisionLedger()
+    for index in range(257):
+        ledger.mark_inflight(f"plan-mode:{index}", "call")
+    assert ledger.take("plan-mode:0") is None
+    key = "plan-mode:256"
+    ledger.record_presented(pattern_key="plugin_rule:" + key)
+    ledger.record_response(pattern_key="unrelated", choice="once")
+    assert ledger.is_inflight(key)
+    for bad in (None, [], 42):
+        ledger.record_response(pattern_key=bad, choice="once")
+        ledger.record_presented(pattern_key=bad)
+    ledger.record_response(pattern_key="plugin_rule:" + key, choice="once", tool_call_id="call")
+    entry = ledger.take(key)
+    assert entry["presented"] and is_human_approval(entry, "call")
+    assert not is_human_approval(entry, "other")
+    assert is_human_approval(entry, None)
+    assert ledger.take(key) is None
+    ledger.record_response(pattern_key="plugin_rule:" + key, choice="once")
+    assert ledger.take(key) is None  # late responses cannot recreate consumed entries

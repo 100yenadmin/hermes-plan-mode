@@ -21,6 +21,7 @@ import threading
 from typing import Any, Callable
 import uuid
 
+from .approval import DecisionLedger, approval_text, is_human_approval, make_rule_key, plan_digest
 
 READ_ONLY_TOOLS = frozenset(
     {
@@ -44,11 +45,12 @@ READ_ONLY_TOOLS = frozenset(
 PLAN_WRITERS = frozenset({"write_file", "patch"})
 PLAN_MODE_TOOL = "plan_mode"
 _TOOL_DESCRIPTION = (
-    "Enter plan mode for this session when the user asks you to write or draft a plan "
-    "before doing the work: while it is on, file writes are allowed only under the "
-    "session's plans directory and every other mutating tool is blocked. action='status' "
-    "reports the state. action='off' ends ONLY a plan mode you entered yourself; a plan "
-    "mode the user entered ends only with /planmode approve|reject|off."
+    "Enter plan mode with action='on'. When the plan file is written and shown to the user, "
+    "call action='submit' ALONE (not batched with other tool calls) to ask for approval. "
+    "Approval or denial is the user's act. action='off' ends only an agent-entered plan mode. "
+    "While on, writes are allowed only under the session's plans directory; other mutating "
+    "tools are blocked. action='status' reports state. submit defaults to the newest tracked "
+    "plan; path selects a plan and summary gives the approval prompt a title."
 )
 _TOOL_SCHEMA = {
     "name": PLAN_MODE_TOOL,
@@ -56,8 +58,10 @@ _TOOL_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["on", "status", "off"]},
+            "action": {"type": "string", "enum": ["on", "status", "off", "submit"]},
             "reason": {"type": "string", "description": "What the plan is for."},
+            "path": {"type": "string", "description": "Absolute path or file name of a plan written in this plan mode; default: the newest one"},
+            "summary": {"type": "string", "description": "Optional one-line title for the approval prompt"},
         },
         "required": ["action"],
     },
@@ -316,6 +320,7 @@ class PlanModePlugin:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
         self._lock = threading.RLock()
+        self._ledger = DecisionLedger()
         self._active_keys: set[str] = set()
         # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
@@ -355,6 +360,8 @@ class PlanModePlugin:
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
+        self.ctx.register_hook("pre_approval_request", self._ledger.record_presented)
+        self.ctx.register_hook("post_approval_response", self._ledger.record_response)
         self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
         self.ctx.register_hook("on_session_reset", self.on_session_reset)
 
@@ -661,9 +668,17 @@ class PlanModePlugin:
         entered = state.get("entered_at") or "not set"
         plans_dir = state.get("plans_dir") or "not set"
         rendered = "\n".join(f"- {path}" for path in files) or "- none"
+        submission = state.get("submission") or {}
+        if state.get("phase") == "executing":
+            phase = f"executing (rev {state.get('approved_revision') or '?'}: {state.get('approved_path')})"
+        elif state.get("active") and submission.get("status") in {"pending", "awaiting"}:
+            phase = f"awaiting approval (rev {submission['revision']})"
+        else:
+            phase = "planning" if state.get("active") else "off"
+        last = f"\nLast submission: rev {submission['revision']} {submission['status']}" if submission else ""
         return (
             f"Plan mode: {mode}\nEntered at: {entered}\n"
-            f"Plans directory: {plans_dir}\nPlan files:\n{rendered}"
+            f"Phase: {phase}{last}\nPlans directory: {plans_dir}\nPlan files:\n{rendered}"
         )
 
     @staticmethod
@@ -678,25 +693,63 @@ class PlanModePlugin:
         )
 
     def tool(self, args: Any = None, **kwargs: Any) -> str:
-        """Agent-callable ``plan_mode``: on, status or off; approval stays the user's act."""
+        """Agent-callable plan mode, including completion of a human-approved submission."""
         call_args = args if isinstance(args, dict) else {}
         action = str(call_args.get("action") or "").strip().lower()
-        if action in {"on", "status", "off"}:
+        if action in {"on", "status", "off", "submit"}:
             reason = str(call_args.get("reason") or "").strip()
             message = self._run_command(action, reason, entered_by="agent")
         else:
             message = (
-                "Unsupported plan_mode action: use on, status or off. Approving or "
+                "Unsupported plan_mode action: use on, status, off or submit. Approving or "
                 "rejecting a plan is the user's act (/planmode approve or /planmode reject)."
             )
-        return json.dumps({"message": message}, ensure_ascii=False)
+        return json.dumps(message if isinstance(message, dict) else {"message": message}, ensure_ascii=False)
+
+    def _forget_submission(self, state: dict[str, Any]) -> None:
+        submission = state.get("submission")
+        if isinstance(submission, dict):
+            self._ledger.take(submission.get("rule_key"))
+
+    def _complete_submission(self, raw_key: str, storage_key: str, state: dict[str, Any]) -> dict:
+        submission = state.get("submission")
+        if not state.get("active") or not submission or submission.get("status") != "pending":
+            return {"message": "There is nothing awaiting approval."}
+        entry = self._ledger.take(submission["rule_key"])
+        revision, path = submission["revision"], submission["path"]
+        if is_human_approval(entry, submission.get("tool_call_id")):
+            try:
+                unchanged = plan_digest(path)[0] == submission["digest"]
+            except (OSError, ValueError):
+                unchanged = False
+            if unchanged:
+                state["active"] = False
+                for field in ("activation_id", "entered_by", "agent_activation_id"):
+                    state.pop(field, None)
+                state.update(phase="executing", approved_path=path,
+                             approved_revision=revision, approved_at=_utc_now(), pending_note="")
+                submission["status"] = "approved"
+                self._save_command_state(raw_key, storage_key, state)
+                return {"message": f"The user approved plan rev {revision} at {path}. Plan mode is off. "
+                        "Implement it now: mirror the plan's steps into todo_list and keep their statuses current as you work.",
+                        "approved": True, "path": path, "revision": revision}
+            submission["status"] = "stale"
+            message = f"The plan file changed after rev {revision} was submitted; show the updated plan and submit again."
+        else:
+            submission["status"] = "awaiting"
+            message = (f"No human approval was recorded for plan rev {revision}: this host approved the call "
+                       "automatically (yolo or approvals.mode: off) or does not route plugin approvals. "
+                       "Plan mode stays on. Show the plan and ask the user to run /planmode approve "
+                       "(or /planmode reject <feedback>).")
+        self._save_command_state(raw_key, storage_key, state)
+        return {"message": message}
 
     def command(self, raw_args: str) -> str:
         raw = str(raw_args or "").strip()
         action, _, remainder = raw.partition(" ")
         return self._run_command(action.lower() or "status", remainder.strip())
 
-    def _run_command(self, action: str, remainder: str, entered_by: str = "user") -> str:
+    def _run_command(self, action: str, remainder: str, entered_by: str = "user") -> str | dict:
         """Resolve identity like the slash command, then apply one plan-mode action."""
         identity, error = self._identity_or_reply()
         if error:
@@ -713,7 +766,7 @@ class PlanModePlugin:
                 "only exposed inherited session identity, so activation cannot be "
                 "bound safely to one session."
             )
-        if action in {"on", "off", "approve", "reject"}:
+        if action in {"on", "off", "approve", "reject", "submit"}:
             # Every state-mutating command must run in the plugin instance of the
             # session's own profile; status stays read-only and is not gated.
             refused = (
@@ -767,6 +820,7 @@ class PlanModePlugin:
                     plans_dir = self._fixed_plans_dir()
                 except (OSError, ValueError) as exc:
                     return f"Plan mode activation was refused: {exc}."
+                self._forget_submission(state)
                 preserved = {
                     key: state[key]
                     for key in (
@@ -787,6 +841,7 @@ class PlanModePlugin:
                     "owner_pid": os.getpid(),
                     "activation_id": uuid.uuid4().hex,
                     "entered_by": entered_by,
+                    "revision": int(state.get("revision") or 0),
                     **preserved,
                 }
                 if entered_by == "agent":
@@ -808,10 +863,26 @@ class PlanModePlugin:
             if action == "status":
                 return self._status_text(state, self._plan_files(state))
 
+            if action == "submit" and entered_by == "agent":
+                return self._complete_submission(identity.key, command_storage_key, state)
+
             if action == "approve":
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 files = self._plan_files(state)
+                submission = state.get("submission") or {}
+                pinned = not remainder and (
+                    submission.get("status") == "awaiting" or (
+                        submission.get("status") == "pending"
+                        and not self._ledger.is_inflight(submission.get("rule_key"))))
+                if pinned:
+                    try:
+                        unchanged = plan_digest(submission["path"])[0] == submission["digest"]
+                    except (OSError, ValueError):
+                        unchanged = False
+                    if not unchanged:
+                        return (f"Plan rev {submission['revision']} changed after it was submitted. "
+                                "Review it with /planmode status, then approve a file explicitly or ask the agent to resubmit.")
                 if not files:
                     return (
                         "Plan approval was refused: this session has no tracked plan file. "
@@ -829,6 +900,10 @@ class PlanModePlugin:
                             "by this session."
                         )
                     approved_path = candidate
+                elif pinned:
+                    approved_path = submission["path"]
+                    if approved_path not in files:
+                        return "Plan approval was refused: the submitted file is not a tracked plan file."
                 else:
                     approved_path = files[-1]
                 state["active"] = False
@@ -837,14 +912,39 @@ class PlanModePlugin:
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
                 )
+                state.update(phase="executing", approved_path=approved_path, approved_at=_utc_now())
+                state.pop("approved_revision", None)
+                if submission.get("path") == approved_path:
+                    try:
+                        if plan_digest(approved_path)[0] == submission["digest"]:
+                            submission["status"] = "approved"
+                            state["approved_revision"] = submission["revision"]
+                    except (OSError, ValueError):
+                        pass
+                self._forget_submission(state)
                 self._save_command_state(identity.key, command_storage_key, state)
-                return f"Plan approved. Plan mode is off. Next turn will implement {approved_path}."
+                started = False
+                try:
+                    inject = getattr(self.ctx, "inject_message", None)
+                    if callable(inject):
+                        reader = _session_reader()
+                        session_key = reader("HERMES_SESSION_KEY", "") if reader else None
+                        content = f"Implement the approved plan at {approved_path}."
+                        started = inject(content, session_key=session_key) if session_key else inject(content)
+                except Exception:
+                    pass
+                ending = "Starting implementation now." if started else "Send any message to start."
+                return f"Plan approved. Plan mode is off. Next turn will implement {approved_path}. {ending}"
 
             if action == "reject":
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 feedback = remainder or "No additional feedback was provided."
                 state["pending_note"] = f"The user rejected the plan: {feedback}. Revise it."
+                submission = state.get("submission") or {}
+                if submission.get("status") in {"pending", "awaiting"}:
+                    submission["status"] = "rejected"
+                    self._forget_submission(state)
                 # Once the user weighs in, approve/reject governs: the agent can no longer end it.
                 state["entered_by"] = "user"
                 state.pop("agent_activation_id", None)
@@ -866,6 +966,9 @@ class PlanModePlugin:
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
                 state["pending_note"] = ""
+                self._forget_submission(state)
+                for field in ("submission", "phase", "approved_path", "approved_revision", "approved_at"):
+                    state.pop(field, None)
                 self._save_command_state(identity.key, command_storage_key, state)
                 return "Plan mode is off for this session. No approval note will be injected."
 
@@ -879,17 +982,53 @@ class PlanModePlugin:
             return set()
         return {item.strip() for item in value if isinstance(item, str) and item.strip()}
 
+    def _prepare_submission(self, state_key: str, state: dict[str, Any], args: dict, tool_call_id: str) -> dict:
+        submission = state.get("submission") or {}
+        if submission.get("status") == "pending" and self._ledger.is_inflight(submission.get("rule_key")):
+            return _block_message(PLAN_MODE_TOOL, "A plan approval prompt is already open; wait for the user's answer.")
+        files = self._plan_files(state)
+        requested = args.get("path")
+        if requested:
+            if not isinstance(requested, str) or (not os.path.isabs(requested) and Path(requested).name != requested):
+                return _block_message(PLAN_MODE_TOOL, "This is not a plan written in this plan mode.")
+            path = os.path.realpath(requested if os.path.isabs(requested) else os.path.join(state["plans_dir"], requested))
+        else:
+            path = files[-1] if files else ""
+        if path not in files:
+            return _block_message(PLAN_MODE_TOOL, f"Write the plan under {state['plans_dir']} first; this is not a plan written in this plan mode.")
+        try:
+            digest, text = plan_digest(path)
+        except ValueError as exc:
+            return _block_message(PLAN_MODE_TOOL, str(exc))
+        revision = int(state.get("revision") or 0) + 1
+        rule_key = make_rule_key(state["activation_id"], revision, digest)
+        self._forget_submission(state)
+        state["revision"] = revision
+        state["submission"] = {
+            "revision": revision, "digest": digest, "path": path, "rule_key": rule_key,
+            "tool_call_id": tool_call_id or None, "status": "pending", "submitted_at": _utc_now(),
+        }
+        self._save_state(state_key, state)
+        self._ledger.mark_inflight(rule_key, tool_call_id)
+        reader = _session_reader()
+        platform = reader("HERMES_SESSION_PLATFORM", "") if reader else ""
+        return {"action": "approve", "message": approval_text(text, path, revision, platform, args.get("summary") or ""), "rule_key": rule_key}
+
     def pre_tool_call(
         self, tool_name: str = "", args: Any = None, **kwargs: Any
     ) -> dict[str, str] | None:
         """Enforce the plan-mode allowlist, failing closed on internal errors."""
         try:
+            call_args = args if isinstance(args, dict) else {}
+            is_submit = tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit"
             with self._lock:
                 self._prune_dead_cli_states()
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
             if identity.unsupported:
-                return None
+                return _block_message(PLAN_MODE_TOOL, "Cannot submit: session identity is unavailable on this host.") if is_submit else None
             if identity.non_cli_without_key or not identity.key:
+                if is_submit:
+                    return _block_message(PLAN_MODE_TOOL, "Cannot submit: the session key could not be derived.")
                 if _cron_session_is_active():
                     return None
                 with self._lock:
@@ -907,10 +1046,12 @@ class PlanModePlugin:
                 state_key, state = self._state_for_hook(identity)
                 if not state.get("active"):
                     self._active_keys.discard(identity.key)
-                    return None
+                    return _block_message(PLAN_MODE_TOOL, "Cannot submit: plan mode is not active for this session.") if is_submit else None
                 assert state_key is not None
                 self._active_keys.add(state_key)
                 self._remember_session_id(state_key, state, kwargs.get("session_id"))
+                if is_submit:
+                    return self._prepare_submission(state_key, state, call_args, str(kwargs.get("tool_call_id") or ""))
 
                 name = str(tool_name or "")
                 call_args = args if isinstance(args, dict) else {}
@@ -963,6 +1104,31 @@ class PlanModePlugin:
         try:
             call_id = str(kwargs.get("tool_call_id") or "")
             with self._lock:
+                call_args = args if isinstance(args, dict) else {}
+                if tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit":
+                    identity = derive_session_identity(str(kwargs.get("platform") or ""))
+                    if not identity.key or identity.unsupported or identity.non_cli_without_key:
+                        return
+                    state_key, state = self._state_for_hook(identity)
+                    submission = state.get("submission") or {}
+                    if not submission or str(submission.get("tool_call_id") or "") != call_id:
+                        return
+                    entry = self._ledger.take(submission["rule_key"])
+                    if kwargs.get("status") != "ok" and submission.get("status") == "pending":
+                        revision = submission["revision"]
+                        if entry and entry.get("choice") == "deny":
+                            submission["status"] = "rejected"
+                            state["pending_note"] = (
+                                f"The user did not approve plan rev {revision}. A plan denial is review feedback, not a safety refusal: "
+                                "if no reason was given, ask what to change; then revise the plan file and submit a complete new revision.")
+                        else:
+                            submission["status"] = "awaiting"
+                            state["pending_note"] = (
+                                f"Plan rev {revision} was not answered (the approval prompt timed out or was withdrawn). "
+                                f"Tell the user they can run /planmode approve to approve rev {revision}, or reply with changes.")
+                        assert state_key is not None
+                        self._save_state(state_key, state)
+                    return
                 pending = self._pending_plan_writes.pop(
                     (str(kwargs.get("session_id") or ""), call_id), None
                 )
@@ -1043,6 +1209,7 @@ class PlanModePlugin:
             if platform in {"cli", "terminal"}:
                 cli_key = f"cli:{os.getpid()}"
                 cli_storage = _state_storage_key(cli_key)
+                self._forget_submission(self._load_storage_state(cli_storage))
                 self._clear_state_family(
                     cli_storage, self._load_storage_state(cli_storage)
                 )
@@ -1056,6 +1223,7 @@ class PlanModePlugin:
                 else:
                     storage_key = _state_storage_key(identity.key)
                     state = self._load_storage_state(storage_key)
+                self._forget_submission(state)
                 self._clear_state_family(storage_key, state)
                 return
 
@@ -1082,6 +1250,7 @@ class PlanModePlugin:
                         matches[family_key] = state
             if len(matches) == 1:
                 storage_key, state = next(iter(matches.items()))
+                self._forget_submission(state)
                 self._clear_state_family(storage_key, state)
 
     def on_session_finalize(self, **kwargs: Any) -> None:
@@ -1092,4 +1261,5 @@ class PlanModePlugin:
         platform = str(kwargs.get("platform") or "").strip().lower()
         if identity.key == cli_key or platform in {"cli", "terminal"}:
             with self._lock:
+                self._forget_submission(self._load_state(cli_key))
                 self._clear_storage_key(_state_storage_key(cli_key))

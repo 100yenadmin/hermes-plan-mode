@@ -10,5 +10,7 @@ provides_hooks:
   - pre_tool_call
   - post_tool_call
   - pre_llm_call
+  - pre_approval_request
+  - post_approval_response
   - on_session_finalize
   - on_session_reset
