@@ -248,7 +248,8 @@ plugins:
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
   linked tab has plan mode on; retry from the owning tab after one turn there. If a TUI session key rotates, or the
   session is reopened in a new tab, while a plan executes, `/planmode done` may not reach that tab and the execution
-  pointer can stay until the todos finish or 100 turns pass.
+  pointer can stay until the todos finish or 100 turns pass
+  ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
 - **No autonomy choice at approval** (Hermes has no per-mode edit-accept setting) and **no
   clear-context-and-implement** (not reachable from a plugin).
 - **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs
@@ -264,7 +265,8 @@ plugins:
 - **Telegram, Slack and Discord approval text** is a short summary; the full plan comes from the agent's reply or
   `/planmode show`.
 - **Duplicate submits on hosts without tool call ids.** Hermes builds that pass no `tool_call_id` to hooks cannot
-  tell a blocked duplicate submit from the open one; every supported build passes it.
+  tell a blocked duplicate submit from the open one; every supported build passes it
+  ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
 
 ## Compatibility
 
