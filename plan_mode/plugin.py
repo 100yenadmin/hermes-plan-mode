@@ -1151,7 +1151,10 @@ class PlanModePlugin:
         self._ledger.mark_inflight(rule_key, tool_call_id)
         reader = _session_reader()
         platform = reader("HERMES_SESSION_PLATFORM", "") if reader else ""
-        if not platform and identity is not None and str(identity.key or "").startswith("cli:"):
+        if not platform:
+            # No gateway platform: the classic CLI panel or the TUI/Desktop card. Both show this text as one prompt
+            # line (the TUI prints it as the card's title), so a full plan would push the choices off-screen; the
+            # turn note already put the full plan in the reply above.
             platform = "cli"
         return {"action": "approve", "message": approval_text(text, path, revision, platform, args.get("summary") or ""), "rule_key": rule_key}
 

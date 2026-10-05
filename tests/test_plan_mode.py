@@ -2269,3 +2269,19 @@ def test_r3_nonempty_off_copy_is_not_resurrected_with_new_pending_note(plugin, s
     session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
     plugin.pre_llm_call(session_id="new-sid-a")
     assert plugin._load_state("sk:old-a").get("phase") is None
+
+
+# Live TUI check (0.3.2): the Ink card prints the approval text as its title with no line cap, so a full plan pushed
+# the choices off-screen. Surfaces without a gateway platform (CLI, TUI, Desktop) get the one-line prompt.
+def test_v032_tui_submission_uses_one_line_card_text(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tui_env(session_env, True)
+    plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)
+    path = tmp_path / ".hermes" / "plans" / "p.md"
+    args = {"path": str(path), "content": "# Big plan\n" + "\n".join(f"{i}. step {i}" for i in range(1, 80))}
+    ids = {"session_id": "s1", "tool_call_id": "w1"}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    path.write_text(args["content"], encoding="utf-8")
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    message = _submit(plugin)["message"]
+    assert "\n" not in message and len(message) < 400 and "Plan rev 1" in message
