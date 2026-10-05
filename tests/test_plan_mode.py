@@ -1854,7 +1854,7 @@ def test_u2_show_default_explicit_and_read_only(plugin, submitted_plan, session_
         assert plugin.command("show " + argument).endswith(submitted_plan.read_text())
     assert plugin.command("show newer.md").endswith("# Newer")
     session_env["HERMES_SESSION_PROFILE"] = "different-profile"
-    assert plugin.command("show").endswith(submitted_plan.read_text())
+    assert "refused" in plugin.command("show")  # show prints plan contents, so it is profile-gated
     assert _snapshot(plugin) == before
 
 

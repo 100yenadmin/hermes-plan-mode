@@ -243,7 +243,7 @@ plugins:
 - **Plan-root race.** The plugin revalidates `.hermes` and `.hermes/plans` before each plan write, but does not own
   Hermes' eventual file open. Do not let other processes change the plan root during plan mode.
 - **TUI profile scope.** If the TUI resolves the command in a different profile than the session, the plugin refuses
-  `on`, `off`, `approve` and `reject`. Two live sessions sharing one session key in one TUI backend cannot be told
+  `on`, `off`, `approve`, `reject`, `done` and `show`. Two live sessions sharing one session key in one TUI backend cannot be told
   apart; keep session keys unique per profile.
 - **Session-key edge cases.** With `compression.in_place: false`, `/planmode on` then `/compress` before any agent
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
@@ -324,7 +324,7 @@ Each is reached through a lazy, guarded import or a guarded attribute read.
 4. `agent.runtime_cwd.resolve_agent_cwd`: the turn's workspace. Missing → an absolute `TERMINAL_CWD`, or the classic
    CLI process cwd.
 5. `hermes_cli.profiles.get_active_profile_name`: the registration profile. Missing → bound sessions refuse every
-   state-changing command.
+   state-changing command and `show`.
 6. `agent.skill_preprocessing.load_skills_config`: whether `skill_view` would run inline shell. Missing or odd →
    `skill_view` blocked.
 7. `ctx._manager.home_path`: the Hermes home the plugin registered from. Missing → bound sessions refuse every
