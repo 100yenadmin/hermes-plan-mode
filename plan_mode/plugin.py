@@ -79,6 +79,10 @@ _AGENT_NOTE = (
     "plan_mode(action='off') before submitting. Once you submit a plan, only the user can end plan mode."
 )
 _ACTIVE_INDEX_KEY = "active-index"
+_TODO_HINT = (
+    "mirror the plan's steps into todo_list, called as todo_list(todos=[{\"id\": \"1\", \"content\": \"...\", "
+    "\"status\": \"in_progress\"}, ...]), and update the statuses with merge=true as you work."
+)
 
 _V4A_FILE_RE = re.compile(
     r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+)$", re.MULTILINE
@@ -734,8 +738,7 @@ class PlanModePlugin:
             state["pending_note"] = ""
             self._save_command_state(raw_key, storage_key, state)
             return {"message": f"The user approved plan rev {submission['revision']} at {submission['path']} with "
-                    "/planmode approve. Plan mode is off. Implement it now: mirror the plan's steps into todo_list "
-                    "and keep their statuses current as you work.",
+                    f"/planmode approve. Plan mode is off. Implement it now: {_TODO_HINT}",
                     "approved": True, "path": submission["path"], "revision": submission["revision"]}
         if opened:
             self._save_command_state(raw_key, storage_key, state)
@@ -757,7 +760,7 @@ class PlanModePlugin:
                 submission["status"] = "approved"
                 self._save_command_state(raw_key, storage_key, state)
                 return {"message": f"The user approved plan rev {revision} at {path}. Plan mode is off. "
-                        "Implement it now: mirror the plan's steps into todo_list and keep their statuses current as you work.",
+                        f"Implement it now: {_TODO_HINT}",
                         "approved": True, "path": path, "revision": revision}
             submission["status"] = "stale"
             message = f"The plan file changed after rev {revision} was submitted; show the updated plan and submit again."
