@@ -41,7 +41,7 @@
   the tab's command and hook copies stay in step, except after a session-key rotation or a reopen in a new tab.
 - A ≤200-char system-prompt hint names `plan_mode` for multi-step or risky changes (`plan_mode.agent_hint`, default
   true; skipped where the host has no prompt-section API).
-- Add `/planmode show [file]` (read-only, ≤3500 chars) and `/planmode done`. `/planmode status` reports the phase
+- Add `/planmode show [file]` (read-only, ≤3500 chars, gated to the session's own profile) and `/planmode done`. `/planmode status` reports the phase
   and the last submission.
 - A one-line footer on chat platforms: "⏸ Plan mode: nothing changes until you approve the plan." while planning,
   "Plan progress n/m · now: <step>" while executing (`plan_mode.footer: auto|off`). Never on CLI, TUI, Desktop (also
