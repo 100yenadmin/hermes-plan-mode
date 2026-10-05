@@ -24,7 +24,7 @@ import uuid
 from .approval import DecisionLedger, approval_text, is_human_approval, make_rule_key, plan_digest
 from .render import (
     AGENT_HINT, BUILTIN_OVERRIDE, LOCAL_PLATFORMS, executing_pointer,
-    plan_text, planning_note, response_footer, todo_progress,
+    plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
 READ_ONLY_TOOLS = frozenset(
@@ -40,6 +40,10 @@ READ_ONLY_TOOLS = frozenset(
         "session_search",
         "skills_list",
         "todo_list",
+        # Tool Search meta-tools only list and describe deferred tools; tool_call is not listed
+        # because Hermes unwraps it and runs this hook on the inner tool.
+        "tool_describe",
+        "tool_search",
         "video_analyze",
         "vision_analyze",
         "web_extract",
@@ -866,7 +870,7 @@ class PlanModePlugin:
                 return (
                     f"Plan mode is on for this session.{task_text}\n"
                     f"Write plans only to absolute paths under {plans_dir}.\n"
-                    "Use YYYY-MM-DD_HHMMSS-<slug>.md. Read-only planning tools are allowed; "
+                    f"Use {plan_file_stamp()}-<slug>.md. Read-only planning tools are allowed; "
                     "terminal, code execution, delegation, connectors/MCP, messaging, browser "
                     "mutations, and unknown tools are blocked until /planmode approve."
                 )

@@ -29,17 +29,25 @@ jobs:
         include:
           - name: v2026.9.14
             ref: v2026.9.14
+            python: "3.11"
           - name: v2026.9.21
             ref: v2026.9.21
+            python: "3.11"
           - name: v2026.9.24
             ref: v2026.9.24
-          - name: main-38c289c
-            ref: 38c289c0146ed8c8b2b767eca1fff6f5b7e6382e
+            python: "3.11"
+          # Hermes main declares its runtime dependencies for Python >= 3.14 only (older
+          # interpreters get them from Hermes' lazy installer), so main is tested on 3.14.
+          - name: main-7157422022
+            ref: 7157422022ff06f3e632d1dd394ee1253b17ad37
+            python: "3.14"
+    env:
+      HERMES_DISABLE_LAZY_INSTALLS: "1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - name: Install Hermes ${{ matrix.name }} and tests
         env:
           HERMES_REF: ${{ matrix.ref }}
@@ -48,7 +56,9 @@ jobs:
           git clone --filter=blob:none https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent"
           git -C "$RUNNER_TEMP/hermes-agent" checkout --detach "$HERMES_REF"
           python -m pip install -e "$RUNNER_TEMP/hermes-agent"
-      - run: pytest -q
+      - name: Real Hermes modules import (the real-host tests must not skip silently)
+        run: python -c "import hermes_cli.plugins, model_tools, gateway.run, tools.approval; print('hermes importable')"
+      - run: pytest -q -rs
       - run: hermes plugins validate .
       - run: hermes plugins doctor . --ci
       - run: hermes plugins compat .

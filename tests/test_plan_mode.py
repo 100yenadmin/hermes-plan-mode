@@ -1717,14 +1717,16 @@ def test_u2_builtin_refusal_injects_nothing(plugin, session_env, tmp_path, monke
     assert plugin.ctx.state.values == {}
 
 
-def test_u2_exact_planning_note_and_pending_first(plugin, session_env, tmp_path):
+def test_u2_exact_planning_note_and_pending_first(plugin, session_env, tmp_path, monkeypatch):
+    from plan_mode import render as render_mod
+    monkeypatch.setattr(render_mod, "plan_file_stamp", lambda now=None: "2026-10-05_120000")
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
     plans = tmp_path / ".hermes" / "plans"
     expected = (
         f"Plan mode is ON: only read-only tools work, and files may be written only under {plans}.\n"
         "1. Explore with read-only tools. If a requirement is genuinely ambiguous, ask with the clarify tool (up to 4 short choices, recommended first) instead of guessing.\n"
-        f"2. Write the plan as Markdown at an absolute path under {plans}, named YYYY-MM-DD_HHMMSS-<slug>.md, with numbered steps.\n"
+        f"2. Write the plan as Markdown to {plans}/2026-10-05_120000-<slug>.md (that timestamp is current; do not look up the time), with numbered steps.\n"
         '3. Show the complete plan in your reply, then call plan_mode(action="submit") on its own to ask the user to approve it (if plan_mode is not loaded, find it with tool_search "plan_mode"). Approval starts implementation in this same turn.\n'
         '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'
         "In group chats, keep secrets and private details out of the plan."
@@ -1909,3 +1911,18 @@ def test_u2_executing_footer_progress(plugin, executing_plan):
 @pytest.mark.parametrize("ending", ["⏸ Plan mode: already shown", "Plan progress 1/2", "Executing approved plan rev 1"])
 def test_u2_footer_never_double_appends(plugin, submitted_plan, ending):
     assert plugin.transform_llm_output(response_text="Draft\n\n" + ending + "  \n", platform="telegram") is None
+
+
+def test_tool_search_meta_tools_are_allowed_but_tool_call_is_not_listed(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    assert plugin.pre_tool_call("tool_search", {"query": "plan_mode"}) is None
+    assert plugin.pre_tool_call("tool_describe", {"name": "plan_mode"}) is None
+    assert "tool_call" not in plugin_mod.READ_ONLY_TOOLS
+    assert plugin.pre_tool_call("tool_call", {"name": "terminal", "arguments": {}})["action"] == "block"
+
+
+def test_plan_file_stamp_format():
+    from datetime import datetime
+    from plan_mode.render import plan_file_stamp
+    assert plan_file_stamp(datetime(2026, 1, 2, 3, 4, 5)) == "2026-01-02_030405"

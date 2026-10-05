@@ -1,6 +1,7 @@
 """Pure turn-note and text-first reply helpers; no Hermes dependencies."""
 from __future__ import annotations
 
+from datetime import datetime
 import json
 
 
@@ -17,11 +18,17 @@ LOCAL_PLATFORMS = frozenset({
 })
 
 
-def planning_note(plans_dir) -> str:
+def plan_file_stamp(now=None) -> str:
+    """Local timestamp for plan file names; the model cannot read the clock while terminal is blocked."""
+    return (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
+
+
+def planning_note(plans_dir, now=None) -> str:
+    stamp = plan_file_stamp(now)
     return (
         f"Plan mode is ON: only read-only tools work, and files may be written only under {plans_dir}.\n"
         "1. Explore with read-only tools. If a requirement is genuinely ambiguous, ask with the clarify tool (up to 4 short choices, recommended first) instead of guessing.\n"
-        f"2. Write the plan as Markdown at an absolute path under {plans_dir}, named YYYY-MM-DD_HHMMSS-<slug>.md, with numbered steps.\n"
+        f"2. Write the plan as Markdown to {plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time), with numbered steps.\n"
         '3. Show the complete plan in your reply, then call plan_mode(action="submit") on its own to ask the user to approve it (if plan_mode is not loaded, find it with tool_search "plan_mode"). Approval starts implementation in this same turn.\n'
         '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'
         "In group chats, keep secrets and private details out of the plan."
