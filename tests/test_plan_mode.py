@@ -2034,3 +2034,10 @@ def test_u1_classic_cli_submit_uses_one_line_prompt(plugin, session_env, tmp_pat
     directive = plugin.pre_tool_call("plan_mode", {"action": "submit"}, tool_call_id="c1")
     assert directive["action"] == "approve" and "\n" not in directive["message"]
     assert "CLI plan" in directive["message"]
+
+
+def test_u1_title_drops_a_leading_plan_label(tmp_path):
+    from plan_mode.approval import approval_text
+    result = approval_text("# Plan: Add power\n\n1. Do it\n", str(tmp_path / "p.md"), 1, "cli")
+    assert result.startswith("Plan rev 1 (p.md): Add power.")
+    assert approval_text("# Plan: Add power\n", str(tmp_path / "p.md"), 1, "telegram").startswith("Plan rev 1: Add power")

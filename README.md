@@ -1,90 +1,116 @@
 # Hermes Plan Mode
 
-`plan-mode` adds an enforced, per-session planning mode to Hermes. Unlike
-Hermes' built-in prompt-only `/plan`, this plugin uses the `pre_tool_call`
-policy hook to block mutating Hermes tools dispatched through `pre_tool_call`
-until the user approves the plan. Tools that bypass `pre_tool_call` are not
-covered; see [Known limitations](#known-limitations).
+![Hermes Plan Mode](docs/media/banner.png)
 
-## Supported surfaces
+Claude Code / Codex-style plan mode for Hermes, on every channel, with no core changes. The agent explores with
+read-only tools, asks clarifying questions, writes a plan file and shows it to you. You approve it with Hermes' own
+approval prompt: buttons, a card, the CLI panel or `/approve`. Then the agent implements it in the same turn and
+tracks progress. Until you approve, the plugin blocks mutating tools dispatched through Hermes' `pre_tool_call`
+hook, except writes to the plan file.
 
-- **Classic CLI:** enforced on released Hermes (≤ 0.21.4, tag `v2026.9.21`)
-  and on newer builds.
-- **Messaging gateway (Telegram etc.), TUI, and Desktop:** enforced on Hermes
-  `v2026.9.24` (0.21.5), the first release with NousResearch/hermes-agent
-  commits `5943347a2a` (gateway plugin-command session binding) and
-  `35fdb4608a` (TUI/Desktop). Earlier builds refuse `/planmode on` on these
-  surfaces instead of pretending plan mode is active.
+`/plan` in core Hermes is a prompt only. This plugin turns it into an enforced mode.
+
+## How it works
+
+1. Start planning with `/plan <task>` or `/planmode on [task]`. The agent can also enter on its own with the
+   `plan_mode` tool.
+2. The agent explores with read-only tools. When a requirement is ambiguous it asks with `clarify` (up to 4 short
+   choices, recommended first).
+3. It writes the plan as Markdown under `<cwd>/.hermes/plans`.
+4. It shows the complete plan in its reply, then calls `plan_mode(action="submit")`.
+5. Hermes shows its normal approval prompt for plan revision N: buttons, a card, the CLI panel, or `/approve` text.
+6. Approve: plan mode turns off and the agent implements the plan in the same turn, mirroring the steps into
+   `todo_list`.
+7. Deny: plan mode stays on. The plugin tells the agent that a denial is review feedback, so it asks what to change
+   (when no reason came with the denial), revises the plan and submits a complete new revision.
+
+```text
+  /plan <task>  ─┐
+  /planmode on  ─┼─► PLANNING ── read-only tools, clarify, write the plan file
+  agent: on     ─┘        │
+                          │  agent shows the plan, calls plan_mode(submit)
+                          ▼
+                 Hermes approval prompt (rev N)
+                   │                       │
+           approve │                       │ deny ─► revise ─► submit rev N+1
+                   ▼                       │ timeout ─► /planmode approve (typed)
+        EXECUTING in the same turn         ▼
+        todo_list progress            still PLANNING
+                   │
+   all todos done, /planmode done or off ─► OFF
+```
+
+A real run on the Hermes CLI (`/plan Add a power(a, b) function to calc.py with tests.`):
+
+![The CLI approval panel for plan rev 1, under the end of the plan the agent just showed](docs/media/cli-approval.png)
+
+After **Deny**, the agent asks what to change instead of giving up (excerpt):
+
+![After a denial the agent asks what to change, with four suggested answers](docs/media/cli-deny-clarify.png)
+
+After **Allow once** on rev 2, it implements in the same turn and keeps `todo_list` current (excerpt):
+
+![The approved plan runs with three todo items ticked off and a final summary](docs/media/cli-approve-implement.png)
+
+## What you see on each channel
+
+The plugin has no per-platform code. It uses the approval and `clarify` UIs each Hermes surface already has.
+
+| Surface | Approval prompt | Clarifying questions | Mode footer |
+|---|---|---|---|
+| CLI | approval panel with a one-line summary; the full plan is printed just above it | interactive picker | no |
+| TUI / Desktop | approval card with the full plan text | the app's question prompt | no |
+| Telegram, Slack, Discord | native buttons, short summary (title + up to 6 step titles) | native buttons | yes |
+| Matrix, Feishu, Teams, WhatsApp Cloud | native buttons, full plan text | numbered list (buttons on WhatsApp Cloud) | yes |
+| Mattermost, Google Chat, Signal and other platforms | `/approve` or `/deny <reason>` text, full plan text | buttons where the platform has them, else a numbered list | yes |
+
+- On Telegram, Slack and Discord the approval card has a small text budget (Discord 300 chars, Telegram and Slack
+  500), so the prompt carries a ≤250-char summary. The full plan is the agent's reply sent just before it.
+- Mattermost and several other platforms (for example Signal, WhatsApp Cloud and SMS) do not send the agent's in-progress text
+  before the approval prompt by default. On those, and everywhere without a budget, the approval text carries the
+  full plan, capped at about 3500 chars with a pointer to the file.
+- The full plan is always available with `/planmode show`.
+
+## Install
+
+```bash
+hermes plugins install 100yenadmin/hermes-plan-mode --ref <v0.3.0 commit sha> --enable
+hermes gateway restart        # only if you run the messaging gateway
+```
+
+`--ref` takes the exact 40-character commit SHA of a release (see the release notes), not a tag. Without
+`--enable`, run `hermes plugins enable plan-mode`. Restart running CLI, TUI and Desktop sessions so they load the
+plugin.
 
 ## Commands
 
-- `/planmode on [task]` fixes an absolute plan directory for this session and
-  enables enforcement.
-- `/planmode status` reports the mode, entry time, fixed directory, and plan
-  Markdown files written there.
-- `/planmode approve [file]` turns enforcement off and injects a one-shot
-  instruction on the next turn: `The user approved the plan at <path>.
-  Implement it now.` Without a file it selects the newest plan write allowed
-  for this session; an explicit file must also belong to this session. With
-  no tracked plan file, approval is refused. A plan write becomes approvable
-  only when `post_tool_call` reports status `ok` for the same `tool_call_id`;
-  a host that passes no `tool_call_id` (Hermes before 0.21.1) keeps the 0.1.6
-  behaviour and tracks the target when `pre_tool_call` allows it.
-- `/planmode reject [feedback]` keeps enforcement on and injects the feedback
-  once on the next turn.
-- `/planmode off` turns enforcement off without an approval instruction.
+| Command | What it does |
+|---|---|
+| `/plan <task>` | Core Hermes plan prompt. With this plugin it also turns on enforced plan mode for the session (CLI, gateway, TUI and Desktop all send core's prompt). |
+| `/planmode on [task]` | Fixes an absolute plans directory for this session and turns enforcement on. |
+| `/planmode status` | Mode, phase (`planning`, `awaiting approval (rev N)`, `executing (rev N: <path>)`, `off`), the plans directory, plan files and the last submission. |
+| `/planmode show [file]` | Prints the plan (the submitted one, else the newest) capped at 3500 chars. Read-only. |
+| `/planmode approve [file]` | Typed approval. Approves the submitted revision if one is waiting for an answer, else the newest plan file. |
+| `/planmode reject [feedback]` | Keeps plan mode on and gives the feedback to the agent on its next turn. |
+| `/planmode done` | Ends the executing phase (stops the progress pointer and footer). No approval effect. |
+| `/planmode off` | Turns plan mode off without approving anything. |
 
-Plans use this convention:
+Plan files use `<cwd>/.hermes/plans/YYYY-MM-DD_HHMMSS-<slug>.md`; the planning note hands the model the current
+timestamp. Writes must use absolute paths under that directory; relative paths are rejected.
 
-```text
-<session cwd>/.hermes/plans/YYYY-MM-DD_HHMMSS-<slug>.md
-```
+Typed `/planmode approve` without a file checks that the submitted revision is unchanged on disk; with an explicit
+file it approves that file, as in v0.2. On the messaging gateway, plugin commands run only between turns. After a
+typed approval the plugin asks Hermes to start the work at once:
 
-The command prints the exact absolute directory. Plan writes must use absolute
-paths under that directory; relative paths are deliberately rejected.
+- CLI: works.
+- Gateway and TUI/Desktop on Hermes main: only with `allow_gateway_injection: true` (see Configuration).
+- TUI/Desktop on v2026.9.24: not available.
 
-## Agent-initiated plan mode
+Otherwise the reply says "Send any message to start", and your next message starts implementation.
 
-The plugin registers one identity-bound native tool, `plan_mode` (toolset
-`plan-mode`, actions `on|status|off`). It binds to the same session identity as
-the slash command. On hosts with Tool Search on (the Hermes default from
-v2026.9.24), plugin tools sit behind `tool_search`, so a model reaches
-`plan_mode` only after searching for it. In a live check on a v2026.9.24 host
-(classic CLI, GLM-5.3), a model told to use the tool found it with
-`tool_search`, entered plan mode, and its write outside the plans directory was
-blocked. The same model, asked only to "switch into plan mode", did not search
-and never entered it. `/planmode on` stays the reliable way in. Live Telegram
-use is not covered by the automated tests or by that check.
-
-- `plan_mode(action="on", reason=...)` enters plan mode for the current
-  session with the same identity resolution, profile check, plans directory
-  and enforcement as `/planmode on`. If plan mode is already on, it returns
-  the status and changes nothing.
-- `plan_mode(action="status")` returns the same text as `/planmode status`.
-- `plan_mode(action="off")` ends plan mode only when the agent entered it
-  itself (same activation). It never deletes plan files.
-
-What the tool cannot do: approve or reject a plan (the schema offers only `on`,
-`status` and `off`, and the handler refuses anything else), end a plan mode the
-user entered, or activate plan mode when the turn has no session identity (it
-returns the same refusal as the slash command and writes no state).
-
-Provenance rule: each activation records `entered_by` (`user` for the slash
-command, `agent` for the tool). A user-entered plan mode ends only with
-`/planmode approve`, `reject` or `off`; the tool refuses with `Plan mode was
-entered by the user; only /planmode approve, reject or off can end it.` State
-written by 0.1.x counts as user-entered. A `/planmode reject` hands an
-agent-entered plan mode to the user, so the tool can no longer end it. While
-an agent-entered plan mode is on, the turn note adds: call
-`plan_mode(action='off')` or ask the user to run `/planmode approve`.
-`plan_mode` itself is always allowed while plan mode is on.
-
-## Telegram: the command menu
-
-Telegram's bot command menu is capped at 60 entries by default (core commands
-first, then plugin commands, then skills), so `/planmode` may be hidden on busy
-profiles. Typing `/planmode` still works, and `/commands` lists everything.
-Operators can pin it before the cap:
+**Telegram command menu.** Telegram's bot menu holds 60 entries by default (core commands first, then plugin
+commands, then skills), so `/planmode` may be hidden on busy profiles. Typing it still works and `/commands` lists
+everything. To pin it:
 
 ```yaml
 platforms:
@@ -94,251 +120,206 @@ platforms:
         priority: [planmode]
 ```
 
-The default `priority_mode: prepend` puts pinned names ahead of Hermes' own
-priority list. Bare `/planmode` answers with the status.
+## The agent tool
 
-## What is allowed
+The plugin registers one tool, `plan_mode` (toolset `plan-mode`):
 
-The built-in allowlist is derived from Hermes' registered tools at
-`upstream/main@38c289c0146e`:
+- `on`: enters plan mode for the current session, with the same checks as `/planmode on`.
+- `status`: the same text as `/planmode status`.
+- `off`: ends plan mode only when the agent entered it itself and has not submitted a plan yet. Once a plan is
+  submitted, or when you entered plan mode, only `/planmode approve`, `reject` or `off` ends it.
+- `submit` (optional `path`, `summary`): asks you to approve the plan through Hermes' approval prompt. The agent
+  should call it on its own, not batched with other tool calls.
+
+The tool cannot approve or reject a plan. Approval is your act, recorded by Hermes' approval hooks.
+
+On hosts with Tool Search on (the default from v2026.9.24), plugin tools sit behind `tool_search`, which plan mode
+allows. The plugin adds a short system-prompt hint (≤200 chars) naming `plan_mode` for multi-step or risky changes,
+and the planning turn note tells the model to search for `plan_mode` if it is not loaded. `/plan` and
+`/planmode on` stay the reliable way in.
+
+## What is allowed in plan mode
 
 - file exploration: `read_file`, `search_files`;
 - web research: `web_search`, `web_extract`;
-- skills and history: `skills_list`, `session_search`, and `skill_view` when
-  Hermes reports inline shell off (below);
-- planning/user input: `todo_list`, `clarify`;
-- analysis-only media/browser reads: `vision_analyze`, `video_analyze`,
-  `browser_snapshot`, `browser_get_images`, `browser_vision`;
-- local read-only UI inspection: `read_terminal`, `read_window_below`;
-- `write_file` and `patch` only when every explicit target is an absolute path
-  whose real path stays inside the fixed plans directory.
+- skills and history: `skills_list`, `session_search`, and `skill_view` while Hermes reports `skills.inline_shell`
+  off (the default);
+- planning and user input: `todo_list`, `clarify`, `plan_mode`;
+- Tool Search: `tool_search` and `tool_describe` (calls made through `tool_call` are checked as the inner tool);
+- media and browser reads: `vision_analyze`, `video_analyze`, `browser_snapshot`, `browser_get_images`,
+  `browser_vision`;
+- local UI reads: `read_terminal`, `read_window_below`;
+- `write_file` and `patch` only when every target is an absolute path whose real path stays inside the plans
+  directory.
 
-Hermes' `memory` tool is not allowed because its current registry surface has
-only `add`, `replace`, `remove`, and batch mutations; there is no separable
-read-only operation. Terminal, code kernels, delegation, messaging, MCP and
-connector tools, browser mutations, cron/kanban mutations, and every unknown
-tool are blocked.
+Everything else is blocked: terminal, code kernels, delegation, messaging, MCP and connector tools, browser
+mutations, cron and kanban mutations, `memory` (it has no read-only operation), and every unknown tool.
 
-Administrators may extend the allowlist with the plugin setting
-`plan_mode.extra_allowed_tools` (a list of exact tool names) in the profile's
-`config.yaml`:
+## Configuration
+
+Profile `config.yaml`:
 
 ```yaml
 plugins:
   entries:
     plan-mode:
+      allow_gateway_injection: false    # true: typed /planmode approve starts work at once on gateway/TUI
       settings:
         plan_mode:
-          extra_allowed_tools: [my_read_only_tool]
+          enforce_builtin_plan: true    # core /plan turns on enforced plan mode
+          agent_hint: true              # the ≤200-char system-prompt hint naming plan_mode
+          footer: auto                  # auto | off — the one-line footer on chat platforms
+          extra_allowed_tools: []       # exact tool names you trust as read-only
 ```
 
-This is an explicit policy override: added tools are trusted as read-only by
-the operator.
+- `extra_allowed_tools` is an explicit policy override: the operator vouches that those tools are read-only.
+- `allow_gateway_injection` is a core Hermes setting. It lets this plugin queue a message into a gateway or
+  TUI/Desktop session; the plugin uses it only to start implementation after a typed `/planmode approve`.
+- `agent_hint` applies to new sessions; the hint is frozen into each session's system prompt.
 
-`skill_view` is allowed only while Hermes itself will not run inline shell for
-it. The tool preprocesses SKILL.md through
-`agent.skill_preprocessing.preprocess_skill_content` without an explicit
-`skills_cfg` (`tools/skills_tool_plugin.py:117` on every Hermes from
-`v2026.9.11` through `upstream/main@e5131dc`), so it runs inline shell
-only when `load_skills_config().get("inline_shell")` is truthy
-(`skills.inline_shell`, default `false`). The hook calls that same public
-loader at call time in the same process and context, instead of guessing
-config files. `skill_view` stays blocked when `skills.inline_shell` is true,
-when the loader cannot be imported, when it raises, or when it returns a
-non-dict.
+## Compared with other plan modes
 
-## Session identity and persistence
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.3.0 |
+|---|---|---|---|---|
+| Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
+| Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every channel |
+| Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted |
+| Deny with feedback, revise | yes | yes | no | yes; a typed reason only via gateway `/deny <reason>`, otherwise the agent asks |
+| Implement in the same turn | yes | yes | no | yes via the prompt; typed approve may need a message |
+| Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list` + footer on chat platforms |
+| Agent may enter | yes | no | no | yes |
+| Autonomy choice / clear context at approval | yes | partial | no | no |
 
-Beyond the public plugin context, the plugin reads these internal Hermes
-seams. Each is imported lazily and wrapped in `try/except`; line citations are
-`upstream/main@e5131dc`.
+## Security model
 
-1. `gateway.session_context.get_session_env` (`gateway/session_context.py:173`):
-   session identity. If missing, the plugin still loads, `/planmode on`
-   refuses with an unsupported-version explanation, and hooks do not block
-   because no plan state can be created.
-2. `gateway.session_context.session_context_engaged`
-   (`gateway/session_context.py:21-23`): whether this process has bound a
-   server session. If missing or raising, it is treated as never engaged;
-   server processes are then recognised only by Hermes' gateway admission
-   marker (item 3), and an unbound server command still refuses.
-3. Gateway admission: the `HERMES_GATEWAY_SESSION` environment flag and
-   `gateway.run._gateway_runner_ref`, read only if `gateway.run` is already
-   imported. If the reference is missing, only the environment flag admits a
-   gateway process; a CLI that merely imports gateway code stays a CLI.
-4. `agent.runtime_cwd.resolve_agent_cwd` (`agent/runtime_cwd.py:90-92`): the
-   turn-scoped workspace. If missing, activation uses an existing absolute
-   `TERMINAL_CWD` or the classic CLI process cwd.
-5. `hermes_cli.profiles.get_active_profile_name`: the registration profile when
-   the plugin's Hermes home is not `profiles/<name>`. If missing or raising,
-   the registration profile is unknown: a bound session refuses activation and
-   every state-mutating command, and the classic CLI (no bound session
-   profile) is unaffected.
-6. `agent.skill_preprocessing.load_skills_config`
-   (`agent/skill_preprocessing.py:22-31`): whether `skill_view` would run
-   inline shell. If missing, raising, or returning a non-dict, `skill_view` is
-   blocked.
-7. `ctx._manager.home_path` (private `PluginContext._manager`,
-   `hermes_cli/plugins.py:235`): the Hermes home the plugin was registered
-   from, used to derive the registration profile. If missing, the registration
-   profile is unknown and bound sessions refuse every state-mutating command.
-
-The cwd import remains necessary on both target Hermes versions. Their
-`gateway.session_context.set_session_vars(..., cwd=...)` stores cwd only in
-`agent.runtime_cwd` (`gateway/session_context.py:115-146`); cwd is not one of the
-variables exposed by `get_session_env`. Removing that reader would make TUI and
-Desktop plans fall back to the backend process directory instead of the session
-workspace.
-
-The dependency is intentional:
-
-- `gateway/run_inbound.py:1061-1078` binds `_session_env_scope` around plugin
-  command handlers specifically so a handler reading `get_session_env()` sees
-  the correct session (`#108698`, commit `5943347a2a`); `_run_plugin_command`
-  (`tui_gateway/methods_tools.py:573-585`) does the same for TUI/Desktop
-  (commit `35fdb4608a`). Both first shipped in `v2026.9.24` (0.21.5).
-- Hermes propagates the same ContextVar state into tool worker threads; the
-  acceptance test exercises the real `_pre_tool_block` entry through
-  `tools.thread_context.propagate_context_to_thread`, the helper used by the
-  concurrent executor.
-
-The stable key is `ui:<HERMES_UI_SESSION_ID>` when a TUI/Desktop turn binds its
-tab id. Because both target versions omit that id on the plugin-command path,
-the first bound turn adopts the command's `sk:<HERMES_SESSION_KEY>` state into
-the stable UI key without deleting the source state. Each bound turn records
-the current hashed `sk:` storage key in the UI state, so `status`, `approve`,
-`reject`, and `off` resolve the same state before and after session-key rotation.
-Re-enabling an already linked state preserves those aliases. If a command using
-a newly rotated key arrives before any bound hook has recorded it, the plugin
-refuses `on` and every state-changing command instead of guessing another
-tab's UI state, and `status` reports `unresolved`. The plugin cannot tell that
-key from a tab that never linked, so `/planmode on` in another TUI/Desktop tab
-of the profile is refused while a linked tab has plan mode on. Run one turn in
-the owning tab, then retry. This narrow gap remains until
-Hermes binds `HERMES_UI_SESSION_ID` around plugin commands or emits a public
-rotation mapping.
-Gateway sessions without a UI id continue to use the session key. Classic CLI
-uses `cli:<pid>`, so conversation compression may rotate `session_id` without
-losing plan mode. A nested process that only inherited its parent's session
-key, source, platform, and UI id uses its own PID key when Hermes session context
-has never been engaged in that process. Activation is refused when that
-inherited identity appears inside a gateway/slash-worker process because it
-cannot be assigned safely to one session.
-
-Released Hermes through 0.21.4 (`v2026.9.21`) does not bind a TUI/dashboard
-session around plugin command handlers. TUI/Desktop session creation sets `HERMES_GATEWAY_SESSION=1`, so even
-the first unbound `/planmode on` refuses and names the required Hermes fix.
-Its messaging gateway also omits command binding; the gateway-start-only
-live-runner reference makes the first `/planmode on` refuse instead of falling
-back to a process-wide CLI key. The inherited `HERMES_EXEC_ASK` environment
-value alone is not trusted, so nested CLIs remain independent. Gateway, TUI
-and Desktop plan mode on Hermes through 0.21.4 is therefore unsupported and fails
-closed at activation.
-Importing `gateway.run` alone is not treated as a server signal, so normal CLI
-remains usable after every chat-turn import. The tool and LLM hooks
-also treat an active current-process CLI state as plan mode if a later legacy
-path derives a session key or no key at all.
-
-`on_session_reset` clears only the derived session or an exact hashed old-session
-match; it never guesses based on there being one active session.
-`on_session_finalize` clears only this process's `cli:<pid>` state; gateway,
-Desktop idle/LRU, disconnect, and shutdown finalization never clear session
-state. Durable CLI entries whose PID no longer exists are pruned on POSIX.
-Windows keeps them until explicit CLI finalization because `os.kill(pid, 0)` is
-not a non-destructive liveness probe there. State remains bounded and
-profile-scoped.
-State is stored with the bounded, profile-scoped `ctx.state` facade. A hashed
-active-state index lets gateway resets clear a uniquely matching session even
-when the reset callback is outside the command's ContextVar scope; raw session
-keys and ids are never persisted. If several active sessions cannot be
-distinguished, none is cleared. Each active entry records its owning process.
-If any session owned by the current process is active and a non-CLI tool call
-arrives without a derivable key, the call is blocked fail-closed, except turns
-Hermes marks as cron (`HERMES_CRON_SESSION` in the cron scheduler's session
-context, which tools cannot set). State left by
-another process does not block cron or other bound-but-keyless work.
-
-## Containment and failure behavior
-
-At activation, the plugin uses Hermes' turn-scoped cwd resolver—the same cwd
-bound by TUI/gateway `_set_session_context(..., cwd=...)`—then an existing
-absolute `TERMINAL_CWD`, and only uses `os.getcwd()` for classic CLI fallback.
-It refuses cleanly if the directory cannot be created. It also refuses when
-either `.hermes` or `.hermes/plans` is a symlink or the final real path differs
-from `<real session cwd>/.hermes/plans`.
-Every plan write target must be explicit and absolute. Containment uses
-`realpath` plus `commonpath`, so `..`, absolute outside paths, symlink escapes,
-and a multi-file patch with any outside target are rejected. The hook also
-revalidates `.hermes` and `.hermes/plans` immediately before allowing each
-writer. A narrow time-of-check/time-of-use race remains because the plugin does
-not own Hermes' eventual file-open operation; do not let side agents or other
-processes mutate the plan root during plan mode. Any exception in the active
-`pre_tool_call` callback returns a block directive; Hermes otherwise treats
-plugin-hook exceptions as fail-open.
+- **Enforcement covers tools dispatched through `pre_tool_call`.** Tools that bypass that hook are not covered (see
+  Known limitations). Any exception in the plugin's active `pre_tool_call` blocks the call.
+- **Approval is a human decision.** A submit asks Hermes to approve under a rule key unique to that plan revision
+  (`plan-mode:<activation>:<rev>:<digest>:<nonce>`). The plugin counts an approval only when Hermes'
+  `post_approval_response` hook reports, for that exact key and tool call, the choice once, session or always,
+  without a cancel. The tool has no approve action, so the model cannot approve its own plan.
+- **A submitted plan belongs to you.** After a submit, the agent can no longer turn plan mode off, even if it entered
+  plan mode itself; a denial, a timeout or a missing human decision leaves the decision with you.
+- **No human, no approval.** With yolo or `approvals.mode: off`, Hermes approves the call without asking and fires no
+  hook. The plugin then keeps plan mode on and tells the agent to ask you for a typed `/planmode approve`. A host that
+  ignores the approval directive degrades the same way.
+- **"Always" behaves like once for plans,** because each revision has a new key. Hermes core still writes a
+  `plugin_rule:plan-mode:…` entry to `command_allowlist` in `config.yaml` for every "Always". You can delete those
+  entries.
+- **The approval prompt is Hermes' generic one.** It is worded for commands (the CLI panel is titled "Dangerous
+  Command"; gateway cards say Hermes wants to run a command), and it times out after 300 s by default
+  (`approvals.timeout`). A timed-out or withdrawn prompt leaves the revision awaiting approval; `/planmode approve`
+  still works for it.
+- **Gateway `/approve` is not plan-specific.** Plain `/approve` resolves the oldest pending prompt, and `/approve all`
+  approves everything pending, plans and commands alike.
+- **Deny reasons exist only on gateway text `/deny <reason>`.** Buttons, the CLI panel and the TUI/Desktop card deny
+  without a reason. The agent then asks what to change. Core also tells the model "Do NOT retry" on any denial; the
+  plugin's turn note tells it that a plan denial is review feedback.
+- **An edited plan invalidates its approval.** The plugin hashes the plan at submit. If the file changes before the
+  approval lands, or before a typed approve, it refuses and the agent must show and submit the new revision.
+- **One prompt at a time.** A second submit while an approval prompt is open is blocked. A typed `/planmode approve`
+  while the prompt is still open approves the submitted revision, and the prompt's later answer changes nothing.
+- **`/plan` marker.** The plugin detects core's `/plan` prompt in the user's message. A user who types that text only
+  restricts their own session; the model cannot author the user's message. If activation is refused (no session
+  identity, profile mismatch), `/plan` stays prompt-only for that turn. If the hook times out, plan mode is simply
+  not activated.
 
 ## Known limitations
 
-Hermes' Codex app-server runtime executes native `exec` and `applyPatch`
-outside `pre_tool_call` (`agent/transports/codex_app_server_session.py:707-708`
-at `upstream/main@e5131dc`). The documented plugin context exposes no
-public command-time runtime identifier, so this plugin cannot reliably detect
-and refuse that runtime without another private dependency. Plan mode therefore
-does **not** enforce Codex-native app-server actions. Use a normal Hermes tool
-runtime when enforcement is required.
+- **Codex app-server runtime.** Hermes' Codex app-server executes native `exec` and `applyPatch` outside
+  `pre_tool_call`. Plan mode does not enforce them. Use a normal Hermes tool runtime when enforcement matters.
+- **TUI `/background` and `btw`** side agents run under their own task id with no public link to the parent session.
+  They keep full tools while the parent chat is in plan mode.
+- **Argument-rewriting plugins.** Another plugin's `modify` directive can rewrite arguments after this plugin checked
+  them. Avoid combining them on plan writers.
+- **Plan-root race.** The plugin revalidates `.hermes` and `.hermes/plans` before each plan write, but does not own
+  Hermes' eventual file open. Do not let other processes change the plan root during plan mode.
+- **TUI profile scope.** If the TUI resolves the command in a different profile than the session, the plugin refuses
+  `on`, `off`, `approve` and `reject`. Two live sessions sharing one session key in one TUI backend cannot be told
+  apart; keep session keys unique per profile.
+- **Session-key edge cases.** With `compression.in_place: false`, `/planmode on` then `/compress` before any agent
+  turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
+  chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
+  linked tab has plan mode on; run one turn in the owning tab, then retry.
+- **No autonomy choice at approval** (Hermes has no per-mode edit-accept setting) and **no
+  clear-context-and-implement** (not reachable from a plugin).
+- **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs
+  a new upstream plugin API, proposed in
+  [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306) together with
+  plan-shaped approval wording.
+- **Footer limits.** Chat platforms only (never CLI, TUI, Desktop, API server or webhook), and only on replies of
+  3000 chars or fewer, because a long streamed reply would be re-sent.
+- **Telegram, Slack and Discord approval text** is a short summary; the full plan comes from the agent's reply or
+  `/planmode show`.
+- **Duplicate submits on hosts without tool call ids.** Hermes builds that pass no `tool_call_id` to hooks cannot
+  tell a blocked duplicate submit from the open one; every supported build passes it.
 
-This plugin performs no network calls, launches no subprocesses, contains no
-self-updater, and registers one tool (`plan_mode`, above). While plan mode is active, its
-`pre_llm_call` hook adds a short plan-mode note to each turn's context.
+## Compatibility
 
-TUI `/background` and `btw` side agents are rebound under their task id and do
-not expose a public parent-session identity to plugin hooks
-(`tui_gateway/methods_prompt.py:978` at `upstream/main@e5131dc`). They can
-therefore run with full tools even while the parent chat is in plan mode; do
-not use those side-agent paths while enforcement is required.
+- **Classic CLI:** enforced on released Hermes ≤ 0.21.4 (`v2026.9.21`) and newer. The plugin requires Hermes
+  ≥ 0.21.2.
+- **Messaging gateway, TUI and Desktop:** Hermes `v2026.9.24` (0.21.5) or newer. Earlier builds refuse
+  `/planmode on` on these surfaces instead of pretending plan mode is active.
+- **v0.3.0 features** use only the Hermes capability they need. Where the approval directive or the approval hooks
+  are missing, submit degrades to the typed `/planmode approve` flow. The system-prompt hint is skipped where the host
+  has no prompt-section API, and typed approval skips `inject_message` where the host has none.
+- Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11) and a pinned `main` (Python
+  3.14, which current `main` requires).
 
-Hermes collects every `pre_tool_call` result before resolving directives, and a
-different plugin's later `modify` directive can rewrite arguments after this
-plugin checked them (`hermes_cli/plugins.py:1870-1889` at
-`upstream/main@e5131dc`). Plan mode cannot
-re-validate another plugin's rewritten arguments. Avoid combining it with
-argument-rewriting plugins on plan writers.
-
-`upstream/main@e5131dc` resolves the `slash.exec` plugin command handler
-before entering the target TUI session's `profile_home` scope
-(`tui_gateway/methods_tools.py:933-964`). `_run_plugin_command`
-(`tui_gateway/methods_tools.py:573`) does bind `HERMES_SESSION_PROFILE` for the
-target session through `_set_session_context` (`tui_gateway/server.py:1269-1296`).
-The plugin compares that profile with the Hermes home captured by its registering
-plugin manager and refuses activation, `off`, `approve` and `reject` on a mismatch
-(`status` stays read-only), so the wrong launch-profile
-instance cannot claim enforcement. This refusal remains necessary until upstream
-resolves the handler inside the target profile scope.
-If two live sessions in one TUI backend share a session key, Hermes binds the
-first record's profile (`_session_for_key`, `tui_gateway/server.py:1263` at `upstream/main@e5131dc`), so
-the plugin cannot tell them apart; keep session keys unique per profile.
-
-With non-default `compression.in_place: false`, `/planmode on` followed by
-`/compress` before any bound turn can rotate the session key before Hermes has
-exposed a stable UI id to the plugin. Hermes emits neither a plan-mode hook nor a
-public old-to-new command-key mapping at that boundary, so a safe in-plugin copy
-would require guessing across tabs. This sequence remains unsupported and is
-covered by a strict expected-failure regression; use the default in-place
-compression or allow one bound turn before rotating compression.
-
-On the messaging gateway, `/planmode on` followed by `/new` before any agent
-turn keeps plan mode on in the new chat; run `/planmode off` to recover. Hermes
-binds an empty `HERMES_SESSION_ID` in the plugin-command scope, so activation
-cannot record the id the reset later reports, and the TUI/Desktop reset passes
-no `old_session_id`. This over-blocks (fail-closed) until Hermes exposes that seam.
-
-## Development
+## How to test
 
 ```bash
-pytest -q
 hermes plugins validate .
-hermes plugins doctor . --ci
-hermes plugins compat .
+pytest -q
 ```
 
-See [`docs/manual-test.md`](docs/manual-test.md) for a surface-by-surface manual
-acceptance flow.
+Manual walkthrough in a disposable workspace (full surface-by-surface list in
+[`docs/manual-test.md`](docs/manual-test.md)):
+
+1. Run `/plan add a hello-world script`. Ask for `pwd` or a file write outside the plans directory; both are blocked.
+2. Let the agent write the plan, show it and submit. Hermes' approval prompt appears with plan rev 1.
+3. Deny. Plan mode stays on; the agent asks what to change, revises and submits rev 2.
+4. Approve. The agent starts implementing in the same turn and fills `todo_list`; on a chat platform the reply ends
+   with `Plan progress n/m`.
+5. Run `/planmode status`: phase `executing`. Finish the todos or run `/planmode done`; status reports `off`.
+
+## Disclosure
+
+Disclosure — plan-mode blocks mutating Hermes tools dispatched through `pre_tool_call` (not Codex app-server
+`exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan through Hermes' own
+approval prompt or `/planmode approve`. It reads seven internal Hermes seams for session identity, workspace,
+profile and `skills.inline_shell`, each guarded and failing closed. It creates `<cwd>/.hermes/plans`, reads plan
+files there, and keeps per-session state in plugin state. It adds a turn note while planning or executing, a
+≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. When the user picks
+"Always" on a plan approval, Hermes core writes a `plugin_rule:plan-mode:…` entry to `command_allowlist` in
+`config.yaml`. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
+makes no network calls, launches no subprocesses and has no self-updater.
+
+<details>
+<summary>Internal Hermes seams read</summary>
+
+Each is imported lazily and wrapped in `try/except`.
+
+1. `gateway.session_context.get_session_env`: session identity and platform. Missing → `/planmode on` refuses and
+   nothing blocks.
+2. `gateway.session_context.session_context_engaged`: whether this process bound a server session. Missing → treated
+   as never engaged.
+3. Gateway admission: `HERMES_GATEWAY_SESSION` and `gateway.run._gateway_runner_ref` (only if already imported).
+4. `agent.runtime_cwd.resolve_agent_cwd`: the turn's workspace. Missing → an absolute `TERMINAL_CWD`, or the classic
+   CLI process cwd.
+5. `hermes_cli.profiles.get_active_profile_name`: the registration profile. Missing → bound sessions refuse every
+   state-changing command.
+6. `agent.skill_preprocessing.load_skills_config`: whether `skill_view` would run inline shell. Missing or odd →
+   `skill_view` blocked.
+7. `ctx._manager.home_path`: the Hermes home the plugin registered from. Missing → bound sessions refuse every
+   state-changing command.
+
+Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `transform_llm_output`,
+`pre_approval_request`, `post_approval_response`, `on_session_reset`, `on_session_finalize`. Public context APIs:
+`ctx.state`, `ctx.inject_message`, `ctx.register_system_prompt_section`.
+
+</details>
+
+## License
+
+MIT. Maintained by [100yenadmin](https://github.com/100yenadmin).

@@ -30,7 +30,8 @@ def _plain(text: str) -> str:
 
 def _title(text, summary, name) -> str:
     heading = re.search(r"^\s*#{1,6}\s+(.+)$", text, re.MULTILINE)
-    return _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
+    title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
+    return re.sub(r"(?i)^plan\s*[:—-]\s*", "", title) or name
 
 
 def approval_text(text, path, revision, platform, summary="") -> str:

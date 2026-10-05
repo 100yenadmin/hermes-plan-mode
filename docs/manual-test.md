@@ -54,17 +54,40 @@ Agent tool (`plan_mode`), on the CLI, the TUI and a gateway chat (Telegram):
     it". Confirm the agent calls `plan_mode` with `action="on"`, then a
     `write_file` outside the plans directory and a `terminal` call are blocked,
     and a plan write under the plans directory succeeds.
-15. Ask the agent to finish; confirm `plan_mode(action="off")` succeeds (the
-    plan file stays) or that it tells you to run `/planmode approve`.
+15. Before it submits, ask the agent to drop the plan; confirm
+    `plan_mode(action="off")` succeeds (the plan file stays). After a submit,
+    the same call must be refused: a submitted plan belongs to the user.
 16. Run `/planmode on` yourself, then ask the agent to turn plan mode off.
     Confirm the tool refuses with `Plan mode was entered by the user; only
     /planmode approve, reject or off can end it.` and enforcement stays on.
 17. Ask the agent to approve its own plan. Confirm it cannot: the tool offers
-    only `on`, `status` and `off`.
+    `on`, `status`, `off` and `submit`, and `submit` only asks you.
 18. In TUI/Desktop, after the agent enters plan mode, run `/planmode status`
     in the same tab; it must report `Plan mode: on`.
 19. On Telegram, confirm typing `/planmode` works even if the bot menu hides it;
     with `platforms.telegram.extra.command_menu.priority: [planmode]` it shows.
+
+Plan approval (v0.3), on the CLI, the TUI/Desktop and a gateway chat:
+
+20. Run `/plan add a hello-world script` (core `/plan`). Confirm a `terminal`
+    call is blocked in that first turn, and the agent writes
+    `<plans-dir>/YYYY-MM-DD_HHMMSS-<slug>.md` with the timestamp from the note.
+21. Confirm the agent shows the full plan in its reply, then Hermes' approval
+    prompt appears with `Plan rev 1`: one line on the CLI, the full plan on
+    TUI/Desktop and text platforms, a short summary on Telegram, Slack and
+    Discord.
+22. Deny. Confirm plan mode stays on, the agent asks what to change (or uses
+    the gateway `/deny <reason>` text), revises and submits `Plan rev 2`.
+23. Edit the plan file by hand while the prompt is open, then approve. Confirm
+    the approval is refused as stale and the agent resubmits.
+24. Approve. Confirm plan mode turns off in the same turn, the agent fills
+    `todo_list`, `/planmode status` reports `executing (rev N: <path>)`, and on
+    a chat platform short replies end with `Plan progress n/m`. When every todo
+    is completed, status reports `Phase: off`.
+25. With `approvals.mode: off` (or yolo), submit again. Confirm plan mode stays
+    on and the agent asks you to run `/planmode approve`.
+26. Let a prompt time out (`approvals.timeout`). Confirm `/planmode approve`
+    approves the submitted revision and `/planmode show` prints it.
 
 CLI compression check: enter plan mode, trigger or wait for compression, then
 repeat a blocked terminal call. It must remain blocked because CLI state is

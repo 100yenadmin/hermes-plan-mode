@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.3.0 - 2026-10-05
+
+- Add `plan_mode(action="submit", path?, summary?)`. It asks the user to approve the plan through Hermes' own
+  approval prompt (CLI panel, TUI/Desktop card, gateway buttons, or `/approve` text) under a rule key unique to the
+  plan revision. The plugin counts an approval only when `post_approval_response` reports once, session or always,
+  without a cancel, for that exact key and tool call. On approval the same tool call turns plan mode off and tells
+  the agent to implement now and mirror the steps into `todo_list` (naming the exact `todo_list(todos=[...])` call).
+  The tool still cannot approve on its own.
+- A submitted plan belongs to the user: after a submit, the agent can no longer turn plan mode off, even when it
+  entered plan mode itself. The agent-entered turn note now allows `off` only before submitting.
+- With yolo or `approvals.mode: off` Hermes approves without asking and fires no hook: plan mode stays on and the
+  agent is told to ask for `/planmode approve`. A host that ignores the approval directive degrades the same way.
+- Deny keeps plan mode on and adds a one-shot note that a denial is review feedback: revise and submit a complete
+  new revision. The deny reason exists only on gateway text `/deny <reason>`. A timed-out or withdrawn prompt leaves
+  the revision awaiting approval.
+- Plans are hashed at submit. An edit before the approval lands, or before a typed approve without a file, refuses
+  the approval. A second submit while a prompt is open is blocked. Revisions keep counting across activations.
+- Approval text by platform: one line on the classic CLI, whose panel does not wrap multi-line text (the plan is
+  printed just above it); a ≤250-char summary (title + up to 6 step titles) on Telegram, Slack and Discord; the
+  full plan, capped at about 3500 chars, everywhere else.
+- "Always" behaves like once for plans, but Hermes core writes a `plugin_rule:plan-mode:…` entry to
+  `command_allowlist` in `config.yaml`. The approval card says "command" and times out after 300 s by default
+  (`approvals.timeout`). Plain `/approve` resolves the oldest pending prompt; `/approve all` approves everything.
+- Typed `/planmode approve` approves the submitted revision (also while its prompt is still open; the prompt's later
+  answer then changes nothing), else the newest plan (v0.2 behavior), then
+  asks Hermes to start the work via `ctx.inject_message`. This works on the CLI, and on the gateway and TUI/Desktop
+  (Hermes main) only with `plugins.entries.plan-mode.allow_gateway_injection: true`; otherwise the next message
+  starts it.
+- Core `/plan` now turns on enforced plan mode for the session before the agent's first tool call
+  (`plan_mode.enforce_builtin_plan`, default true). The marker is matched anywhere in the message, so group and
+  reply prefixes work. A refused activation adds nothing and blocks nothing.
+- New planning turn note: read-only exploration, `clarify` for genuine ambiguity, an absolute plan path, show the full
+  plan, then submit; no "should I proceed?" in prose. The note and the `/planmode on` reply give the current
+  timestamp for the plan file name, since the model cannot read the clock while `terminal` is blocked. While executing, a one-line pointer to the approved plan is
+  added each turn until the todo list is all completed or cancelled, `/planmode done|off`, a new activation, a reset,
+  or 100 turns.
+- A ≤200-char system-prompt hint names `plan_mode` for multi-step or risky changes (`plan_mode.agent_hint`, default
+  true; skipped where the host has no prompt-section API).
+- Add `/planmode show [file]` (read-only, ≤3500 chars) and `/planmode done`. `/planmode status` reports the phase
+  and the last submission.
+- A one-line footer on chat platforms: "⏸ Plan mode: nothing changes until you approve the plan." while planning,
+  "Plan progress n/m · now: <step>" while executing (`plan_mode.footer: auto|off`). Never on CLI, TUI, Desktop, API
+  server or webhook, and never on replies over 3000 chars.
+- Allow Tool Search's `tool_search` and `tool_describe` in plan mode (a `tool_call` is checked as the inner tool), so
+  the model can find `plan_mode` and `todo_list` without a detour.
+- `args_hint` is now `[on|status|show|approve|reject|done|off] [task]`, which Telegram's command menu accepts.
+- Register `pre_approval_request`, `post_approval_response` and `transform_llm_output`; `plugin.yaml` 0.3.0.
+- CI tests Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` and a pinned `main` (Python 3.14), checks that the real
+  Hermes modules import before the tests run, and runs `hermes plugins validate` and `doctor` (`compat` where the
+  host still has it).
+- Not in this release: an autonomy choice at approval, clear-context-and-implement, and a live mid-turn plan or
+  progress card (needs a new upstream plugin API, proposed in
+  [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306)).
+
 ## 0.2.0 - 2026-09-26
 
 - Add an identity-bound native tool `plan_mode` (toolset `plan-mode`, actions
