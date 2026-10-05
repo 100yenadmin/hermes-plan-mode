@@ -1430,9 +1430,9 @@ def test_u1_full_approval_text_and_truncation(tmp_path):
     from plan_mode.approval import approval_text
     path = tmp_path / "plan.md"
     text = "# Plan\n\nWhole detailed plan"
-    for platform in ("", "cli", "tui", "desktop", "mattermost"):
+    for platform in ("", "tui", "desktop", "mattermost"):
         assert approval_text(text, path, 4, platform).endswith("\n\n" + text)
-    result = approval_text("x" * 4000, path, 4, "cli")
+    result = approval_text("x" * 4000, path, 4, "mattermost")
     assert len(result) <= 3500
     assert result.endswith(f"\n… (truncated; full plan: {path})")
 
@@ -2014,3 +2014,23 @@ def test_u1_card_answer_after_typed_off_writes_nothing(plugin, submitted_plan):
     state = plugin._load_state("sk:unit-session")
     assert state["active"] is False and not state.get("pending_note")
     assert plugin.pre_llm_call() is None
+
+
+def test_u1_cli_approval_text_is_one_line(tmp_path):
+    from plan_mode.approval import approval_text
+    text = "# Add divide\n\n## Goal\nDo it.\n\n1. Tests\n2. Code\n"
+    result = approval_text(text, str(tmp_path / "p.md"), 2, "cli")
+    assert "\n" not in result and len(result) < 300
+    assert result.startswith("Plan rev 2 (p.md): Add divide.") and "shown above" in result
+
+
+def test_u1_classic_cli_submit_uses_one_line_prompt(plugin, session_env, tmp_path):
+    session_env.clear()
+    session_env.update({"HERMES_SESSION_SOURCE": "cli", "TERMINAL_CWD": str(tmp_path)})
+    assert "Plan mode is on" in plugin.command("on cli")
+    path = tmp_path / ".hermes" / "plans" / "plan.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(path), "content": "#"}) is None
+    path.write_text("# CLI plan\n\n1. One\n2. Two\n", encoding="utf-8")
+    directive = plugin.pre_tool_call("plan_mode", {"action": "submit"}, tool_call_id="c1")
+    assert directive["action"] == "approve" and "\n" not in directive["message"]
+    assert "CLI plan" in directive["message"]

@@ -1049,7 +1049,10 @@ class PlanModePlugin:
             return set()
         return {item.strip() for item in value if isinstance(item, str) and item.strip()}
 
-    def _prepare_submission(self, state_key: str, state: dict[str, Any], args: dict, tool_call_id: str) -> dict:
+    def _prepare_submission(
+        self, state_key: str, state: dict[str, Any], args: dict, tool_call_id: str,
+        identity: SessionIdentity | None = None,
+    ) -> dict:
         submission = state.get("submission") or {}
         if submission.get("status") == "pending" and self._ledger.is_inflight(submission.get("rule_key")):
             return _block_message(PLAN_MODE_TOOL, "A plan approval prompt is already open; wait for the user's answer.")
@@ -1083,6 +1086,8 @@ class PlanModePlugin:
         self._ledger.mark_inflight(rule_key, tool_call_id)
         reader = _session_reader()
         platform = reader("HERMES_SESSION_PLATFORM", "") if reader else ""
+        if not platform and identity is not None and str(identity.key or "").startswith("cli:"):
+            platform = "cli"
         return {"action": "approve", "message": approval_text(text, path, revision, platform, args.get("summary") or ""), "rule_key": rule_key}
 
     def pre_tool_call(
@@ -1122,7 +1127,8 @@ class PlanModePlugin:
                 self._active_keys.add(state_key)
                 self._remember_session_id(state_key, state, kwargs.get("session_id"))
                 if is_submit:
-                    return self._prepare_submission(state_key, state, call_args, str(kwargs.get("tool_call_id") or ""))
+                    return self._prepare_submission(
+                        state_key, state, call_args, str(kwargs.get("tool_call_id") or ""), identity)
 
                 name = str(tool_name or "")
                 call_args = args if isinstance(args, dict) else {}

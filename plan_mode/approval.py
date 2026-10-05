@@ -28,11 +28,21 @@ def _plain(text: str) -> str:
     return " ".join(re.sub(r"[*_`#~]", "", text).split())
 
 
+def _title(text, summary, name) -> str:
+    heading = re.search(r"^\s*#{1,6}\s+(.+)$", text, re.MULTILINE)
+    return _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
+
+
 def approval_text(text, path, revision, platform, summary="") -> str:
     name = Path(path).name
+    if str(platform).lower() in {"cli", "terminal"}:
+        # The classic CLI streams the full plan just above its approval panel, and the panel
+        # does not wrap embedded newlines, so it gets one line.
+        title = _title(text, summary, name)[:160]
+        return (f"Plan rev {revision} ({name}): {title}. The full plan is shown above; "
+                "approve to start implementing, deny to keep planning.")
     if str(platform).lower() in {"telegram", "slack", "discord"}:
-        heading = re.search(r"^\s*#{1,6}\s+(.+)$", text, re.MULTILINE)
-        title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
+        title = _title(text, summary, name)
         steps = re.findall(r"^(?:[-*+]\s+|\d+[.)]\s+|#{2,3}\s+)(.+)$", text, re.MULTILINE)
         if not steps:
             steps = [line for line in text.splitlines() if line.strip()]
