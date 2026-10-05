@@ -438,7 +438,14 @@ class PlanModePlugin:
         if isinstance(canonical, str) and canonical.startswith("session:"):
             related.add(canonical)
         for candidate in related:
+            if candidate != storage_key and not self._same_family(candidate, canonical):
+                continue  # a stale link to a key another tab has since claimed
             self._clear_storage_key(candidate)
+
+    def _same_family(self, storage_key: str, canonical: Any) -> bool:
+        """Whether a linked copy still names this family's canonical UI state (or names none)."""
+        theirs = self._load_storage_state(storage_key).get("canonical_ui_storage_key")
+        return not isinstance(theirs, str) or not isinstance(canonical, str) or theirs == canonical
 
     @staticmethod
     def _pid_is_alive(pid: int) -> bool:
@@ -1074,7 +1081,7 @@ class PlanModePlugin:
         related.discard(storage_key)
         for other in related:
             copy = self._load_storage_state(other)
-            if not copy or copy.get("active"):
+            if not copy or copy.get("active") or not self._same_family(other, canonical):
                 continue
             for field in _FAMILY_FIELDS:
                 if field in state:
