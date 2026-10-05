@@ -15,6 +15,8 @@ BUILTIN_OVERRIDE = (
 LOCAL_PLATFORMS = frozenset({
     "cli", "terminal", "tui", "desktop", "dashboard", "api_server", "webhook",
     "acp", "local", "batch", "cron", "subagent", "curator",
+    # core's non-messaging surfaces (gateway.session_context.NON_MESSAGING_SESSION_SURFACES)
+    "codex", "gateway", "kanban", "msgraph_webhook", "tool",
 })
 
 

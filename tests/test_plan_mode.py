@@ -2112,3 +2112,47 @@ def test_u2r_todo_read_does_not_end_execution(plugin, session_env, executing_pla
     old = {"todos": [{"id": "1", "content": "old", "status": "completed"}]}
     plugin.post_tool_call("todo_list", {}, status="ok", result=json.dumps(old))
     assert plugin._load_state("sk:unit-session")["phase"] == "executing"
+
+
+# Codex review R2 fixes.
+@pytest.mark.parametrize("heading, title", [
+    ("Plan: Add power", "Add power"), ("Plan — Add power", "Add power"), ("Plan-mode docs", "Plan-mode docs"),
+    ("Planner fixes", "Planner fixes"),
+])
+def test_r2_title_keeps_compound_words(tmp_path, heading, title):
+    from plan_mode.approval import approval_text
+    assert approval_text(f"# {heading}\n", str(tmp_path / "p.md"), 1, "cli").startswith(f"Plan rev 1 (p.md): {title}.")
+
+
+def test_r2_whatsapp_cloud_card_fits_its_body_limit(tmp_path):
+    from plan_mode.approval import approval_text
+    path = tmp_path / "p.md"
+    result = approval_text("# Plan\n\n" + "step\n" * 600, path, 1, "whatsapp_cloud")
+    assert len(result) <= 1000 and result.endswith(f"(truncated; full plan: {path})")
+    assert len(approval_text("x" * 2000, path, 1, "matrix")) == 2000 + len("Plan rev 1 (p.md) — approve to start implementing, deny to keep planning.\n\n")
+
+
+@pytest.mark.parametrize("platform", ["msgraph_webhook", "kanban", "tool", "codex", "gateway"])
+def test_r2_non_messaging_surfaces_get_no_footer(plugin, submitted_plan, platform):
+    assert plugin.transform_llm_output("reply", platform=platform) is None
+
+
+def test_r2_tui_typed_approve_while_open_clears_flag_on_every_copy(plugin, session_env, tmp_path):
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    _tui_env(session_env, True)
+    plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)
+    path = tmp_path / ".hermes" / "plans" / "p.md"
+    args = {"path": str(path), "content": "# P\n1. a\n"}
+    ids = {"session_id": "s1", "tool_call_id": "w1"}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    path.write_text(args["content"], encoding="utf-8")
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    directive = _submit(plugin)
+    _tui_env(session_env, False)
+    assert "Plan approved" in plugin.command("approve")
+    _tui_env(session_env, True)
+    _decision(plugin, directive, "deny")
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    for key in ("ui:tab-1", "sk:tui-key"):
+        state = plugin._load_state(key)
+        assert "approved_while_open" not in state and state.get("phase") == "executing", key

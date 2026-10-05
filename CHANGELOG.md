@@ -4,8 +4,8 @@
 
 - Add `plan_mode(action="submit", path?, summary?)`. It asks the user to approve the plan through Hermes' own
   approval prompt (CLI panel, TUI/Desktop card, gateway buttons, or `/approve` text) under a rule key unique to the
-  plan revision. The plugin counts an approval only when `post_approval_response` reports once, session or always,
-  without a cancel, for that exact key and tool call. On approval the same tool call turns plan mode off and tells
+  plan revision. A prompt approval counts only when `post_approval_response` reports once, session or always,
+  without a cancel, for that exact key and tool call (typed `/planmode approve` is the other human path). On approval the same tool call turns plan mode off and tells
   the agent to implement now and mirror the steps into `todo_list` (naming the exact `todo_list(todos=[...])` call).
   The tool still cannot approve on its own.
 - A submitted plan belongs to the user: after a submit, the agent can no longer turn plan mode off, even when it
@@ -19,7 +19,7 @@
   the approval. A second submit while a prompt is open is blocked. Revisions keep counting across activations.
 - Approval text by platform: one line on the classic CLI, whose panel does not wrap multi-line text (the plan is
   printed just above it); a ≤250-char summary (title + up to 6 step titles) on Telegram, Slack and Discord; the
-  full plan, capped at about 3500 chars, everywhere else.
+  full plan capped at about 1000 chars on WhatsApp Cloud (its card limit) and at about 3500 chars everywhere else.
 - "Always" behaves like once for plans, but Hermes core writes a `plugin_rule:plan-mode:…` entry to
   `command_allowlist` in `config.yaml`. The approval card says "command" and times out after 300 s by default
   (`approvals.timeout`). Plain `/approve` resolves the oldest pending prompt; `/approve all` approves everything.

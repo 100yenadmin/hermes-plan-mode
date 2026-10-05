@@ -2,7 +2,8 @@
 
 ![Hermes Plan Mode](docs/media/banner.png)
 
-Claude Code / Codex-style plan mode for Hermes, on every channel, with no core changes. The agent explores with
+Claude Code / Codex-style plan mode for Hermes, on every interactive Hermes surface (CLI, TUI, Desktop and the
+messaging platforms), with no core changes. The agent explores with
 read-only tools, asks clarifying questions, writes a plan file and shows it to you. You approve it with Hermes' own
 approval prompt: buttons, a card, the CLI panel or `/approve`. Then the agent implements it in the same turn and
 tracks progress. Until you approve, the plugin blocks mutating tools dispatched through Hermes' `pre_tool_call`
@@ -54,22 +55,25 @@ After **Allow once** on rev 2, it implements in the same turn and keeps `todo_li
 
 ## What you see on each channel
 
-The plugin has no per-platform code. It uses the approval and `clarify` UIs each Hermes surface already has.
+The plugin uses the approval and `clarify` UIs each Hermes surface already has; it only sizes the approval text per
+platform.
 
 | Surface | Approval prompt | Clarifying questions | Mode footer |
 |---|---|---|---|
 | CLI | approval panel with a one-line summary; the full plan is printed just above it | interactive picker | no |
 | TUI / Desktop | approval card with the full plan text | the app's question prompt | no |
 | Telegram, Slack, Discord | native buttons, short summary (title + up to 6 step titles) | native buttons | yes |
-| Matrix, Feishu, Teams, WhatsApp Cloud | native buttons, full plan text | numbered list (buttons on WhatsApp Cloud) | yes |
+| Feishu, Teams | native buttons, full plan text | numbered list | yes |
+| Matrix | reactions to approve or deny, full plan text | numbered list | yes |
+| WhatsApp Cloud | native buttons, plan text up to about 1000 chars (the card's limit) | native buttons | yes |
 | Mattermost, Google Chat, Signal and other platforms | `/approve` or `/deny <reason>` text, full plan text | buttons where the platform has them, else a numbered list | yes |
 
 - On Telegram, Slack and Discord the approval card has a small text budget (Discord 300 chars, Telegram and Slack
   500), so the prompt carries a ≤250-char summary. The full plan is the agent's reply sent just before it.
 - Mattermost and several other platforms (for example Signal, WhatsApp Cloud and SMS) do not send the agent's in-progress text
   before the approval prompt by default. On those, and everywhere without a budget, the approval text carries the
-  full plan, capped at about 3500 chars with a pointer to the file.
-- The full plan is always available with `/planmode show`.
+  full plan, capped at about 3500 chars (about 1000 on WhatsApp Cloud) with a pointer to the file.
+- `/planmode show` prints up to 3500 chars of the plan; the plan file holds the rest.
 
 ## Install
 
@@ -182,7 +186,7 @@ plugins:
 | | Claude Code | Codex | Hermes `/plan` | plan-mode 0.3.0 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
-| Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every channel |
+| Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every interactive surface |
 | Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted |
 | Deny with feedback, revise | yes | yes | no | yes; a typed reason only via gateway `/deny <reason>`, otherwise the agent asks |
 | Implement in the same turn | yes | yes | no | yes via the prompt; typed approve may need a message |
@@ -195,9 +199,10 @@ plugins:
 - **Enforcement covers tools dispatched through `pre_tool_call`.** Tools that bypass that hook are not covered (see
   Known limitations). Any exception in the plugin's active `pre_tool_call` blocks the call.
 - **Approval is a human decision.** A submit asks Hermes to approve under a rule key unique to that plan revision
-  (`plan-mode:<activation>:<rev>:<digest>:<nonce>`). The plugin counts an approval only when Hermes'
+  (`plan-mode:<activation>:<rev>:<digest>:<nonce>`). A prompt approval counts only when Hermes'
   `post_approval_response` hook reports, for that exact key and tool call, the choice once, session or always,
-  without a cancel. The tool has no approve action, so the model cannot approve its own plan.
+  without a cancel. Typed `/planmode approve` is the other human path. The tool has no approve action, so the model
+  cannot approve its own plan.
 - **A submitted plan belongs to you.** After a submit, the agent can no longer turn plan mode off, even if it entered
   plan mode itself; a denial, a timeout or a missing human decision leaves the decision with you.
 - **No human, no approval.** With yolo or `approvals.mode: off`, Hermes approves the call without asking and fires no
@@ -216,13 +221,14 @@ plugins:
   without a reason. The agent then asks what to change. Core also tells the model "Do NOT retry" on any denial; the
   plugin's turn note tells it that a plan denial is review feedback.
 - **An edited plan invalidates its approval.** The plugin hashes the plan at submit. If the file changes before the
-  approval lands, or before a typed approve, it refuses and the agent must show and submit the new revision.
+  approval lands, or before a typed approve without an explicit file, it refuses and the agent must show and submit
+  the new revision.
 - **One prompt at a time.** A second submit while an approval prompt is open is blocked. A typed `/planmode approve`
   while the prompt is still open approves the submitted revision, and the prompt's later answer changes nothing.
 - **`/plan` marker.** The plugin detects core's `/plan` prompt in the user's message. A user who types that text only
   restricts their own session; the model cannot author the user's message. If activation is refused (no session
-  identity, profile mismatch), `/plan` stays prompt-only for that turn. If the hook times out, plan mode is simply
-  not activated.
+  identity, profile mismatch), `/plan` stays prompt-only for that turn. If the hook times out, Hermes continues the
+  turn without it, so enforcement may start late (when the delayed call finishes) or not at all for that turn.
 
 ## Known limitations
 
@@ -240,7 +246,7 @@ plugins:
 - **Session-key edge cases.** With `compression.in_place: false`, `/planmode on` then `/compress` before any agent
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
-  linked tab has plan mode on; run one turn in the owning tab, then retry.
+  linked tab has plan mode on; retry from the owning tab after one turn there.
 - **No autonomy choice at approval** (Hermes has no per-mode edit-accept setting) and **no
   clear-context-and-implement** (not reachable from a plugin).
 - **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs
@@ -268,7 +274,7 @@ plugins:
   are missing, submit degrades to the typed `/planmode approve` flow. The system-prompt hint is skipped where the host
   has no prompt-section API, and typed approval skips `inject_message` where the host has none.
 - Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11) and a pinned `main` (Python
-  3.14, which current `main` requires).
+  3.14, the version for which `main` declares its runtime dependencies).
 
 ## How to test
 
@@ -292,7 +298,7 @@ Manual walkthrough in a disposable workspace (full surface-by-surface list in
 Disclosure — plan-mode blocks mutating Hermes tools dispatched through `pre_tool_call` (not Codex app-server
 `exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan through Hermes' own
 approval prompt or `/planmode approve`. It reads seven internal Hermes seams for session identity, workspace,
-profile and `skills.inline_shell`, each guarded and failing closed. It creates `<cwd>/.hermes/plans`, reads plan
+profile and `skills.inline_shell`, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
 files there, and keeps per-session state in plugin state. It adds a turn note while planning or executing, a
 ≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. When the user picks
 "Always" on a plan approval, Hermes core writes a `plugin_rule:plan-mode:…` entry to `command_allowlist` in
@@ -302,7 +308,7 @@ makes no network calls, launches no subprocesses and has no self-updater.
 <details>
 <summary>Internal Hermes seams read</summary>
 
-Each is imported lazily and wrapped in `try/except`.
+Each is reached through a lazy, guarded import or a guarded attribute read.
 
 1. `gateway.session_context.get_session_env`: session identity and platform. Missing → `/planmode on` refuses and
    nothing blocks.

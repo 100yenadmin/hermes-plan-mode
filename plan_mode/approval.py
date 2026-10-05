@@ -31,7 +31,11 @@ def _plain(text: str) -> str:
 def _title(text, summary, name) -> str:
     heading = re.search(r"^\s*#{1,6}\s+(.+)$", text, re.MULTILINE)
     title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
-    return re.sub(r"(?i)^plan\s*[:—-]\s*", "", title) or name
+    return re.sub(r"(?i)^plan(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
+
+
+# Platforms whose approval card cuts the whole prompt at a fixed size (WhatsApp Cloud: 1024-char body).
+_CARD_LIMITS = {"whatsapp_cloud": 1000}
 
 
 def approval_text(text, path, revision, platform, summary="") -> str:
@@ -50,12 +54,13 @@ def approval_text(text, path, revision, platform, summary="") -> str:
         result = f"Plan rev {revision}: {title}"
         result += "".join(f"\n{index}. {_plain(step)}" for index, step in enumerate(steps[:6], 1))
         return result if len(result) <= 250 else result[:249] + "…"
+    limit = _CARD_LIMITS.get(str(platform).lower(), 3500)
     prefix = f"Plan rev {revision} ({name}) — approve to start implementing, deny to keep planning.\n\n"
     result = prefix + text
-    if len(result) <= 3500:
+    if len(result) <= limit:
         return result
     suffix = f"\n… (truncated; full plan: {path})"
-    return result[:max(0, 3500 - len(suffix))] + suffix[:3500]
+    return result[:max(0, limit - len(suffix))] + suffix[:limit]
 
 
 class DecisionLedger:

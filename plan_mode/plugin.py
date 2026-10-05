@@ -81,6 +81,8 @@ _AGENT_NOTE = (
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress")
+# Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
+_FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open",)
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _TODO_HINT = (
@@ -1046,6 +1048,7 @@ class PlanModePlugin:
                 state["pending_note"] = ""
                 self._forget_submission(state)
                 state.pop("submission", None)
+                state.pop("approved_while_open", None)
                 self._clear_execution(state)
                 self._save_command_state(identity.key, command_storage_key, state)
                 self._sync_execution_family(command_storage_key, state)
@@ -1073,7 +1076,7 @@ class PlanModePlugin:
             copy = self._load_storage_state(other)
             if not copy or copy.get("active"):
                 continue
-            for field in _EXECUTION_FIELDS:
+            for field in _FAMILY_FIELDS:
                 if field in state:
                     copy[field] = state[field]
                 else:
@@ -1254,6 +1257,7 @@ class PlanModePlugin:
                     if state.pop("approved_while_open", None):
                         assert state_key is not None
                         self._save_state(state_key, state)
+                        self._sync_execution_family(_state_storage_key(state_key), state)
                     if state.get("active") and kwargs.get("status") != "ok" and submission.get("status") == "pending":
                         revision = submission["revision"]
                         if entry and entry.get("choice") == "deny":
