@@ -945,6 +945,9 @@ class PlanModePlugin:
                 if state.get("phase") != "executing":
                     return "There is no executing plan to finish."
                 self._clear_execution(state)
+                # Neither a still-open approval card nor a queued note may say "implement it now" after done.
+                state.pop("approved_while_open", None)
+                state["pending_note"] = ""
                 self._save_command_state(identity.key, command_storage_key, state)
                 self._sync_execution_family(command_storage_key, state)
                 return "The executing plan is done."
@@ -1010,6 +1013,10 @@ class PlanModePlugin:
                         pass
                 self._forget_submission(state)
                 self._save_command_state(identity.key, command_storage_key, state)
+                if card_open and "approved_while_open" in state:
+                    # The suspended submit call resumes with the implementation; injecting would start a second one.
+                    return (f"Plan approved. Plan mode is off. The agent implements {approved_path} as soon as the "
+                            "open approval prompt is answered or times out.")
                 started = False
                 try:
                     inject = getattr(self.ctx, "inject_message", None)

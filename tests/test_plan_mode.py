@@ -2016,6 +2016,33 @@ def test_u1_card_answer_after_typed_off_writes_nothing(plugin, submitted_plan):
     assert plugin.pre_llm_call() is None
 
 
+
+# Codex bot review on PR #7: a typed approve while the card is open resumes the suspended call; it never injects.
+def test_pr7_typed_approve_while_card_open_does_not_inject(plugin, submitted_plan):
+    directive = _submit(plugin)
+    reply = plugin.command("approve")
+    assert "Plan approved" in reply and "open approval prompt" in reply
+    assert plugin.ctx.injected == []
+    _decision(plugin, directive)
+    assert _submit_result(plugin)["approved"] is True
+
+
+@pytest.mark.parametrize("card", ["approve", "deny"])
+def test_pr7_done_while_card_open_cancels_the_resume(plugin, submitted_plan, card):
+    directive = _submit(plugin)
+    plugin.command("approve")
+    assert plugin.command("done") == "The executing plan is done."
+    if card == "approve":
+        _decision(plugin, directive)
+        result = _submit_result(plugin)
+        assert "approved" not in result and "nothing awaiting approval" in result["message"].lower()
+    else:
+        _decision(plugin, directive, "deny")
+        plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    state = plugin._load_state("sk:unit-session")
+    assert "approved_while_open" not in state and state.get("phase") != "executing"
+    assert "Implement" not in (state.get("pending_note") or "")
+
 def test_u1_cli_approval_text_is_one_line(tmp_path):
     from plan_mode.approval import approval_text
     text = "# Add divide\n\n## Goal\nDo it.\n\n1. Tests\n2. Code\n"
