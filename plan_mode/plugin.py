@@ -1361,7 +1361,7 @@ class PlanModePlugin:
             return {
                 "context": (
                     "Plan-mode state could not be read safely "
-                    f"({type(exc).__name__}); tool calls will fail closed."
+                    f"({type(exc).__name__}); if plan mode is on, its tool checks still fail closed."
                 )
             }
 
