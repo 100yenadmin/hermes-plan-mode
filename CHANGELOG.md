@@ -33,16 +33,18 @@
   reply prefixes work. A refused activation adds nothing and blocks nothing.
 - New planning turn note: read-only exploration, `clarify` for genuine ambiguity, an absolute plan path, show the full
   plan, then submit; no "should I proceed?" in prose. The note and the `/planmode on` reply give the current
-  timestamp for the plan file name, since the model cannot read the clock while `terminal` is blocked. While executing, a one-line pointer to the approved plan is
-  added each turn until the todo list is all completed or cancelled, `/planmode done|off`, a new activation, a reset,
-  or 100 turns.
+  timestamp for the plan file name, since the model cannot read the clock while `terminal` is blocked. While
+  executing, a one-line pointer to the approved plan is added each turn until the todo list is all completed or cancelled (todo writes only; a read of an earlier list
+  does not count), `/planmode done|off`, a new activation, `/new` or `/reset` (also when the gateway runs the reset
+  hook outside the session), or 100 turns. On TUI/Desktop the tab's command and hook copies stay in step.
 - A ≤200-char system-prompt hint names `plan_mode` for multi-step or risky changes (`plan_mode.agent_hint`, default
   true; skipped where the host has no prompt-section API).
 - Add `/planmode show [file]` (read-only, ≤3500 chars) and `/planmode done`. `/planmode status` reports the phase
   and the last submission.
 - A one-line footer on chat platforms: "⏸ Plan mode: nothing changes until you approve the plan." while planning,
-  "Plan progress n/m · now: <step>" while executing (`plan_mode.footer: auto|off`). Never on CLI, TUI, Desktop, API
-  server or webhook, and never on replies over 3000 chars.
+  "Plan progress n/m · now: <step>" while executing (`plan_mode.footer: auto|off`). Never on CLI, TUI, Desktop (also
+  not for a chat session resumed there), API server, webhook, cron or delegate subagents, and never on replies over
+  1800 chars. Delegate subagents get no turn note either.
 - Allow Tool Search's `tool_search` and `tool_describe` in plan mode (a `tool_call` is checked as the inner tool), so
   the model can find `plan_mode` and `todo_list` without a detour.
 - `args_hint` is now `[on|status|show|approve|reject|done|off] [task]`, which Telegram's command menu accepts.

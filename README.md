@@ -247,8 +247,12 @@ plugins:
   a new upstream plugin API, proposed in
   [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306) together with
   plan-shaped approval wording.
-- **Footer limits.** Chat platforms only (never CLI, TUI, Desktop, API server or webhook), and only on replies of
-  3000 chars or fewer, because a long streamed reply would be re-sent.
+- **Footer limits.** Chat platforms only: never CLI, TUI, Desktop (also not for a chat session resumed in Desktop),
+  API server, webhook, cron or delegate subagents. Only on replies of 1800 chars or fewer, because adding a footer to
+  a longer streamed reply could re-send part of it.
+- **Other output transforms.** Hermes keeps only the first plugin's `transform_llm_output` result. While the footer
+  shows, another plugin's output transform (for example a redactor) may not run on that reply; set
+  `plan_mode.footer: off` if you rely on one.
 - **Telegram, Slack and Discord approval text** is a short summary; the full plan comes from the agent's reply or
   `/planmode show`.
 - **Duplicate submits on hosts without tool call ids.** Hermes builds that pass no `tool_call_id` to hooks cannot
