@@ -2162,7 +2162,7 @@ def test_u2r_todo_read_does_not_end_execution(plugin, session_env, executing_pla
 # Codex review R2 fixes.
 @pytest.mark.parametrize("heading, title", [
     ("Plan: Add power", "Add power"), ("Plan — Add power", "Add power"), ("Plan-mode docs", "Plan-mode docs"),
-    ("Planner fixes", "Planner fixes"),
+    ("Planner fixes", "Planner fixes"), ("Plan: Fix checkout ###", "Fix checkout"), ("Update C#", "Update C#"),
 ])
 def test_r2_title_keeps_compound_words(tmp_path, heading, title):
     from plan_mode.approval import approval_text
@@ -2288,3 +2288,156 @@ def test_v032_tui_submission_uses_one_line_card_text(plugin, session_env, tmp_pa
     plugin.post_tool_call("write_file", args, status="ok", **ids)
     message = _submit(plugin)["message"]
     assert "\n" not in message and len(message) < 400 and "Plan rev 1" in message
+
+
+# v0.3.3: the short chat summary lists the plan's steps, not its section headings.
+_CORE_TEMPLATE_PLAN = """# Plan: Add greet()
+
+## Goal
+
+Add a greet() helper.
+
+## Current context / assumptions
+
+- Workspace root: /srv/project
+- Nothing exists yet.
+
+## Architecture / proposed approach
+
+One function, one test file.
+
+## Step-by-step tasks
+
+### Step 1 — Write the failing test (2 min)
+
+Details.
+
+### Step 2 — Implement greet() (2 min)
+
+Details.
+
+### Step 3: Run the tests
+
+Details.
+
+## Tests / validation
+
+- pytest -q
+
+## Risks, tradeoffs, and open questions
+
+- None.
+"""
+
+
+@pytest.mark.parametrize("platform", ["telegram", "slack", "discord"])
+def test_v033_chat_summary_lists_steps_from_the_core_template(tmp_path, platform):
+    from plan_mode.approval import approval_text
+    result = approval_text(_CORE_TEMPLATE_PLAN, str(tmp_path / "p.md"), 1, platform)
+    assert result.splitlines() == [
+        "Plan rev 1: Add greet()", "1. Write the failing test (2 min)", "2. Implement greet() (2 min)",
+        "3. Run the tests"]
+    assert "Goal" not in result and "/srv/project" not in result
+
+
+def test_v033_chat_summary_uses_the_step_section_list_items(tmp_path):
+    from plan_mode.approval import approval_text
+    text = "# Plan (v2): Ship it\n\n## Goal\n\n- Ship.\n\n## Steps\n\n1. Build\n2. Test\n\n## Risks\n\n- Late.\n"
+    assert approval_text(text, str(tmp_path / "p.md"), 2, "telegram").splitlines() == [
+        "Plan rev 2: Ship it", "1. Build", "2. Test"]
+
+
+def test_v033_chat_summary_falls_back_to_step_headings_then_numbered_items(tmp_path):
+    from plan_mode.approval import approval_text
+    headings = "# Fix\n\n## Context\n\n- x\n\n## Step 1: Patch\n\n## Step 2: Verify\n"
+    assert approval_text(headings, str(tmp_path / "p.md"), 1, "slack").splitlines()[1:] == ["1. Patch", "2. Verify"]
+    numbered = "Fix the bug.\n\n- background note\n1. Reproduce\n2. Patch\n"
+    assert approval_text(numbered, str(tmp_path / "p.md"), 1, "discord").splitlines()[1:] == [
+        "1. Reproduce", "2. Patch"]
+
+
+def test_v033_chat_summary_skips_meta_headings_without_a_step_section(tmp_path):
+    from plan_mode.approval import approval_text
+    text = "# Tidy\n\n## Goal\n\n## Rename module\n\n## Update imports\n\n## Risks\n"
+    assert approval_text(text, str(tmp_path / "p.md"), 1, "telegram").splitlines()[1:] == [
+        "1. Rename module", "2. Update imports"]
+
+
+def test_v033_chat_summary_is_linear_in_headings():
+    import time
+    from plan_mode.approval import _steps
+    started = time.monotonic()
+    assert _steps("# X\n" + "## Steps\n" * 30000 + "## Steps\n1. ship\n") == ["ship"]
+    assert time.monotonic() - started < 3
+
+
+@pytest.mark.parametrize("text,expected", [
+    # A "Step N" heading with detail bullets is a step, not a section of steps.
+    ("# X\n\n## Step 1: Add API\n\n- route\n- handler\n\n## Step 2: Add tests\n\n- unit\n", ["Add API", "Add tests"]),
+    # Only the step section's direct child headings are steps; deeper headings are details.
+    ("# X\n\n## Steps\n\n### Add API\n\n#### Files\n\n#### Notes\n\n### Add tests\n", ["Add API", "Add tests"]),
+    # A generic heading that holds a numbered list is a container, not a step.
+    ("# X\n\n## Proposed changes\n\n1. Patch the parser\n2. Ship it\n", ["Patch the parser", "Ship it"]),
+    # A marker with trailing text does not close a fence, so a "## comment" inside stays code.
+    ("# X\n\n## Steps\n\n1. Patch\n\n```\n```not-close\n## Comment\n```\n\n2. Ship\n", ["Patch", "Ship"]),
+    # A label sub-heading inside the step section is not a step, and its bullets are not steps either.
+    ("# X\n\n## Steps\n\n1. Build\n2. Ship\n\n### Tests\n\n- run pytest\n", ["Build", "Ship"]),
+    # A "changes" section is a work section, so its bullets are the steps.
+    ("# X\n\n## Context\n\n- legacy\n\n## Proposed changes\n\n- Build the API\n- Add tests\n",
+     ["Build the API", "Add tests"]),
+    # Numbered steps win over another section's bullets; that section shows as its heading.
+    ("# X\n\n## Design\n\n- reuse the cache\n\n## Checklist\n\n1. Add the flag\n2. Ship\n",
+     ["Design", "Add the flag", "Ship"]),
+    # The last-resort bullet list skips label sections too.
+    ("# Plan\n- Build\n## Context\n- legacy\n", ["Build"]),
+    # Task headings keep their place; the bullets under them are details.
+    ("# X\n\n## Add API endpoint\n\n- api/routes.py\n- api/schema.py\n\n## Add tests\n\n- tests/test_api.py\n",
+     ["Add API endpoint", "Add tests"]),
+    # "Implementation notes" is a label section; the steps come from the real one.
+    ("# X\n\n## Implementation notes\n\n- needs the v2 client\n\n## Steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
+    # A hash line in indented code is not a heading, so it does not end the section.
+    ("# X\n\n## Steps\n\n1. Write config\n\n        ## generated configuration\n\n2. Deploy\n", ["Write config", "Deploy"]),
+    # A task heading that merely contains a work word is a task, not a work section.
+    ("# X\n\n## Apply changes to parser\n\n- parser.py\n\n## Run tests\n\n- tests/test_parser.py\n",
+     ["Apply changes to parser", "Run tests"]),
+    # "Test plan" is a label section, not the approach.
+    ("# X\n\n## Add API\n\n## Deploy API\n\n## Test plan\n\n- Run pytest\n", ["Add API", "Deploy API"]),
+    # A label-suffixed section and its numbered notes stay out of the fallback.
+    ("# X\n\n## Implementation notes\n\n1. needs the v2 client\n\n## Add API\n\n## Deploy API\n",
+     ["Add API", "Deploy API"]),
+    # A task heading that ends in a label word is still a task.
+    ("# X\n\n## Add API\n\n## Write release notes\n\n## Deploy\n", ["Add API", "Write release notes", "Deploy"]),
+    # A "Step N" prefix needs a boundary after the number, so "Phase 2FA rollout" is not cut.
+    ("# X\n\n## Phase 2FA rollout\n\n## Step 1Password integration\n",
+     ["Phase 2FA rollout", "Step 1Password integration"]),
+    # A literal fence marker in indented code does not open a fence.
+    ("# X\n\n## Steps\n\n1. Build\n\n        ```\n\n2. Ship\n", ["Build", "Ship"]),
+    # A document title that reads like a label does not hide the sections under it.
+    ("# Context\n\n## Steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
+    # A label suffix counts only from the start of the heading.
+    ("# X\n\n## Add API\n\n## Write implementation notes\n", ["Add API", "Write implementation notes"]),
+    # Validation/rollback steps are labels; the implementation steps are the work.
+    ("# X\n\n## Validation steps\n\n- run pytest\n\n## Implementation steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
+    # A detail section under a "Step N" heading does not replace the step headings.
+    ("# X\n\n## Step 1: Add API\n\n### Changes\n\n- api.py\n\n## Step 2: Add tests\n", ["Add API", "Add tests"]),
+    # A dotted step number is removed whole.
+    ("# X\n\n## Step 1.1: Build API\n\n## Step 1.2: Add tests\n", ["Build API", "Add tests"]),
+    # Numbered items under a label heading are not steps.
+    ("# X\n\n## Deploy production\n\n## Risks\n\n1. Downtime\n2. Data loss\n", ["Deploy production"]),
+    # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.
+    ("# X\n\n## Context\n\n- legacy parser\n\n## Proposed Approach\n\n- Patch it\n- Ship it\n", ["Patch it", "Ship it"]),
+    # A leading issue reference keeps its hash.
+    ("# X\n\n## Steps\n\n1. #123 Fix the parser\n2. Ship\n", ["#123 Fix the parser", "Ship"]),
+    # A literal trailing hash is part of the title.
+    ("# X\n\n## Tasks\n\n### Update C#\n\n### Update F#\n", ["Update C#", "Update F#"]),
+    # Only label headings are meta; a task that starts with "Test" is kept.
+    ("# X\n\n## Implement endpoint\n\n## Test endpoint\n\n## Deploy endpoint\n",
+     ["Implement endpoint", "Test endpoint", "Deploy endpoint"]),
+    # A heading-like line inside fenced code does not end the section.
+    ("# X\n\n## Steps\n\n1. Write config\n\n```sh\n## generated configuration\n```\n\n2. Deploy\n",
+     ["Write config", "Deploy"]),
+])
+def test_v033_chat_summary_edge_cases(tmp_path, text, expected):
+    from plan_mode.approval import approval_text
+    lines = approval_text(text, str(tmp_path / "p.md"), 1, "telegram").splitlines()[1:]
+    assert lines == [f"{index}. {step}" for index, step in enumerate(expected, 1)]

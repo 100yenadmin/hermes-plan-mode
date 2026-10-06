@@ -25,17 +25,127 @@ def plan_digest(path) -> tuple[str, str]:
 
 def _plain(text: str) -> str:
     text = re.sub(r"!?\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    return " ".join(re.sub(r"[*_`#~]", "", text).split())
+    return " ".join(re.sub(r"[*_`~]", "", re.sub(r"^\s*#+\s+", "", text)).split())
 
 
 def _title(text, summary, name) -> str:
-    heading = re.search(r"^\s*#{1,6}\s+(.+)$", text, re.MULTILINE)
+    heading = re.search(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$", text, re.MULTILINE)
     title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
-    return re.sub(r"(?i)^plan(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
+    return re.sub(r"(?i)^plan(?:\s*\([^)]*\))?(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
 
 
 # Platforms whose approval card cuts the whole prompt at a fixed size (WhatsApp Cloud: 1024-char body).
 _CARD_LIMITS = {"whatsapp_cloud": 1000}
+
+
+# Section headings that hold the work itself (core /plan asks for "Step-by-step tasks"): the work word ends the label,
+# so a task heading such as "Apply changes to parser" is not one. Section labels that never hold the work are made only
+# of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept, or end in a label word.
+_SECTION_END = r"\s*(?:\([^)]*\))?\s*:?$"
+_STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes){_SECTION_END}")
+_APPROACH_SECTION = re.compile(rf"(?i)\b(approach|plan){_SECTION_END}")
+_META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
+              r"(?:test(?:ing)?|validation|verification|qa|rollback) (?:plan|steps)|"
+              r"architecture(?:\s*/\s*proposed approach)?|tests?|testing|validation|verification|risks?|tradeoffs|open questions|notes?|"
+              r"out of scope|non-goals|files(?: likely to change)?)")
+_META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_META_WORD})?)*:?$")
+# A work word followed by a label word ("Implementation notes", "Task overview") is a label section too; a task such
+# as "Write release notes" is not.
+_META_TAIL = re.compile(r"(?i)^(?:steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes|approach|"
+                        r"plan)\s+(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
+                        r"open questions|non-goals|out of scope)\s*:?$")
+_STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+(?:\.\d+)*[a-z]?(?![a-z0-9])\s*[:.)—–-]*\s*")
+_HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")  # 4+ spaces is indented code
+_LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.+)$")
+
+
+def _unfenced(text: str) -> list[str]:
+    """The plan's lines with fenced code blanked, so a `# comment` in a snippet is not a heading."""
+    lines, fence = [], ""
+    for line in text.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)  # 4+ spaces is indented code
+        if fence:
+            # Only a bare marker of the opener's kind and at least its length closes the fence.
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = ""
+            lines.append("")
+        elif marker:
+            fence = marker[1]
+            lines.append("")
+        else:
+            lines.append(line)
+    return lines
+
+
+def _steps(text: str) -> list[str]:
+    """Pick the plan's steps for a short chat summary, not its section headings."""
+    lines = _unfenced(text)
+    # One pass: (line, level, text, label is meta or sits under one), each heading's direct children and
+    # section end, and whether its section holds numbered items (meta parts excluded).
+    headings, children, ends, numbered, under_step, open_ = [], [], [], [], [], []
+    for index, line in enumerate(lines):
+        if (match := _HEADING.match(line)):
+            level, heading = len(match[1]), _plain(match[2])
+            while open_ and headings[open_[-1]][1] >= level:
+                ends[open_.pop()] = index
+            # A label section's sub-headings are labels too; the document title (level 1) passes nothing down.
+            meta = (bool(_META_SECTION.match(heading) or _META_TAIL.search(heading))
+                    or bool(open_ and headings[open_[-1]][1] > 1 and headings[open_[-1]][3]))
+            if open_:
+                children[open_[-1]].append(len(headings))
+            # A section nested under a "Step N" heading is that step's detail ("### Changes"), not the plan's work list.
+            under_step.append(any(_STEP_PREFIX.match(headings[position][2]) for position in open_))
+            headings.append((index, level, heading, meta))
+            children.append([]); ends.append(len(lines)); numbered.append(False)
+            open_.append(len(headings) - 1)
+        elif open_ and not headings[open_[-1]][3] and _LIST_ITEM.match(line) and line[0].isdigit():
+            for position in open_:
+                numbered[position] = True
+
+    def section_items(position: int) -> list[str]:
+        named = [headings[child][2] for child in children[position] if not headings[child][3]]
+        if named:
+            return named  # direct sub-headings are the steps; their own sub-headings are details
+        body_end = headings[children[position][0]][0] if children[position] else ends[position]
+        return [match[1] for line in lines[headings[position][0] + 1:body_end] if (match := _LIST_ITEM.match(line))]
+
+    def clean(items: list[str]) -> list[str]:
+        return [_STEP_PREFIX.sub("", _plain(item)) or _plain(item) for item in items]
+
+    for pattern in (_STEP_SECTION, _APPROACH_SECTION):
+        for position, (_, level, heading, meta) in enumerate(headings):
+            if (level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading)
+                    and not under_step[position]):
+                items = section_items(position)
+                if items:
+                    return clean(items)
+    step_headings = [heading for _, level, heading, meta in headings
+                     if level > 1 and not meta and _STEP_PREFIX.match(heading)]
+    if step_headings:
+        return clean(step_headings)
+    # No step section, in document order: numbered items, plus sub-headings that hold no numbered list (bullets under
+    # a heading are its details). Label sections are skipped.
+    by_line = {heading[0]: position for position, heading in enumerate(headings)}
+    owner, current = [], None
+    for index in range(len(lines)):
+        current = by_line.get(index, current)
+        owner.append(current)
+    items = {index: match[1] for index, line in enumerate(lines)
+             if index not in by_line and not (owner[index] is not None and headings[owner[index]][3])
+             and (match := _LIST_ITEM.match(line))}
+    ordered = []
+    for index in range(len(lines)):
+        if index in by_line:
+            position = by_line[index]
+            _, level, heading, meta = headings[position]
+            if 2 <= level <= 3 and not meta and not numbered[position]:
+                ordered.append(heading)
+        elif index in items and lines[index][0].isdigit():
+            ordered.append(items[index])
+    if ordered:
+        return ordered
+    bullet_items = [item for index, item in items.items() if not lines[index][0].isdigit()]
+    return bullet_items or [line for line in text.splitlines() if line.strip()]
 
 
 def approval_text(text, path, revision, platform, summary="") -> str:
@@ -48,9 +158,7 @@ def approval_text(text, path, revision, platform, summary="") -> str:
                 "approve to start implementing, deny to keep planning.")
     if str(platform).lower() in {"telegram", "slack", "discord"}:
         title = _title(text, summary, name)
-        steps = re.findall(r"^(?:[-*+]\s+|\d+[.)]\s+|#{2,3}\s+)(.+)$", text, re.MULTILINE)
-        if not steps:
-            steps = [line for line in text.splitlines() if line.strip()]
+        steps = _steps(text)
         result = f"Plan rev {revision}: {title}"
         result += "".join(f"\n{index}. {_plain(step)}" for index, step in enumerate(steps[:6], 1))
         return result if len(result) <= 250 else result[:249] + "…"
