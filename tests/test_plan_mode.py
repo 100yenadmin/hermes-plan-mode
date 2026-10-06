@@ -2370,6 +2370,8 @@ def test_v033_chat_summary_skips_meta_headings_without_a_step_section(tmp_path):
     ("# X\n\n## Steps\n\n### Add API\n\n#### Files\n\n#### Notes\n\n### Add tests\n", ["Add API", "Add tests"]),
     # A generic heading that holds a numbered list is a container, not a step.
     ("# X\n\n## Proposed changes\n\n1. Patch the parser\n2. Ship it\n", ["Patch the parser", "Ship it"]),
+    # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.
+    ("# X\n\n## Context\n\n- legacy parser\n\n## Proposed Approach\n\n- Patch it\n- Ship it\n", ["Patch it", "Ship it"]),
     # A leading issue reference keeps its hash.
     ("# X\n\n## Steps\n\n1. #123 Fix the parser\n2. Ship\n", ["#123 Fix the parser", "Ship"]),
     # A literal trailing hash is part of the title.

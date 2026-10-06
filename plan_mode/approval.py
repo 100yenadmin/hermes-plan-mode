@@ -42,8 +42,8 @@ _CARD_LIMITS = {"whatsapp_cloud": 1000}
 # do. A label heading is made only of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept.
 _STEP_SECTION = re.compile(r"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution)\b")
 _APPROACH_SECTION = re.compile(r"(?i)\b(approach|plan)\b")
-_META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|architecture|"
-              r"proposed approach|tests?|testing|validation|verification|risks?|tradeoffs|open questions|notes?|"
+_META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
+              r"architecture(?:\s*/\s*proposed approach)?|tests?|testing|validation|verification|risks?|tradeoffs|open questions|notes?|"
               r"out of scope|non-goals|files(?: likely to change)?)")
 _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_META_WORD})?)*:?$")
 _STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?\s*[:.)—–-]*\s*")
