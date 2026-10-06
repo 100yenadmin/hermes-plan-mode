@@ -2928,6 +2928,8 @@ def test_035_commits_off_clarify_approval_then_pointer(plugin, submitted_plan):
     ("## Step 1: **Create** `ledger/csvio.py`", "Step 1: Create ledger/csvio.py"),
     ("**bold** *it* ~~gone~~ ***both***", "bold it gone both"),
     ("[docs](https://example.invalid) and ![img](x.png)", "docs and img"),
+    ('Read [API docs](https://example.invalid/api "API reference")', "Read API docs"),
+    ("See [setup](https://example.invalid/setup(v2)) first", "See setup first"),
 ])
 def test_035_summary_keeps_identifier_underscores(text, expected):
     from plan_mode.approval import _plain
@@ -2939,7 +2941,7 @@ def test_035_summary_cleaning_is_linear_on_malformed_markdown():
     import time
     from plan_mode.approval import _plain
     for line in (("*a " * 33334)[:100000], ("_a " * 33334)[:100000], "`" * 100000, "~" * 100000, "[" * 100000,
-                 "[a](" * 25000, "[a](x" * 20000):
+                 "[a](" * 25000, "[a](x" * 20000, "[a](" + "(x)" * 33000, "[a](" + "(" * 99996, "[a](" + "x " * 49998):
         start = time.perf_counter()
         _plain(line)
         assert time.perf_counter() - start < 0.5

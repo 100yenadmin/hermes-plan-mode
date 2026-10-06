@@ -58,8 +58,9 @@ def plan_digest(path) -> tuple[str, str]:
 def _plain(text: str) -> str:
     # Underscores are kept: compact plans name snake_case functions and __init__.py files, and an identifier is worth
     # more in a chat summary than hiding _underscore emphasis_. One character class, so it is linear and idempotent.
-    # Link text and URL stop at the next bracket, so a line of unmatched "[" or "](" stays linear.
-    text = re.sub(r"!?\[([^\[\]]+)\]\([^()\[\]\s]*\)", r"\1", text)
+    # Link text and destination stop at brackets and newlines (one level of parentheses and a title are allowed), so a
+    # line of unmatched "[" or "](" stays linear.
+    text = re.sub(r"!?\[([^\[\]]+)\]\((?:[^()\[\]\n]|\([^()\[\]\n]*\))*\)", r"\1", text)
     return " ".join(re.sub(r"[*`~]", "", re.sub(r"^\s*#+\s+", "", text)).split())
 
 
