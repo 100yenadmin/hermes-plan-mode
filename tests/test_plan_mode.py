@@ -89,6 +89,7 @@ def test_registers_exact_surface(plugin):
 
 
 def test_command_state_machine_and_one_shot_notes(plugin, session_env, tmp_path, monkeypatch):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     session_env["TERMINAL_CWD"] = str(tmp_path)
     monkeypatch.chdir(tmp_path)
 
@@ -1489,6 +1490,7 @@ def test_u1_only_correlated_human_decision_approves(plugin, submitted_plan, deci
 
 
 def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submitted_plan):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     _submit(plugin)
     assert "no human has approved" in _submit_result(plugin)["message"]
     newer = submitted_plan.with_name("newer.md")
@@ -1503,6 +1505,7 @@ def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submi
 
 @pytest.mark.parametrize("inject_kind", ["false", "missing", "raises", "cli"])
 def test_u1_typed_approval_injection_fallback(plugin, session_env, submitted_plan, inject_kind):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     if inject_kind == "false":
         plugin.ctx.inject_result = False
     elif inject_kind == "missing":
@@ -1720,6 +1723,7 @@ def test_u2_builtin_refusal_injects_nothing(plugin, session_env, tmp_path, monke
 
 
 def test_u2_exact_planning_note_and_pending_first(plugin, session_env, tmp_path, monkeypatch):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     from plan_mode import render as render_mod
     monkeypatch.setattr(render_mod, "plan_file_stamp", lambda now=None: "2026-10-05_120000")
     session_env["TERMINAL_CWD"] = str(tmp_path)
@@ -1751,6 +1755,7 @@ def executing_plan(plugin, submitted_plan):
 
 
 def test_u2_executing_pointer_and_turn_expiry(plugin, executing_plan):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     expected = f"Executing the approved plan {executing_plan} (rev 1). Keep todo_list statuses current; re-read the plan if your context was compacted."
     assert plugin.pre_llm_call() == {"context": expected}
     state = plugin._load_state("sk:unit-session")
@@ -2073,6 +2078,7 @@ def test_pr7_typed_approve_while_card_open_does_not_inject(plugin, submitted_pla
 # CodeRabbit on PR #7: a deny or timeout blocks the submit call, so the typed approval starts the work from there.
 @pytest.mark.parametrize("card", ["deny", "timeout"])
 def test_pr7_typed_approve_then_card_blocked_starts_the_work_once(plugin, submitted_plan, card):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     directive = _submit(plugin)
     plugin.command("approve")
     if card == "deny":
@@ -2791,7 +2797,7 @@ def _note(plugin, tmp_path, monkeypatch, session_env, **settings):
 
 def test_035_compact_style_replaces_the_plan_craft(plugin, session_env, tmp_path, monkeypatch):
     from plan_mode.render import COMPACT_PLAN, NO_COMMITS
-    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact")
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", allow_commits=True)
     plans = tmp_path / ".hermes" / "plans"
     assert (f"2. Write the plan as Markdown to {plans}/2026-10-05_120000-<slug>.md (that timestamp is current; "
             f"do not look up the time). {COMPACT_PLAN}\n") in note
@@ -2806,14 +2812,37 @@ def test_035_plan_skill_wins_over_style(plugin, session_env, tmp_path, monkeypat
 
 @pytest.mark.parametrize("bad", ["", "  ", "two words", "x" * 101, "../etc/passwd;rm", 42])
 def test_035_invalid_plan_skill_is_ignored(plugin, session_env, tmp_path, monkeypatch, bad):
+    from plan_mode.render import COMPACT_PLAN
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_skill=bad)
-    assert "skill_view" not in note and "with numbered steps" in note
+    assert "skill_view" not in note and COMPACT_PLAN in note
 
 
 @pytest.mark.parametrize("value", ["fancy", None, 3])
-def test_035_unknown_style_falls_back_to_core(plugin, session_env, tmp_path, monkeypatch, value):
+def test_035_unknown_style_falls_back_to_the_default(plugin, session_env, tmp_path, monkeypatch, value):
+    from plan_mode.render import COMPACT_PLAN
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style=value)
-    assert "with numbered steps" in note
+    assert COMPACT_PLAN in note and "with numbered steps" not in note
+
+
+def test_035_core_style_keeps_the_numbered_steps_note(plugin, session_env, tmp_path, monkeypatch):
+    from plan_mode.render import COMPACT_PLAN
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style=" Core ")
+    assert "with numbered steps" in note and COMPACT_PLAN not in note
+
+
+# Round-2 campaign (TEST-PLAN-2): compact plans without commits met every pre-declared bar, so they are the default.
+def test_035_defaults_are_compact_plans_without_commits(plugin, session_env, tmp_path, monkeypatch):
+    from plan_mode.render import COMPACT_PLAN, NO_COMMITS
+    note = _note(plugin, tmp_path, monkeypatch, session_env)
+    assert f"{COMPACT_PLAN} {NO_COMMITS}\n" in note
+    assert plugin_mod._DEFAULT_PLAN_STYLE == "compact" and plugin_mod._DEFAULT_ALLOW_COMMITS is False
+
+
+@pytest.mark.parametrize("value", ["maybe", 3, 0, [], {"x": 1}])
+def test_035_unrecognised_allow_commits_keeps_commits_off(plugin, session_env, tmp_path, monkeypatch, value):
+    from plan_mode.render import NO_COMMITS
+    note = _note(plugin, tmp_path, monkeypatch, session_env, allow_commits=value)
+    assert NO_COMMITS in note
 
 
 @pytest.mark.parametrize("value", [False, "false", "off", "no", "0", " Off "])
@@ -2828,11 +2857,10 @@ def test_035_commits_off_reaches_every_execution_message(plugin, session_env, tm
     assert plugin.pre_llm_call()["context"].endswith(NO_COMMITS)
 
 
-@pytest.mark.parametrize("value", [True, "true", "yes", None])
+@pytest.mark.parametrize("value", [True, "true", "yes", "on", "1", " True "])
 def test_035_commits_allowed_keeps_the_043_text(plugin, session_env, submitted_plan, value):
     from plan_mode.render import NO_COMMITS
-    if value is not None:
-        plugin.ctx.settings["allow_commits"] = value
+    plugin.ctx.settings["allow_commits"] = value
     assert NO_COMMITS not in plugin.pre_llm_call()["context"]
     directive = _submit(plugin)
     _decision(plugin, directive)

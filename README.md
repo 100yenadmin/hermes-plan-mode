@@ -173,9 +173,14 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`; applies to new sessions |
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
-| Plan style (`plan_style`) | `core` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
-| Allow commits (`allow_commits`) | on | Off: the agent neither plans nor makes git commits unless you ask, so changes stay uncommitted for your review |
+| Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
+| Allow commits (`allow_commits`) | off | Off: the agent neither plans nor makes git commits unless you ask, so changes stay uncommitted for your review. On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style |
+
+Compact plans without commits are the default since 0.3.5. In an end-to-end comparison on eight coding tasks (same
+model, blind judge, one run per task), compact plans were about half as long as core's and every task still passed its
+checks. The judge scored plan fit plus clarity 10.0 of 10, against 8.9 for core. Median time per task fell from 194 s to
+151 s, and token use was about the same. Set `plan_style: core` and `allow_commits: true` to get the 0.3.4 behaviour back.
 
 Or set them in the profile's `config.yaml` (flat keys under `settings`):
 
@@ -189,8 +194,8 @@ plugins:
         agent_hint: true
         footer: "off"                   # quote it: a bare off is read as false (also honored)
         extra_allowed_tools: []
-        plan_style: core                # or compact
-        allow_commits: true
+        plan_style: compact             # or core
+        allow_commits: false
         plan_skill: ""                  # e.g. durable-plan-contract
 ```
 

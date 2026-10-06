@@ -95,8 +95,8 @@ _TODO_HINT = (
 )
 
 _PLAN_STYLES = frozenset({"compact", "core"})
-_DEFAULT_PLAN_STYLE = "core"
-_DEFAULT_ALLOW_COMMITS = True
+_DEFAULT_PLAN_STYLE = "compact"
+_DEFAULT_ALLOW_COMMITS = False
 _PLAN_SKILL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
 
 _V4A_FILE_RE = re.compile(
@@ -1176,10 +1176,17 @@ class PlanModePlugin:
 
     def _allow_commits(self) -> bool:
         # YAML 1.1 reads a bare `off`/`no` as False; quoted strings are accepted as well.
+        # Anything unrecognised falls back to the default rather than turning commits on.
         value = self._config("allow_commits", _DEFAULT_ALLOW_COMMITS)
+        if isinstance(value, bool):
+            return value
         if isinstance(value, str):
-            return value.strip().lower() not in {"false", "off", "no", "0"}
-        return value is not False
+            word = value.strip().lower()
+            if word in {"true", "on", "yes", "1"}:
+                return True
+            if word in {"false", "off", "no", "0"}:
+                return False
+        return _DEFAULT_ALLOW_COMMITS
 
     def _commit_rule(self) -> str:
         return "" if self._allow_commits() else f" {NO_COMMITS}"

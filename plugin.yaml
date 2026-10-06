@@ -1,5 +1,5 @@
 name: plan-mode
-version: "0.3.4"
+version: "0.3.5"
 description: "Enforced plan mode with Claude Code-style approval on every interactive Hermes surface. /plan or /planmode on blocks mutating tools dispatched through pre_tool_call, except plan writes under .hermes/plans. The agent submits the plan with plan_mode(submit) and you approve it through Hermes' own approval prompt (buttons, card, CLI panel or /approve); it then implements in the same turn and tracks todo_list progress. Deny keeps planning. Gateway/TUI/Desktop need Hermes v2026.9.24. Not enforced: Codex app-server exec/applyPatch, TUI /background and btw."
 author: 100yenadmin
 kind: standalone
@@ -35,12 +35,12 @@ config_schema:
   plan_style:
     type: str
     choices: [compact, core]
-    default: core
+    default: compact
     label: Plan style
     description: "compact writes a short, decision-complete plan (the Claude Code and Codex style). core keeps Hermes' /plan craft: zero-context tasks, full code and a commit per step."
   allow_commits:
     type: bool
-    default: true
+    default: false
     label: Allow commits
     description: Off tells the agent not to plan or make git commits unless you ask, so the changes stay uncommitted for your review.
   plan_skill:
