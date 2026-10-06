@@ -191,7 +191,8 @@ plugins:
 - `allow_gateway_injection` is a core Hermes setting, outside `settings`, so it is not in the form. It lets this
   plugin queue a message into a gateway or TUI/Desktop session; the plugin uses it only to start implementation
   after a typed `/planmode approve`.
-- The nested `settings.plan_mode.<key>` layout from earlier versions is still read, but a flat key wins.
+- The nested `settings.plan_mode.<key>` layout from earlier versions is still read when the flat key is unset, but
+  the form shows only flat keys: move old values up one level so the form and the plugin agree.
 
 ## Compared with other plan modes
 
