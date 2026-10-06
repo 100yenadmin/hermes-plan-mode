@@ -82,6 +82,7 @@ _SECTION_END = r"\s*(?:\([^)]*\))?\s*:?$"
 _STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution){_SECTION_END}")
 # A per-file "Changes" list is work too, but the compact format puts it before its numbered Steps: Steps win.
 _CHANGES_SECTION = re.compile(rf"(?i)\bchanges{_SECTION_END}")
+_CHANGES_WORD = re.compile(r"(?i)\bchanges\b")  # "Changes", "Changes per file", "File changes"
 _APPROACH_SECTION = re.compile(rf"(?i)\b(approach|plan){_SECTION_END}")
 _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
               r"(?:test(?:ing)?|validation|verification|qa|rollback) (?:plan|steps)|"
@@ -135,7 +136,9 @@ def _steps(text: str) -> list[str]:
             # A section nested under a "Step N" heading is that step's detail ("### Changes"), not the plan's work list.
             under_step.append(any(_STEP_PREFIX.match(headings[position][2]) for position in open_))
             # Likewise "### Parser implementation" under "## Changes" groups changes; it must not outrank "## Steps".
-            under_changes.append(any(_CHANGES_SECTION.search(headings[position][2]) for position in open_))
+            # The document title (level 1) is not a section: "# Parser changes" must not hide the plan's own Steps.
+            under_changes.append(any(headings[position][1] > 1 and _CHANGES_WORD.search(headings[position][2])
+                                     for position in open_))
             headings.append((index, level, heading, meta))
             children.append([]); ends.append(len(lines)); numbered.append(False)
             open_.append(len(headings) - 1)

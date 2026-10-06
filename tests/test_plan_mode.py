@@ -3003,3 +3003,21 @@ def test_035_nested_changes_groups_do_not_outrank_steps():
     plan = "# Parser errors\n## Goal\nReport errors.\n" + changes + steps + "## Validation\n- pytest -q\n"
     assert _steps(plan) == ["Add token positions. Check: parser tests.", "Handle errors in the CLI. Check: CLI tests."]
     assert _steps("# Parser errors\n" + changes) == ["Parser implementation", "CLI implementation"]
+
+
+
+@pytest.mark.parametrize("title, changes_heading", [
+    ("# Parser changes", "## Changes"), ("# Changes", "## Changes"), ("# Parser errors", "## Changes per file"),
+    ("# Parser errors", "## File changes"),
+])
+def test_035_changes_titles_and_decorated_headings_keep_the_steps(title, changes_heading):
+    from plan_mode.approval import _steps
+    changes = (f"{changes_heading}\n### Parser implementation\n- src/parser.py: include token position.\n"
+               "### CLI implementation\n- src/cli.py: exit 2.\n")
+    for steps in ("## Steps\n1. Add token positions.\n2. Handle CLI errors.\n",
+                  "## Steps\n- Add token positions.\n- Handle CLI errors.\n",
+                  "## Step-by-step tasks\n- Add token positions.\n- Handle CLI errors.\n"):
+        plan = f"{title}\n## Goal\nBetter errors.\n" + changes + steps + "## Validation\n- pytest\n"
+        assert _steps(plan) == ["Add token positions.", "Handle CLI errors."], (title, changes_heading, steps)
+    assert _steps(f"{title}\n## Goal\nBetter errors.\n## Steps\n- Add token positions.\n- Handle CLI errors.\n") == [
+        "Add token positions.", "Handle CLI errors."]
