@@ -25,7 +25,7 @@ def plan_digest(path) -> tuple[str, str]:
 
 def _plain(text: str) -> str:
     text = re.sub(r"!?\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    return " ".join(re.sub(r"[*_`~]", "", re.sub(r"^\s*#+\s*", "", text)).split())
+    return " ".join(re.sub(r"[*_`~]", "", re.sub(r"^\s*#+\s+", "", text)).split())
 
 
 def _title(text, summary, name) -> str:
