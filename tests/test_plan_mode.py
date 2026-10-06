@@ -2532,6 +2532,14 @@ def test_v034_issued_question_status_and_turn_note(plugin, clarify_plan):
     assert len(note) < 400
 
 
+
+def test_v034_issued_instruction_carries_the_todo_hint(plugin, submitted_plan):
+    # The gate path tells the model to mirror the plan into todo_list on approval; the clarify path must too, or the
+    # executing phase never sees a finished checklist (found live in the E2E campaign, H-off T1).
+    _submit(plugin)
+    message = _submit_result(plugin)["message"]
+    assert "todo_list" in message and "implement the plan in this turn" in message
+
 @pytest.mark.parametrize("older", [False, True])
 @pytest.mark.parametrize("suffix", ["", " (Recommended)"])
 def test_v034_clarify_approves_same_turn(plugin, clarify_plan, older, suffix):

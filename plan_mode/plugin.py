@@ -835,7 +835,7 @@ class PlanModePlugin:
                     "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: "
                     f"question={question} and choices={[approve, keep]} "
                     "(these exact strings, this order, not multi-select). "
-                    f"If the user picks {approve}, plan mode turns off automatically and you implement the plan in this turn. "
+                    f"If the user picks {approve}, plan mode turns off automatically; implement the plan in this turn: {_TODO_HINT} "
                     f"If they pick {keep} or answer otherwise, ask what to change and revise. "
                     "If clarify is unavailable, ask the user to run /planmode approve."
                 )
