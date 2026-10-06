@@ -2382,7 +2382,7 @@ def test_v033_chat_summary_is_linear_in_headings():
     ("# X\n\n## Steps\n\n1. Patch\n\n```\n```not-close\n## Comment\n```\n\n2. Ship\n", ["Patch", "Ship"]),
     # A label sub-heading inside the step section is not a step, and its bullets are not steps either.
     ("# X\n\n## Steps\n\n1. Build\n2. Ship\n\n### Tests\n\n- run pytest\n", ["Build", "Ship"]),
-    # Without a step section, a heading whose body is a bullet list gives its bullets.
+    # A "changes" section is a work section, so its bullets are the steps.
     ("# X\n\n## Context\n\n- legacy\n\n## Proposed changes\n\n- Build the API\n- Add tests\n",
      ["Build the API", "Add tests"]),
     # Numbered steps win over another section's bullets; that section shows as its heading.
@@ -2390,6 +2390,13 @@ def test_v033_chat_summary_is_linear_in_headings():
      ["Design", "Add the flag", "Ship"]),
     # The last-resort bullet list skips label sections too.
     ("# Plan\n- Build\n## Context\n- legacy\n", ["Build"]),
+    # Task headings keep their place; the bullets under them are details.
+    ("# X\n\n## Add API endpoint\n\n- api/routes.py\n- api/schema.py\n\n## Add tests\n\n- tests/test_api.py\n",
+     ["Add API endpoint", "Add tests"]),
+    # "Implementation notes" is a label section; the steps come from the real one.
+    ("# X\n\n## Implementation notes\n\n- needs the v2 client\n\n## Steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
+    # A hash line in indented code is not a heading, so it does not end the section.
+    ("# X\n\n## Steps\n\n1. Write config\n\n        ## generated configuration\n\n2. Deploy\n", ["Write config", "Deploy"]),
     # Numbered items under a label heading are not steps.
     ("# X\n\n## Deploy production\n\n## Risks\n\n1. Downtime\n2. Data loss\n", ["Deploy production"]),
     # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.

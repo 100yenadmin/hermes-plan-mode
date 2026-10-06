@@ -29,7 +29,7 @@ def _plain(text: str) -> str:
 
 
 def _title(text, summary, name) -> str:
-    heading = re.search(r"^\s*#{1,6}\s+(.+)$", text, re.MULTILINE)
+    heading = re.search(r"^ {0,3}#{1,6}\s+(.+)$", text, re.MULTILINE)
     title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
     return re.sub(r"(?i)^plan(?:\s*\([^)]*\))?(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
 
@@ -40,14 +40,17 @@ _CARD_LIMITS = {"whatsapp_cloud": 1000}
 
 # Section headings that hold the work itself (core /plan asks for "Step-by-step tasks"), and section labels that never
 # do. A label heading is made only of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept.
-_STEP_SECTION = re.compile(r"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution)\b")
+_STEP_SECTION = re.compile(r"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes?)\b")
 _APPROACH_SECTION = re.compile(r"(?i)\b(approach|plan)\b")
 _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
               r"architecture(?:\s*/\s*proposed approach)?|tests?|testing|validation|verification|risks?|tradeoffs|open questions|notes?|"
               r"out of scope|non-goals|files(?: likely to change)?)")
 _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_META_WORD})?)*:?$")
+# A work word followed by a label word ("Implementation notes", "Task overview") names a label section, not the work.
+_META_TAIL = re.compile(r"(?i)\b(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
+                        r"open questions|non-goals|out of scope)\s*:?$")
 _STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?\s*[:.)—–-]*\s*")
-_HEADING = re.compile(r"^\s*(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")
+_HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")  # 4+ spaces is indented code
 _LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.+)$")
 
 
@@ -73,8 +76,8 @@ def _steps(text: str) -> list[str]:
     """Pick the plan's steps for a short chat summary, not its section headings."""
     lines = _unfenced(text)
     # One pass: (line, level, text, label is meta or sits under one), each heading's direct children and
-    # section end, and whether its section holds numbered items / its own body holds bullets (meta parts excluded).
-    headings, children, ends, numbered, bullets, open_ = [], [], [], [], [], []
+    # section end, and whether its section holds numbered items (meta parts excluded).
+    headings, children, ends, numbered, open_ = [], [], [], [], []
     for index, line in enumerate(lines):
         if (match := _HEADING.match(line)):
             level, heading = len(match[1]), _plain(match[2])
@@ -84,14 +87,11 @@ def _steps(text: str) -> list[str]:
             if open_:
                 children[open_[-1]].append(len(headings))
             headings.append((index, level, heading, meta))
-            children.append([]); ends.append(len(lines)); numbered.append(False); bullets.append(False)
+            children.append([]); ends.append(len(lines)); numbered.append(False)
             open_.append(len(headings) - 1)
-        elif open_ and not headings[open_[-1]][3] and _LIST_ITEM.match(line):
-            if line[0].isdigit():
-                for position in open_:
-                    numbered[position] = True
-            else:
-                bullets[open_[-1]] = True
+        elif open_ and not headings[open_[-1]][3] and _LIST_ITEM.match(line) and line[0].isdigit():
+            for position in open_:
+                numbered[position] = True
 
     def section_items(position: int) -> list[str]:
         named = [headings[child][2] for child in children[position] if not headings[child][3]]
@@ -105,7 +105,8 @@ def _steps(text: str) -> list[str]:
 
     for pattern in (_STEP_SECTION, _APPROACH_SECTION):
         for position, (_, level, heading, meta) in enumerate(headings):
-            if level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading):
+            if (level > 1 and not meta and pattern.search(heading) and not _META_TAIL.search(heading)
+                    and not _STEP_PREFIX.match(heading)):
                 items = section_items(position)
                 if items:
                     return clean(items)
@@ -113,8 +114,8 @@ def _steps(text: str) -> list[str]:
                      if level > 1 and not meta and _STEP_PREFIX.match(heading)]
     if step_headings:
         return clean(step_headings)
-    # No step section, in document order. With numbered items anywhere: those items, plus sub-headings that hold no
-    # numbered list. Without: sub-headings, a bullet list standing in for its heading. Label sections are skipped.
+    # No step section, in document order: numbered items, plus sub-headings that hold no numbered list (bullets under
+    # a heading are its details). Label sections are skipped.
     by_line = {heading[0]: position for position, heading in enumerate(headings)}
     owner, current = [], None
     for index in range(len(lines)):
@@ -123,16 +124,14 @@ def _steps(text: str) -> list[str]:
     items = {index: match[1] for index, line in enumerate(lines)
              if index not in by_line and not (owner[index] is not None and headings[owner[index]][3])
              and (match := _LIST_ITEM.match(line))}
-    has_numbered = any(lines[index][0].isdigit() for index in items)
     ordered = []
     for index in range(len(lines)):
         if index in by_line:
             position = by_line[index]
             _, level, heading, meta = headings[position]
-            if 2 <= level <= 3 and not meta and not numbered[position] and (has_numbered or not bullets[position]):
+            if 2 <= level <= 3 and not meta and not numbered[position]:
                 ordered.append(heading)
-        elif index in items and (lines[index][0].isdigit() or (
-                not has_numbered and owner[index] is not None and 2 <= headings[owner[index]][1] <= 3)):
+        elif index in items and lines[index][0].isdigit():
             ordered.append(items[index])
     if ordered:
         return ordered
