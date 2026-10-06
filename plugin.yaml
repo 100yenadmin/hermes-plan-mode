@@ -47,7 +47,7 @@ config_schema:
     type: str
     default: ""
     label: Plan skill
-    description: The name of a skill whose plan format to use instead, such as your own planning contract. Empty uses Plan style.
+    description: The name of a skill whose plan format to use instead, such as your own planning contract. Empty uses Plan style, as does a blocked skill_view (skills.inline_shell on).
   extra_allowed_tools:
     type: list
     default: []

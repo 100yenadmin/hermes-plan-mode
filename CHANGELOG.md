@@ -10,7 +10,8 @@
   the executing-phase pointer and the typed-approve paths tell the agent not to commit or plan commit steps unless the
   user asked, so changes stay uncommitted for review. Values other than a boolean or a true/false word keep the default.
 - New setting **Plan skill** (`plan_skill`), empty by default. The name of a skill (such as a durable planning
-  contract) whose plan format the agent loads with `skill_view` and uses instead of Plan style.
+  contract) whose plan format the agent loads with `skill_view` and uses instead of Plan style. When plan mode has to
+  block `skill_view` (`skills.inline_shell` on, or no readable skills config), Plan style is used instead.
 - Fix: the short approval summary on Telegram, Slack and Discord keeps underscores, so `register_channel` and
   `__init__.py` no longer show as `registerchannel` and `init.py`. Underscore emphasis such as `_this_` now stays
   visible; `*` emphasis, backticks and strikethrough are still removed. Link stripping no longer slows down

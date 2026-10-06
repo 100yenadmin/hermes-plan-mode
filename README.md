@@ -175,7 +175,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
 | Allow commits (`allow_commits`) | off | Off: the agent neither plans nor makes git commits unless you ask, so changes stay uncommitted for your review. On: it may commit as the plan style suggests |
-| Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style |
+| Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
 
 Compact plans without commits are the default since 0.3.5. In an end-to-end comparison on eight coding tasks (same
 model, blind judge, one run per task), compact plans were about half as long as core's and every task still passed its
