@@ -80,9 +80,10 @@ _CARD_LIMITS = {"whatsapp_cloud": 1000}
 # of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept, or end in a label word.
 _SECTION_END = r"\s*(?:\([^)]*\))?\s*:?$"
 _STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution){_SECTION_END}")
-# A per-file "Changes" list is work too, but the compact format puts it before its numbered Steps: Steps win.
-_CHANGES_SECTION = re.compile(rf"(?i)\bchanges{_SECTION_END}")
-_CHANGES_WORD = re.compile(r"(?i)\bchanges\b")  # "Changes", "Changes per file", "File changes"
+_WORK_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes){_SECTION_END}")
+# The compact format writes a per-file Changes list (sometimes grouped as "### Parser implementation") before its
+# numbered Steps. A step section outside any Changes-like section is preferred; without one, selection is as in 0.3.4.
+_CHANGES_WORD = re.compile(r"(?i)\bchanges\b")
 _APPROACH_SECTION = re.compile(rf"(?i)\b(approach|plan){_SECTION_END}")
 _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
               r"(?:test(?:ing)?|validation|verification|qa|rollback) (?:plan|steps)|"
@@ -156,10 +157,10 @@ def _steps(text: str) -> list[str]:
     def clean(items: list[str]) -> list[str]:
         return [_STEP_PREFIX.sub("", _plain(item)) or _plain(item) for item in items]
 
-    for pattern in (_STEP_SECTION, _CHANGES_SECTION, _APPROACH_SECTION):
+    for pattern, outside_changes in ((_STEP_SECTION, True), (_WORK_SECTION, False), (_APPROACH_SECTION, False)):
         for position, (_, level, heading, meta) in enumerate(headings):
             if (level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading)
-                    and not under_step[position] and not (pattern is _STEP_SECTION and under_changes[position])):
+                    and not under_step[position] and not (outside_changes and under_changes[position])):
                 items = section_items(position)
                 if items:
                     return clean(items)

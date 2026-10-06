@@ -3021,3 +3021,13 @@ def test_035_changes_titles_and_decorated_headings_keep_the_steps(title, changes
         assert _steps(plan) == ["Add token positions.", "Handle CLI errors."], (title, changes_heading, steps)
     assert _steps(f"{title}\n## Goal\nBetter errors.\n## Steps\n- Add token positions.\n- Handle CLI errors.\n") == [
         "Add token positions.", "Handle CLI errors."]
+
+
+
+@pytest.mark.parametrize("outer", ["## Apply changes to parser", "## API changes and rollout", "## Changes per file"])
+@pytest.mark.parametrize("inner", ["### Implementation steps\n- Add token positions.\n- Handle CLI errors.\n",
+                                   "### Implementation steps\n#### Add token positions.\n#### Handle CLI errors.\n"])
+def test_035_work_nested_under_a_changes_heading_still_counts_without_steps(outer, inner):
+    from plan_mode.approval import _steps
+    plan = f"# Parser error handling\n## Goal\nBetter errors.\n{outer}\n{inner}## Validation\n- pytest\n"
+    assert _steps(plan) == ["Add token positions.", "Handle CLI errors."]
