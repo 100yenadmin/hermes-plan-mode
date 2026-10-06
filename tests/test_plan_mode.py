@@ -1727,7 +1727,10 @@ def test_u2_exact_planning_note_and_pending_first(plugin, session_env, tmp_path,
     plans = tmp_path / ".hermes" / "plans"
     expected = (
         f"Plan mode is ON: only read-only tools work, and files may be written only under {plans}.\n"
-        "1. Explore with read-only tools. If a requirement is genuinely ambiguous, ask with the clarify tool (up to 4 short choices, recommended first) instead of guessing.\n"
+        "1. Explore with read-only tools first and settle every fact the files can answer yourself. Then, before writing the plan, "
+        "ask with the clarify tool about each open choice only the user can make (a preference or tradeoff that changes what "
+        "gets built, such as behaviour, policy, format or scope): up to 4 short choices, recommended first. Do not guess these; "
+        "if one goes unanswered, take the recommended choice and record it in the plan as an assumption.\n"
         f"2. Write the plan as Markdown to {plans}/2026-10-05_120000-<slug>.md (that timestamp is current; do not look up the time), with numbered steps.\n"
         '3. Show the complete plan in your reply, then call plan_mode(action="submit") on its own to ask the user to approve it (if plan_mode is not loaded, find it with tool_search "plan_mode"). Approval starts implementation in this same turn.\n'
         '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'

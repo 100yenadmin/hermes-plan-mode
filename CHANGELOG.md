@@ -10,6 +10,11 @@
 - Bind the question to its nonce, tool call, activation and unchanged plan digest. Block altered tagged questions
   and parallel approval questions; leave non-answers awaiting so the question can be re-asked. Typed commands,
   resubmission and session cleanup clear the question. Status and turn notes show approval asked in chat.
+- Planning asks before it guesses. The planning note now sends the agent to explore first, then use `clarify` for
+  each open preference or tradeoff that changes what gets built, and record any unanswered one as an assumption.
+  In end-to-end testing on an ambiguous task, the previous wording asked 0 times in 4 attempts.
+- An approval given through `clarify` carries the same todo-list instruction as the approval card, so progress is
+  tracked and the executing phase closes when the work is done.
 
 ## 0.3.3 - 2026-10-06
 
