@@ -16,12 +16,16 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import sys
 import threading
 from typing import Any, Callable
 import uuid
 
-from .approval import DecisionLedger, approval_text, is_human_approval, make_rule_key, plan_digest
+from .approval import (
+    DecisionLedger, approval_text, clarify_answer, gate_bypassed,
+    is_human_approval, make_rule_key, plan_digest,
+)
 from .render import (
     AGENT_HINT, BUILTIN_OVERRIDE, LOCAL_PLATFORMS, executing_pointer,
     plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
@@ -723,7 +727,8 @@ class PlanModePlugin:
         if state.get("phase") == "executing":
             phase = f"executing (rev {state.get('approved_revision') or '?'}: {state.get('approved_path')})"
         elif state.get("active") and submission.get("status") in {"pending", "awaiting"}:
-            phase = f"awaiting approval (rev {submission['revision']})"
+            asked = ", asked in chat" if submission.get("status") == "awaiting" and submission.get("clarify") else ""
+            phase = f"awaiting approval (rev {submission['revision']}{asked})"
         else:
             phase = "planning" if state.get("active") else "off"
         last = f"\nLast submission: rev {submission['revision']} {submission['status']}" if submission else ""
@@ -762,6 +767,28 @@ class PlanModePlugin:
         if isinstance(submission, dict):
             self._ledger.take(submission.get("rule_key"))
 
+    @staticmethod
+    def _approve_submission(state: dict[str, Any], submission: dict, via: str | None = None) -> None:
+        """The shared transition after a correlated human decision and digest check."""
+        state["active"] = False
+        for field in ("activation_id", "entered_by", "agent_activation_id"):
+            state.pop(field, None)
+        state.update(phase="executing", approved_path=submission["path"],
+                     approved_revision=submission["revision"], approved_at=_utc_now(), pending_note="")
+        submission["status"] = "approved"
+        if via:
+            submission["approved_via"] = via
+        submission.pop("clarify", None)
+
+    @staticmethod
+    def _stale_note(revision) -> str:
+        return f"The plan file changed after rev {revision} was submitted; show the updated plan and submit again."
+
+    @staticmethod
+    def _rejection_note(revision) -> str:
+        return (f"The user did not approve plan rev {revision}. A plan denial is review feedback, not a safety refusal: "
+                "if no reason was given, ask what to change; then revise the plan file and submit a complete new revision.")
+
     def _complete_submission(self, raw_key: str, storage_key: str, state: dict[str, Any]) -> dict:
         submission = state.get("submission")
         opened = state.pop("approved_while_open", None)
@@ -784,20 +811,36 @@ class PlanModePlugin:
             except (OSError, ValueError):
                 unchanged = False
             if unchanged:
-                state["active"] = False
-                for field in ("activation_id", "entered_by", "agent_activation_id"):
-                    state.pop(field, None)
-                state.update(phase="executing", approved_path=path,
-                             approved_revision=revision, approved_at=_utc_now(), pending_note="")
-                submission["status"] = "approved"
+                self._approve_submission(state, submission)
                 self._save_command_state(raw_key, storage_key, state)
                 return {"message": f"The user approved plan rev {revision} at {path}. Plan mode is off. "
                         f"Implement it now: {_TODO_HINT}",
                         "approved": True, "path": path, "revision": revision}
             submission["status"] = "stale"
-            message = f"The plan file changed after rev {revision} was submitted; show the updated plan and submit again."
+            message = self._stale_note(revision)
         else:
             submission["status"] = "awaiting"
+            if gate_bypassed(entry):
+                nonce = secrets.token_hex(4)
+                approve, keep = f"Approve plan rev {revision}", "Keep planning"
+                question = (f"Approve plan rev {revision} ({os.path.basename(path)}) and start implementing it? "
+                            f"[plan-mode {nonce}]")
+                submission["clarify"] = {
+                    "nonce": nonce, "question": question, "choices": [approve, keep],
+                    "tool_call_id": "", "activation_id": state.get("activation_id"),
+                }
+                message = (
+                    "Hermes approved this call automatically on this host (yolo or approvals.mode: off), "
+                    f"so no human has approved plan rev {revision} yet. Plan mode stays on. "
+                    "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: "
+                    f"question={question} and choices={[approve, keep]} "
+                    "(these exact strings, this order, not multi-select). "
+                    f"If the user picks {approve}, plan mode turns off automatically; implement the plan in this turn: {_TODO_HINT} "
+                    f"If they pick {keep} or answer otherwise, ask what to change and revise. "
+                    "If clarify is unavailable, ask the user to run /planmode approve."
+                )
+                self._save_command_state(raw_key, storage_key, state)
+                return {"message": message, "clarify": {"question": question, "choices": [approve, keep]}}
             message = (f"No human approval was recorded for plan rev {revision}: this host approved the call "
                        "automatically (yolo or approvals.mode: off) or does not route plugin approvals. "
                        "Plan mode stays on. Show the plan and ask the user to run /planmode approve "
@@ -997,6 +1040,7 @@ class PlanModePlugin:
                         return "Plan approval was refused: the submitted file is not a tracked plan file."
                 else:
                     approved_path = files[-1]
+                submission.pop("clarify", None)
                 state["active"] = False
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
@@ -1032,6 +1076,7 @@ class PlanModePlugin:
                 feedback = remainder or "No additional feedback was provided."
                 state["pending_note"] = f"The user rejected the plan: {feedback}. Revise it."
                 submission = state.get("submission") or {}
+                submission.pop("clarify", None)
                 if submission.get("status") in {"pending", "awaiting"}:
                     submission["status"] = "rejected"
                     self._forget_submission(state)
@@ -1211,6 +1256,34 @@ class PlanModePlugin:
 
                 name = str(tool_name or "")
                 call_args = args if isinstance(args, dict) else {}
+                submission = state.get("submission") or {}
+                clarify = submission.get("clarify")
+                if name == "clarify" and submission.get("status") == "awaiting" and clarify:
+                    questions = call_args.get("questions")
+                    if not isinstance(questions, list) or not questions:
+                        questions = [call_args] if "question" in call_args else []
+                    texts = [item if isinstance(item, str) else item.get("question", "")
+                             if isinstance(item, dict) else "" for item in questions]
+                    tag = f"[plan-mode {clarify['nonce']}]"
+                    if not any(isinstance(text, str) and tag in text for text in texts):
+                        return None
+                    required = {"questions": [{"question": clarify["question"],
+                                               "choices": clarify["choices"], "multi_select": False}]}
+                    blocked = {"action": "block", "message": "Use exactly these clarify args: " + json.dumps(required)}
+                    if len(questions) != 1 or not isinstance(questions[0], dict):
+                        return blocked
+                    question = questions[0]
+                    choices = question.get("choices")
+                    if (question.get("question") != clarify["question"] or question.get("multi_select")
+                            or not isinstance(choices, list) or not all(isinstance(item, str) for item in choices)
+                            or [item.strip() for item in choices] != clarify["choices"]):
+                        return blocked
+                    call_id = str(kwargs.get("tool_call_id") or "")
+                    if not call_id or (clarify.get("tool_call_id") and clarify["tool_call_id"] != call_id):
+                        return blocked
+                    clarify["tool_call_id"] = call_id
+                    self._save_state(state_key, state)
+                    return None
                 if (
                     name in READ_ONLY_TOOLS
                     or name == PLAN_MODE_TOOL
@@ -1260,6 +1333,42 @@ class PlanModePlugin:
         try:
             call_id = str(kwargs.get("tool_call_id") or "")
             with self._lock:
+                if tool_name == "clarify":
+                    identity = derive_session_identity(str(kwargs.get("platform") or ""))
+                    if not identity.key or identity.unsupported or identity.non_cli_without_key:
+                        return
+                    state_key, state = self._state_for_hook(identity)
+                    submission = state.get("submission") or {}
+                    clarify = submission.get("clarify")
+                    if not call_id or not clarify or clarify.get("tool_call_id") != call_id:
+                        return
+                    clarify["tool_call_id"] = ""
+                    assert state_key is not None
+                    self._save_state(state_key, state)
+                    if kwargs.get("status") != "ok":
+                        return
+                    answer = clarify_answer(kwargs.get("result"), clarify["question"], clarify["choices"])
+                    if not answer:
+                        return
+                    if answer.removesuffix(" (Recommended)") == clarify["choices"][0]:
+                        if (not state.get("active") or submission.get("status") != "awaiting"
+                                or not clarify.get("activation_id")
+                                or state.get("activation_id") != clarify["activation_id"]):
+                            return
+                        if plan_digest(submission["path"])[0] != submission["digest"]:
+                            submission["status"] = "stale"
+                            state["pending_note"] = self._stale_note(submission["revision"])
+                        else:
+                            self._approve_submission(state, submission, via="clarify")
+                    else:
+                        submission["status"] = "rejected"
+                        state["pending_note"] = self._rejection_note(submission["revision"])
+                        if answer != clarify["choices"][1]:
+                            state["pending_note"] += f' Feedback: "{answer[:280]}"'
+                        submission.pop("clarify", None)
+                    self._save_command_state(identity.key, _state_storage_key(state_key), state)
+                    self._sync_execution_family(_state_storage_key(state_key), state)
+                    return
                 if tool_name in {"todo_list", "todo"} and kwargs.get("status") == "ok":
                     if not isinstance((args if isinstance(args, dict) else {}).get("todos"), list):
                         return  # A read can return an earlier task's finished list; only writes count.
@@ -1386,6 +1495,13 @@ class PlanModePlugin:
                         note += f" {_AGENT_NOTE}"
                     if builtin:
                         note += f" {BUILTIN_OVERRIDE}"
+                    submission = state.get("submission") or {}
+                    clarify = submission.get("clarify")
+                    if submission.get("status") == "awaiting" and clarify:
+                        awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
+                                    f"question={clarify['question']}, choices={clarify['choices']}, "
+                                    "or the user can run /planmode approve.")
+                        note += "\n" + awaiting[:399]
                     parts.append(note)
                 elif state.get("phase") == "executing":
                     state["executing_turns"] = int(state.get("executing_turns") or 0) + 1

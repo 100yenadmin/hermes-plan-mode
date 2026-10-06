@@ -21,7 +21,7 @@ def _copy_plugin(destination: Path) -> None:
     shutil.copytree(
         REPO_ROOT,
         destination,
-        ignore=shutil.ignore_patterns(".git", ".pytest_cache", ".lane-evidence", "__pycache__", "*.pyc"),
+        ignore=shutil.ignore_patterns(".git", ".pytest_cache", ".lane-evidence", ".lane-local", "__pycache__", "*.pyc"),
     )
 
 
@@ -983,7 +983,7 @@ def test_u1_real_auto_approval_keeps_planning(real_submit_host, monkeypatch, mod
         monkeypatch.setattr(host.context, "_get_approval_mode", lambda: "off")
     host.callback(lambda *a, **kw: pytest.fail("automatic approval must not prompt"))
     result = json.loads(host.submit())
-    assert "No human approval was recorded" in result["message"]
+    assert "no human has approved" in result["message"]
     assert "awaiting" in host.command("status")
     assert host.plugins.get_pre_tool_call_block_message("terminal", {}, session_id="submit-session")
 
@@ -1080,3 +1080,72 @@ def test_u2_real_hint_section_accepted(real_u2_host):
         assert "plan_mode" in section.content and len(section.content) <= 200
     else:
         assert host.manager._plugins["plan-mode"].enabled
+
+
+@pytest.fixture
+def real_clarify_host(real_submit_host, monkeypatch):
+    """Inject the platform callback into the real registered clarify handler."""
+    host = real_submit_host
+    clarify = pytest.importorskip("tools.clarify_tool")
+    from tools.registry import registry
+    from model_tools import handle_function_call
+
+    entry = registry.get_entry("clarify")
+    if entry is None or "callback" not in inspect.signature(clarify.clarify_tool).parameters:
+        pytest.skip("Hermes lacks the registered clarify callback seam")
+    host.clarify_entry = entry
+    host.clarify_module = clarify
+    host.call_clarify = lambda args, call_id="clarify-1": handle_function_call(
+        "clarify", args, session_id="submit-session", tool_call_id=call_id)
+    monkeypatch.setattr(host.context, "_get_approval_mode", lambda: "off")
+    host.callback(lambda *a, **kw: pytest.fail("automatic submit must not prompt"))
+    host.question = json.loads(host.submit())["clarify"]
+    return host
+
+
+def _inject_real_clarify_callback(host, monkeypatch, answer, seen):
+    parameters = inspect.signature(host.clarify_module.clarify_tool).parameters
+    if "question" in parameters:  # v2026.9.x/fleet: single-question platform callback
+        def callback(question, choices, multi_select=False):
+            seen.append((question, choices, multi_select))
+            return answer
+    else:  # main: callback takes normalized questions and returns an answer map
+        def callback(questions):
+            seen.extend(questions)
+            return {"answers": {question["qid"]: answer for question in questions}, "outcome": "answered"}
+    original = host.clarify_entry.handler
+    monkeypatch.setattr(host.clarify_entry, "handler",
+                        lambda args, **kw: original(args, **{**kw, "callback": callback}))
+
+
+@pytest.mark.parametrize("decision", ["approve", "keep"])
+def test_v034_real_off_clarify_decision(real_clarify_host, monkeypatch, decision):
+    host = real_clarify_host
+    answer = host.question["choices"][0 if decision == "approve" else 1]
+    seen = []
+    _inject_real_clarify_callback(host, monkeypatch, answer, seen)
+    result = json.loads(host.call_clarify({"questions": [{**host.question, "multi_select": False}]}))
+    responses = result.get("responses", [result])
+    assert seen and responses[0]["user_response"] == answer
+    state = host.command.__self__._load_state("sk:submit-session")
+    assert state["submission"]["status"] == ("approved" if decision == "approve" else "rejected")
+    assert "clarify" not in state["submission"]
+    if decision == "approve":
+        assert not state["active"] and state["phase"] == "executing"
+        assert state["submission"]["approved_via"] == "clarify"
+        assert state["approved_revision"] == 1
+    else:
+        assert state["active"] and "review feedback" in state["pending_note"]
+
+
+def test_v034_real_mismatched_tagged_question_blocked(real_clarify_host, monkeypatch):
+    host = real_clarify_host
+    seen = []
+    _inject_real_clarify_callback(host, monkeypatch, host.question["choices"][0], seen)
+    question = {**host.question, "question": host.question["question"] + " altered"}
+    result = host.call_clarify({"questions": [question]})
+    # Real Hermes returns a blocked call as {"error": <plugin message>}; the callback must never run.
+    assert json.loads(result)["error"].startswith("Use exactly these clarify args") and seen == []
+    state = host.command.__self__._load_state("sk:submit-session")
+    assert state["active"] and state["submission"]["status"] == "awaiting"
+    assert state["submission"]["clarify"]["tool_call_id"] == ""
