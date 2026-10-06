@@ -2947,6 +2947,7 @@ def test_035_commits_off_clarify_approval_then_pointer(plugin, submitted_plan):
     ("[docs](https://example.invalid) and ![img](x.png)", "docs and img"),
     ('Read [API docs](https://example.invalid/api "API reference")', "Read API docs"),
     ("See [setup](https://example.invalid/setup(v2)) first", "See setup first"),
+    ("[![status](badge.svg)](https://example.invalid) ok", "status ok"),
 ])
 def test_035_summary_keeps_identifier_underscores(text, expected):
     from plan_mode.approval import _plain
@@ -2972,3 +2973,23 @@ def test_035_telegram_summary_lists_snake_case_steps():
     assert "1. Add notify/channels.py with register_channel." in text
     assert "2. Export it from notify/__init__.py." in text
     assert "3. Export __all__ and snake_case." in text
+
+
+def test_035_compact_plan_summary_lists_steps_not_changes():
+    from plan_mode.approval import approval_text
+    plan = ("# Notify registry\n\n## Goal\nRegistry.\n\n## Changes\n- `notify/channels.py`: new channel classes.\n"
+            "- `notify/core.py`: dispatch through the registry.\n\n## Steps\n1. Add channel classes. Check: tests.\n"
+            "2. Route send through the registry. Check: tests.\n\n## Validation\n- `pytest -q`\n")
+    text = approval_text(plan, "/p/plan.md", 1, "telegram")
+    assert "1. Add channel classes. Check: tests." in text and "notify/channels.py" not in text
+    only_changes = plan.split("## Steps")[0]
+    assert "1. notify/channels.py: new channel classes." in approval_text(only_changes, "/p/plan.md", 1, "telegram")
+
+
+def test_035_agent_activation_result_carries_the_planning_note(plugin, session_env, tmp_path):
+    from plan_mode.render import COMPACT_PLAN, NO_COMMITS
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    result = json.loads(plugin.tool({"action": "on", "reason": "refactor"}))["message"]
+    assert COMPACT_PLAN in result and NO_COMMITS in result and "You entered plan mode yourself" in result
+    plugin.command("off")
+    assert COMPACT_PLAN not in plugin.command("on refactor")  # the user's command reply stays short

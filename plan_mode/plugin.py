@@ -961,13 +961,18 @@ class PlanModePlugin:
                 # A UI turn's tool call links its sk: alias now, so the tab's slash commands find it.
                 self._link_command_key(identity.key, state, identity.fallback_key)
                 task_text = f" Task: {remainder}" if remainder else ""
-                return (
+                message = (
                     f"Plan mode is on for this session.{task_text}\n"
                     f"Write plans only to absolute paths under {plans_dir}.\n"
                     f"Use {plan_file_stamp()}-<slug>.md. Read-only planning tools are allowed; "
                     "terminal, code execution, delegation, connectors/MCP, messaging, browser "
                     "mutations, and unknown tools are blocked until /planmode approve."
                 )
+                if entered_by == "agent":
+                    # The turn's pre_llm_call note has already run, so the plan format and commit rule come with the result.
+                    message += "\n" + planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
+                                                     commits=self._allow_commits()) + f" {_AGENT_NOTE}"
+                return message
 
             if action == "status":
                 return self._status_text(state, self._plan_files(state))

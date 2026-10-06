@@ -60,7 +60,8 @@ def _plain(text: str) -> str:
     # more in a chat summary than hiding _underscore emphasis_. One character class, so it is linear and idempotent.
     # Link text and destination stop at brackets and newlines (one level of parentheses and a title are allowed), so a
     # line of unmatched "[" or "](" stays linear.
-    text = re.sub(r"!?\[([^\[\]]+)\]\((?:[^()\[\]\n]|\([^()\[\]\n]*\))*\)", r"\1", text)
+    for _ in range(2):  # the second pass unwraps a linked image, [![alt](img)](url)
+        text = re.sub(r"!?\[([^\[\]]+)\]\((?:[^()\[\]\n]|\([^()\[\]\n]*\))*\)", r"\1", text)
     return " ".join(re.sub(r"[*`~]", "", re.sub(r"^\s*#+\s+", "", text)).split())
 
 
@@ -78,7 +79,9 @@ _CARD_LIMITS = {"whatsapp_cloud": 1000}
 # so a task heading such as "Apply changes to parser" is not one. Section labels that never hold the work are made only
 # of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept, or end in a label word.
 _SECTION_END = r"\s*(?:\([^)]*\))?\s*:?$"
-_STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes){_SECTION_END}")
+_STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution){_SECTION_END}")
+# A per-file "Changes" list is work too, but the compact format puts it before its numbered Steps: Steps win.
+_CHANGES_SECTION = re.compile(rf"(?i)\bchanges{_SECTION_END}")
 _APPROACH_SECTION = re.compile(rf"(?i)\b(approach|plan){_SECTION_END}")
 _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
               r"(?:test(?:ing)?|validation|verification|qa|rollback) (?:plan|steps)|"
@@ -148,7 +151,7 @@ def _steps(text: str) -> list[str]:
     def clean(items: list[str]) -> list[str]:
         return [_STEP_PREFIX.sub("", _plain(item)) or _plain(item) for item in items]
 
-    for pattern in (_STEP_SECTION, _APPROACH_SECTION):
+    for pattern in (_STEP_SECTION, _CHANGES_SECTION, _APPROACH_SECTION):
         for position, (_, level, heading, meta) in enumerate(headings):
             if (level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading)
                     and not under_step[position]):
