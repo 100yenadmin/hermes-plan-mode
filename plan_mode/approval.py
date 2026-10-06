@@ -56,8 +56,13 @@ def plan_digest(path) -> tuple[str, str]:
 
 
 def _plain(text: str) -> str:
-    text = re.sub(r"!?\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    return " ".join(re.sub(r"[*_`~]", "", re.sub(r"^\s*#+\s+", "", text)).split())
+    # Underscores are kept: compact plans name snake_case functions and __init__.py files, and an identifier is worth
+    # more in a chat summary than hiding _underscore emphasis_. One character class, so it is linear and idempotent.
+    # Link text and destination stop at brackets and newlines (one level of parentheses and a title are allowed), so a
+    # line of unmatched "[" or "](" stays linear.
+    for _ in range(2):  # the second pass unwraps a linked image, [![alt](img)](url)
+        text = re.sub(r"!?\[([^\[\]]+)\]\((?:[^()\[\]\n]|\([^()\[\]\n]*\))*\)", r"\1", text)
+    return " ".join(re.sub(r"[*`~]", "", re.sub(r"^\s*#+\s+", "", text)).split())
 
 
 def _title(text, summary, name) -> str:
@@ -74,7 +79,11 @@ _CARD_LIMITS = {"whatsapp_cloud": 1000}
 # so a task heading such as "Apply changes to parser" is not one. Section labels that never hold the work are made only
 # of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept, or end in a label word.
 _SECTION_END = r"\s*(?:\([^)]*\))?\s*:?$"
-_STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes){_SECTION_END}")
+_STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution){_SECTION_END}")
+_WORK_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes){_SECTION_END}")
+# The compact format writes a per-file Changes list (sometimes grouped as "### Parser implementation") before its
+# numbered Steps. A step section outside any Changes-like section is preferred; without one, selection is as in 0.3.4.
+_CHANGES_WORD = re.compile(r"(?i)\bchanges\b")
 _APPROACH_SECTION = re.compile(rf"(?i)\b(approach|plan){_SECTION_END}")
 _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
               r"(?:test(?:ing)?|validation|verification|qa|rollback) (?:plan|steps)|"
@@ -114,7 +123,7 @@ def _steps(text: str) -> list[str]:
     lines = _unfenced(text)
     # One pass: (line, level, text, label is meta or sits under one), each heading's direct children and
     # section end, and whether its section holds numbered items (meta parts excluded).
-    headings, children, ends, numbered, under_step, open_ = [], [], [], [], [], []
+    headings, children, ends, numbered, under_step, under_changes, open_ = [], [], [], [], [], [], []
     for index, line in enumerate(lines):
         if (match := _HEADING.match(line)):
             level, heading = len(match[1]), _plain(match[2])
@@ -127,6 +136,10 @@ def _steps(text: str) -> list[str]:
                 children[open_[-1]].append(len(headings))
             # A section nested under a "Step N" heading is that step's detail ("### Changes"), not the plan's work list.
             under_step.append(any(_STEP_PREFIX.match(headings[position][2]) for position in open_))
+            # Likewise "### Parser implementation" under "## Changes" groups changes; it must not outrank "## Steps".
+            # The document title (level 1) is not a section: "# Parser changes" must not hide the plan's own Steps.
+            under_changes.append(any(headings[position][1] > 1 and _CHANGES_WORD.search(headings[position][2])
+                                     for position in open_))
             headings.append((index, level, heading, meta))
             children.append([]); ends.append(len(lines)); numbered.append(False)
             open_.append(len(headings) - 1)
@@ -144,10 +157,10 @@ def _steps(text: str) -> list[str]:
     def clean(items: list[str]) -> list[str]:
         return [_STEP_PREFIX.sub("", _plain(item)) or _plain(item) for item in items]
 
-    for pattern in (_STEP_SECTION, _APPROACH_SECTION):
+    for pattern, outside_changes in ((_STEP_SECTION, True), (_WORK_SECTION, False), (_APPROACH_SECTION, False)):
         for position, (_, level, heading, meta) in enumerate(headings):
             if (level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading)
-                    and not under_step[position]):
+                    and not under_step[position] and not (outside_changes and under_changes[position])):
                 items = section_items(position)
                 if items:
                     return clean(items)

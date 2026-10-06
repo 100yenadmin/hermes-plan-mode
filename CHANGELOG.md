@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.5 - 2026-10-07
+
+- New setting **Plan style** (`plan_style`). `compact` is the default: it asks for a short, decision-complete plan
+  (Goal; Decisions and assumptions; Changes per file; numbered Steps, each with its check; Validation commands) and
+  replaces core `/plan`'s plan craft for that plan. `core` keeps Hermes' own craft (zero-context tasks, full code, a
+  commit per step) with the 0.3.4 planning note, byte for byte.
+- New setting **Allow commits** (`allow_commits`), off by default. While off, the planning note, the approval result,
+  the executing-phase pointer and the typed-approve paths tell the agent not to commit or plan commit steps unless the
+  user asked, so changes stay uncommitted for review. Values other than a boolean or a true/false word keep the default.
+- New setting **Plan skill** (`plan_skill`), empty by default. The name of a skill (such as a durable planning
+  contract) whose plan format the agent loads with `skill_view` and uses instead of Plan style. When plan mode has to
+  block `skill_view` (`skills.inline_shell` on, or no readable skills config), Plan style is used instead, and the
+  note tells the agent to use the Plan style format if the skill cannot be loaded.
+- Fix: the short approval summary on Telegram, Slack and Discord keeps underscores, so `register_channel` and
+  `__init__.py` no longer show as `registerchannel` and `init.py`. Underscore emphasis such as `_this_` now stays
+  visible; `*` emphasis, backticks and strikethrough are still removed. Link stripping no longer slows down
+  quadratically on a long line of unmatched `[`.
+- When the agent turns plan mode on itself, the `plan_mode` result now carries the planning note (plan style or
+  skill, and the commit rule), because that turn's planning note has already been sent.
+- The short chat approval summary takes a Steps or Tasks section before a per-file Changes list, which the compact
+  format writes first. A linked image such as a badge is unwrapped to its text.
+- Why the defaults changed: an end-to-end comparison on eight coding tasks (same model and effort, one run per task,
+  blind judge, decided by bars written before the runs) met every bar. Compact plans were about half as long, all
+  eight tasks still passed their checks with no edit before approval, there were no commits (core made 1-4 per task),
+  plan fit plus clarity scored 10.0 of 10 against 8.9, and median time per task fell from 194 s to 151 s. Token use was
+  about the same. Set `plan_style: core` and `allow_commits: true` to keep the 0.3.4 behaviour.
+
 ## 0.3.4 - 2026-10-06
 
 - When Hermes approves a submit automatically (yolo or `approvals.mode: off`), ask for human approval through the

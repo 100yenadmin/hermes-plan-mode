@@ -89,6 +89,7 @@ def test_registers_exact_surface(plugin):
 
 
 def test_command_state_machine_and_one_shot_notes(plugin, session_env, tmp_path, monkeypatch):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     session_env["TERMINAL_CWD"] = str(tmp_path)
     monkeypatch.chdir(tmp_path)
 
@@ -1489,6 +1490,7 @@ def test_u1_only_correlated_human_decision_approves(plugin, submitted_plan, deci
 
 
 def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submitted_plan):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     _submit(plugin)
     assert "no human has approved" in _submit_result(plugin)["message"]
     newer = submitted_plan.with_name("newer.md")
@@ -1503,6 +1505,7 @@ def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submi
 
 @pytest.mark.parametrize("inject_kind", ["false", "missing", "raises", "cli"])
 def test_u1_typed_approval_injection_fallback(plugin, session_env, submitted_plan, inject_kind):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     if inject_kind == "false":
         plugin.ctx.inject_result = False
     elif inject_kind == "missing":
@@ -1720,6 +1723,7 @@ def test_u2_builtin_refusal_injects_nothing(plugin, session_env, tmp_path, monke
 
 
 def test_u2_exact_planning_note_and_pending_first(plugin, session_env, tmp_path, monkeypatch):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     from plan_mode import render as render_mod
     monkeypatch.setattr(render_mod, "plan_file_stamp", lambda now=None: "2026-10-05_120000")
     session_env["TERMINAL_CWD"] = str(tmp_path)
@@ -1751,6 +1755,7 @@ def executing_plan(plugin, submitted_plan):
 
 
 def test_u2_executing_pointer_and_turn_expiry(plugin, executing_plan):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     expected = f"Executing the approved plan {executing_plan} (rev 1). Keep todo_list statuses current; re-read the plan if your context was compacted."
     assert plugin.pre_llm_call() == {"context": expected}
     state = plugin._load_state("sk:unit-session")
@@ -1914,7 +1919,13 @@ def test_v033_config_schema_declares_the_flat_settings():
     yaml = pytest.importorskip("yaml")  # PyYAML: a YAML 1.1 loader, like Hermes' manifest reader (not on Hermes main)
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
-    assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools"}
+    assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools",
+                           "plan_style", "allow_commits", "plan_skill"}
+    # The form's defaults and the code's defaults must agree, or an untouched setting behaves differently.
+    assert schema["plan_style"]["default"] == plugin_mod._DEFAULT_PLAN_STYLE
+    assert sorted(schema["plan_style"]["choices"]) == sorted(plugin_mod._PLAN_STYLES)
+    assert schema["allow_commits"]["default"] is plugin_mod._DEFAULT_ALLOW_COMMITS
+    assert schema["plan_skill"]["default"] == ""
     assert all("." not in key for key in schema)  # the form saves dotted keys nested but reads them back flat
     # Quoted in the manifest: a bare off would load as False under YAML 1.1 and break the dropdown.
     assert schema["footer"]["choices"] == ["auto", "off"] and schema["footer"]["default"] == "auto"
@@ -2067,6 +2078,7 @@ def test_pr7_typed_approve_while_card_open_does_not_inject(plugin, submitted_pla
 # CodeRabbit on PR #7: a deny or timeout blocks the submit call, so the typed approval starts the work from there.
 @pytest.mark.parametrize("card", ["deny", "timeout"])
 def test_pr7_typed_approve_then_card_blocked_starts_the_work_once(plugin, submitted_plan, card):
+    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     directive = _submit(plugin)
     plugin.command("approve")
     if card == "deny":
@@ -2770,3 +2782,252 @@ def test_v034_clarify_transition_updates_linked_ui_command_state(plugin, session
         assert "clarify" not in state["submission"]
     session_env.pop("HERMES_UI_SESSION_ID")
     assert "executing (rev 1:" in plugin.command("status")
+
+
+# --- 0.3.5: plan style, plan skill and commit policy -------------------------------------------------------------
+
+def _note(plugin, tmp_path, monkeypatch, session_env, **settings):
+    from plan_mode import render as render_mod
+    monkeypatch.setattr(render_mod, "plan_file_stamp", lambda now=None: "2026-10-05_120000")
+    plugin.ctx.settings.update(settings)
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    return plugin.pre_llm_call()["context"]
+
+
+def test_035_compact_style_replaces_the_plan_craft(plugin, session_env, tmp_path, monkeypatch):
+    from plan_mode.render import COMPACT_PLAN, NO_COMMITS
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", allow_commits=True)
+    plans = tmp_path / ".hermes" / "plans"
+    assert (f"2. Write the plan as Markdown to {plans}/2026-10-05_120000-<slug>.md (that timestamp is current; "
+            f"do not look up the time). {COMPACT_PLAN}\n") in note
+    assert "with numbered steps" not in note and NO_COMMITS not in note
+
+
+def test_035_plan_skill_wins_over_style(plugin, session_env, tmp_path, monkeypatch):
+    _fake_skill_loader(monkeypatch, lambda: {})
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", plan_skill="durable-plan-contract")
+    assert "2. Load the durable-plan-contract skill with skill_view and write the plan in its format" in note
+    assert note.count("Make it compact") == 1 and "If the skill cannot be loaded, use this format instead: Make it compact" in note
+
+
+def test_035_plan_skill_names_the_core_fallback(plugin, session_env, tmp_path, monkeypatch):
+    _fake_skill_loader(monkeypatch, lambda: {})
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="core", plan_skill="durable-plan-contract")
+    assert "If the skill cannot be loaded, use this format instead: Write it with numbered steps." in note
+    assert "Make it compact" not in note
+
+
+@pytest.mark.parametrize("loader", [lambda: {"inline_shell": True}, None, lambda: 1 / 0])
+def test_035_plan_skill_falls_back_to_style_when_skill_view_is_blocked(plugin, session_env, tmp_path, monkeypatch, loader):
+    from plan_mode.render import COMPACT_PLAN
+    _fake_skill_loader(monkeypatch, loader)
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_skill="durable-plan-contract")
+    assert "skill_view" not in note and COMPACT_PLAN in note
+    assert plugin.pre_tool_call("skill_view", {"name": "durable-plan-contract"})["action"] == "block"
+
+
+@pytest.mark.parametrize("bad", ["", "  ", "two words", "x" * 101, "../etc/passwd;rm", 42])
+def test_035_invalid_plan_skill_is_ignored(plugin, session_env, tmp_path, monkeypatch, bad):
+    from plan_mode.render import COMPACT_PLAN
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_skill=bad)
+    assert "skill_view" not in note and COMPACT_PLAN in note
+
+
+@pytest.mark.parametrize("value", ["fancy", None, 3])
+def test_035_unknown_style_falls_back_to_the_default(plugin, session_env, tmp_path, monkeypatch, value):
+    from plan_mode.render import COMPACT_PLAN
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style=value)
+    assert COMPACT_PLAN in note and "with numbered steps" not in note
+
+
+def test_035_core_style_keeps_the_numbered_steps_note(plugin, session_env, tmp_path, monkeypatch):
+    from plan_mode.render import COMPACT_PLAN
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style=" Core ")
+    assert "with numbered steps" in note and COMPACT_PLAN not in note
+
+
+# Round-2 campaign (TEST-PLAN-2): compact plans without commits met every pre-declared bar, so they are the default.
+def test_035_defaults_are_compact_plans_without_commits(plugin, session_env, tmp_path, monkeypatch):
+    from plan_mode.render import COMPACT_PLAN, NO_COMMITS
+    note = _note(plugin, tmp_path, monkeypatch, session_env)
+    assert f"{COMPACT_PLAN} {NO_COMMITS}\n" in note
+    assert plugin_mod._DEFAULT_PLAN_STYLE == "compact" and plugin_mod._DEFAULT_ALLOW_COMMITS is False
+
+
+@pytest.mark.parametrize("value", ["maybe", 3, 0, [], {"x": 1}])
+def test_035_unrecognised_allow_commits_keeps_commits_off(plugin, session_env, tmp_path, monkeypatch, value):
+    from plan_mode.render import NO_COMMITS
+    note = _note(plugin, tmp_path, monkeypatch, session_env, allow_commits=value)
+    assert NO_COMMITS in note
+
+
+@pytest.mark.parametrize("value", [False, "false", "off", "no", "0", " Off "])
+def test_035_commits_off_reaches_every_execution_message(plugin, session_env, tmp_path, monkeypatch, submitted_plan, value):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = value
+    assert NO_COMMITS in plugin.pre_llm_call()["context"]
+    directive = _submit(plugin)
+    _decision(plugin, directive)
+    result = _submit_result(plugin)
+    assert result["approved"] and result["message"].endswith(NO_COMMITS)
+    assert plugin.pre_llm_call()["context"].endswith(NO_COMMITS)
+
+
+@pytest.mark.parametrize("value", [True, "true", "yes", "on", "1", " True "])
+def test_035_commits_allowed_keeps_the_043_text(plugin, session_env, submitted_plan, value):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = value
+    assert NO_COMMITS not in plugin.pre_llm_call()["context"]
+    directive = _submit(plugin)
+    _decision(plugin, directive)
+    assert NO_COMMITS not in _submit_result(plugin)["message"]
+
+
+def test_035_commits_off_on_typed_approve_and_inject(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    plugin.command("approve")
+    assert plugin._load_state("sk:unit-session")["pending_note"].endswith(NO_COMMITS)
+    assert plugin._start_implementation(str(submitted_plan))
+    assert plugin.ctx.injected and all(content.endswith(NO_COMMITS) for content, _ in plugin.ctx.injected)
+
+
+def test_035_commits_off_on_the_clarify_fallback(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    _submit(plugin)
+    result = _submit_result(plugin)
+    assert "clarify" in result and NO_COMMITS in result["message"]
+
+
+# Codex review of 0.3.5 (probe 6): every approval-to-implementation path carries NO_COMMITS when commits are off.
+def test_035_commits_off_open_card_typed_approve_result(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    directive = _submit(plugin)
+    assert "Plan approved" in plugin.command("approve")
+    _decision(plugin, directive)
+    result = _submit_result(plugin)
+    assert result["approved"] is True and result["message"].endswith(NO_COMMITS)
+
+
+@pytest.mark.parametrize("card", ["deny", "timeout"])
+def test_035_commits_off_open_card_blocked_continuation(plugin, submitted_plan, card):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    directive = _submit(plugin)
+    plugin.command("approve")
+    if card == "deny":
+        _decision(plugin, directive, "deny")
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    assert plugin.ctx.injected and all(content.endswith(NO_COMMITS) for content, _ in plugin.ctx.injected)
+    assert plugin._load_state("sk:unit-session")["pending_note"].endswith(NO_COMMITS)
+
+
+def test_035_commits_off_clarify_approval_then_pointer(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    _submit(plugin)
+    result = _submit_result(plugin)
+    assert NO_COMMITS in result["message"]
+    block = plugin._load_state("sk:unit-session")["submission"]["clarify"]
+    assert plugin.pre_tool_call("clarify", _clarify_args(block), tool_call_id="clarify-1") is None
+    _answer_clarify(plugin, block, block["choices"][0], status="answered")
+    assert plugin._load_state("sk:unit-session")["phase"] == "executing"
+    assert plugin.pre_llm_call()["context"].endswith(NO_COMMITS)
+
+
+# 0.3.5: compact plans name exact files and functions, so the chat summary must keep identifiers intact.
+@pytest.mark.parametrize("text, expected", [
+    ("Add `register_channel` and test_import_rows", "Add register_channel and test_import_rows"),
+    ("Edit __init__.py and `__init__.py` and _tests_", "Edit __init__.py and __init__.py and _tests_"),
+    ("## Step 1: **Create** `ledger/csvio.py`", "Step 1: Create ledger/csvio.py"),
+    ("**bold** *it* ~~gone~~ ***both***", "bold it gone both"),
+    ("[docs](https://example.invalid) and ![img](x.png)", "docs and img"),
+    ('Read [API docs](https://example.invalid/api "API reference")', "Read API docs"),
+    ("See [setup](https://example.invalid/setup(v2)) first", "See setup first"),
+    ("[![status](badge.svg)](https://example.invalid) ok", "status ok"),
+])
+def test_035_summary_keeps_identifier_underscores(text, expected):
+    from plan_mode.approval import _plain
+    assert _plain(text) == expected
+    assert _plain(_plain(text)) == expected  # summaries clean step text twice
+
+
+def test_035_summary_cleaning_is_linear_on_malformed_markdown():
+    import time
+    from plan_mode.approval import _plain
+    for line in (("*a " * 33334)[:100000], ("_a " * 33334)[:100000], "`" * 100000, "~" * 100000, "[" * 100000,
+                 "[a](" * 25000, "[a](x" * 20000, "[a](" + "(x)" * 33000, "[a](" + "(" * 99996, "[a](" + "x " * 49998):
+        start = time.perf_counter()
+        _plain(line)
+        assert time.perf_counter() - start < 0.5
+
+
+def test_035_telegram_summary_lists_snake_case_steps():
+    from plan_mode.approval import approval_text
+    plan = ("# Notify channel registry\n\n## Steps\n1. Add `notify/channels.py` with `register_channel`.\n"
+            "2. Export it from `notify/__init__.py`.\n3. Export `__all__` and `snake_case`.\n")
+    text = approval_text(plan, "/p/plan.md", 1, "telegram")
+    assert "1. Add notify/channels.py with register_channel." in text
+    assert "2. Export it from notify/__init__.py." in text
+    assert "3. Export __all__ and snake_case." in text
+
+
+def test_035_compact_plan_summary_lists_steps_not_changes():
+    from plan_mode.approval import approval_text
+    plan = ("# Notify registry\n\n## Goal\nRegistry.\n\n## Changes\n- `notify/channels.py`: new channel classes.\n"
+            "- `notify/core.py`: dispatch through the registry.\n\n## Steps\n1. Add channel classes. Check: tests.\n"
+            "2. Route send through the registry. Check: tests.\n\n## Validation\n- `pytest -q`\n")
+    text = approval_text(plan, "/p/plan.md", 1, "telegram")
+    assert "1. Add channel classes. Check: tests." in text and "notify/channels.py" not in text
+    only_changes = plan.split("## Steps")[0]
+    assert "1. notify/channels.py: new channel classes." in approval_text(only_changes, "/p/plan.md", 1, "telegram")
+
+
+def test_035_agent_activation_result_carries_the_planning_note(plugin, session_env, tmp_path):
+    from plan_mode.render import COMPACT_PLAN, NO_COMMITS
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    result = json.loads(plugin.tool({"action": "on", "reason": "refactor"}))["message"]
+    assert COMPACT_PLAN in result and NO_COMMITS in result and "You entered plan mode yourself" in result
+    plugin.command("off")
+    assert COMPACT_PLAN not in plugin.command("on refactor")  # the user's command reply stays short
+
+
+def test_035_nested_changes_groups_do_not_outrank_steps():
+    from plan_mode.approval import _steps
+    changes = ("## Changes\n### Parser implementation\n- src/parser.py: include the token position.\n"
+               "### CLI implementation\n- src/cli.py: print the error and exit 2.\n")
+    steps = "## Steps\n1. Add token positions. Check: parser tests.\n2. Handle errors in the CLI. Check: CLI tests.\n"
+    plan = "# Parser errors\n## Goal\nReport errors.\n" + changes + steps + "## Validation\n- pytest -q\n"
+    assert _steps(plan) == ["Add token positions. Check: parser tests.", "Handle errors in the CLI. Check: CLI tests."]
+    assert _steps("# Parser errors\n" + changes) == ["Parser implementation", "CLI implementation"]
+
+
+
+@pytest.mark.parametrize("title, changes_heading", [
+    ("# Parser changes", "## Changes"), ("# Changes", "## Changes"), ("# Parser errors", "## Changes per file"),
+    ("# Parser errors", "## File changes"),
+])
+def test_035_changes_titles_and_decorated_headings_keep_the_steps(title, changes_heading):
+    from plan_mode.approval import _steps
+    changes = (f"{changes_heading}\n### Parser implementation\n- src/parser.py: include token position.\n"
+               "### CLI implementation\n- src/cli.py: exit 2.\n")
+    for steps in ("## Steps\n1. Add token positions.\n2. Handle CLI errors.\n",
+                  "## Steps\n- Add token positions.\n- Handle CLI errors.\n",
+                  "## Step-by-step tasks\n- Add token positions.\n- Handle CLI errors.\n"):
+        plan = f"{title}\n## Goal\nBetter errors.\n" + changes + steps + "## Validation\n- pytest\n"
+        assert _steps(plan) == ["Add token positions.", "Handle CLI errors."], (title, changes_heading, steps)
+    assert _steps(f"{title}\n## Goal\nBetter errors.\n## Steps\n- Add token positions.\n- Handle CLI errors.\n") == [
+        "Add token positions.", "Handle CLI errors."]
+
+
+
+@pytest.mark.parametrize("outer", ["## Apply changes to parser", "## API changes and rollout", "## Changes per file"])
+@pytest.mark.parametrize("inner", ["### Implementation steps\n- Add token positions.\n- Handle CLI errors.\n",
+                                   "### Implementation steps\n#### Add token positions.\n#### Handle CLI errors.\n"])
+def test_035_work_nested_under_a_changes_heading_still_counts_without_steps(outer, inner):
+    from plan_mode.approval import _steps
+    plan = f"# Parser error handling\n## Goal\nBetter errors.\n{outer}\n{inner}## Validation\n- pytest\n"
+    assert _steps(plan) == ["Add token positions.", "Handle CLI errors."]
