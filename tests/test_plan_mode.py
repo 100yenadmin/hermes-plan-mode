@@ -2405,6 +2405,15 @@ def test_v033_chat_summary_is_linear_in_headings():
     # A label-suffixed section and its numbered notes stay out of the fallback.
     ("# X\n\n## Implementation notes\n\n1. needs the v2 client\n\n## Add API\n\n## Deploy API\n",
      ["Add API", "Deploy API"]),
+    # A task heading that ends in a label word is still a task.
+    ("# X\n\n## Add API\n\n## Write release notes\n\n## Deploy\n", ["Add API", "Write release notes", "Deploy"]),
+    # A "Step N" prefix needs a boundary after the number, so "Phase 2FA rollout" is not cut.
+    ("# X\n\n## Phase 2FA rollout\n\n## Step 1Password integration\n",
+     ["Phase 2FA rollout", "Step 1Password integration"]),
+    # A literal fence marker in indented code does not open a fence.
+    ("# X\n\n## Steps\n\n1. Build\n\n        ```\n\n2. Ship\n", ["Build", "Ship"]),
+    # A document title that reads like a label does not hide the sections under it.
+    ("# Context\n\n## Steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
     # Numbered items under a label heading are not steps.
     ("# X\n\n## Deploy production\n\n## Risks\n\n1. Downtime\n2. Data loss\n", ["Deploy production"]),
     # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.

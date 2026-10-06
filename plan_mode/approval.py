@@ -49,10 +49,12 @@ _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary
               r"architecture(?:\s*/\s*proposed approach)?|tests?|testing|validation|verification|risks?|tradeoffs|open questions|notes?|"
               r"out of scope|non-goals|files(?: likely to change)?)")
 _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_META_WORD})?)*:?$")
-# A heading that ends in a label word ("Implementation notes", "Task overview") is a label section too.
-_META_TAIL = re.compile(r"(?i)\b(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
+# A work word followed by a label word ("Implementation notes", "Task overview") is a label section too; a task such
+# as "Write release notes" is not.
+_META_TAIL = re.compile(r"(?i)\b(?:steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes|approach|"
+                        r"plan)\s+(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
                         r"open questions|non-goals|out of scope)\s*:?$")
-_STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?\s*[:.)—–-]*\s*")
+_STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?(?![a-z0-9])\s*[:.)—–-]*\s*")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")  # 4+ spaces is indented code
 _LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.+)$")
 
@@ -61,7 +63,7 @@ def _unfenced(text: str) -> list[str]:
     """The plan's lines with fenced code blanked, so a `# comment` in a snippet is not a heading."""
     lines, fence = [], ""
     for line in text.splitlines():
-        marker = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)  # 4+ spaces is indented code
         if fence:
             # Only a bare marker of the opener's kind and at least its length closes the fence.
             if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
@@ -86,8 +88,9 @@ def _steps(text: str) -> list[str]:
             level, heading = len(match[1]), _plain(match[2])
             while open_ and headings[open_[-1]][1] >= level:
                 ends[open_.pop()] = index
+            # A label section's sub-headings are labels too; the document title (level 1) passes nothing down.
             meta = (bool(_META_SECTION.match(heading) or _META_TAIL.search(heading))
-                    or bool(open_ and headings[open_[-1]][3]))
+                    or bool(open_ and headings[open_[-1]][1] > 1 and headings[open_[-1]][3]))
             if open_:
                 children[open_[-1]].append(len(headings))
             headings.append((index, level, heading, meta))
