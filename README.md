@@ -173,6 +173,9 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`; applies to new sessions |
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
+| Plan style (`plan_style`) | `core` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
+| Allow commits (`allow_commits`) | on | Off: the agent neither plans nor makes git commits unless you ask, so changes stay uncommitted for your review |
+| Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style |
 
 Or set them in the profile's `config.yaml` (flat keys under `settings`):
 
@@ -186,6 +189,9 @@ plugins:
         agent_hint: true
         footer: "off"                   # quote it: a bare off is read as false (also honored)
         extra_allowed_tools: []
+        plan_style: core                # or compact
+        allow_commits: true
+        plan_skill: ""                  # e.g. durable-plan-contract
 ```
 
 - `extra_allowed_tools` is an explicit policy override: the operator vouches that those tools are read-only.

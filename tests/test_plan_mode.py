@@ -2854,3 +2854,40 @@ def test_035_commits_off_on_the_clarify_fallback(plugin, submitted_plan):
     _submit(plugin)
     result = _submit_result(plugin)
     assert "clarify" in result and NO_COMMITS in result["message"]
+
+
+# Codex review of 0.3.5 (probe 6): every approval-to-implementation path carries NO_COMMITS when commits are off.
+def test_035_commits_off_open_card_typed_approve_result(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    directive = _submit(plugin)
+    assert "Plan approved" in plugin.command("approve")
+    _decision(plugin, directive)
+    result = _submit_result(plugin)
+    assert result["approved"] is True and result["message"].endswith(NO_COMMITS)
+
+
+@pytest.mark.parametrize("card", ["deny", "timeout"])
+def test_035_commits_off_open_card_blocked_continuation(plugin, submitted_plan, card):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    directive = _submit(plugin)
+    plugin.command("approve")
+    if card == "deny":
+        _decision(plugin, directive, "deny")
+    plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
+    assert plugin.ctx.injected and all(content.endswith(NO_COMMITS) for content, _ in plugin.ctx.injected)
+    assert plugin._load_state("sk:unit-session")["pending_note"].endswith(NO_COMMITS)
+
+
+def test_035_commits_off_clarify_approval_then_pointer(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    _submit(plugin)
+    result = _submit_result(plugin)
+    assert NO_COMMITS in result["message"]
+    block = plugin._load_state("sk:unit-session")["submission"]["clarify"]
+    assert plugin.pre_tool_call("clarify", _clarify_args(block), tool_call_id="clarify-1") is None
+    _answer_clarify(plugin, block, block["choices"][0], status="answered")
+    assert plugin._load_state("sk:unit-session")["phase"] == "executing"
+    assert plugin.pre_llm_call()["context"].endswith(NO_COMMITS)
