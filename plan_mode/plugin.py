@@ -1172,7 +1172,10 @@ class PlanModePlugin:
         # A skill name only; anything else (paths with spaces, prose, oversized values) is ignored.
         name = self._config("plan_skill", "")
         name = name.strip() if isinstance(name, str) else ""
-        return name if _PLAN_SKILL_RE.fullmatch(name) else ""
+        if not _PLAN_SKILL_RE.fullmatch(name):
+            return ""
+        # Plan mode blocks skill_view while inline shell may run; then the skill can't be loaded, so use Plan style.
+        return "" if _skill_view_block_reason() else name
 
     def _allow_commits(self) -> bool:
         # YAML 1.1 reads a bare `off`/`no` as False; quoted strings are accepted as well.

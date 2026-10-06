@@ -2805,9 +2805,19 @@ def test_035_compact_style_replaces_the_plan_craft(plugin, session_env, tmp_path
 
 
 def test_035_plan_skill_wins_over_style(plugin, session_env, tmp_path, monkeypatch):
+    _fake_skill_loader(monkeypatch, lambda: {})
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", plan_skill="durable-plan-contract")
     assert "2. Load the durable-plan-contract skill with skill_view and write the plan in its format" in note
     assert "Make it compact" not in note
+
+
+@pytest.mark.parametrize("loader", [lambda: {"inline_shell": True}, None, lambda: 1 / 0])
+def test_035_plan_skill_falls_back_to_style_when_skill_view_is_blocked(plugin, session_env, tmp_path, monkeypatch, loader):
+    from plan_mode.render import COMPACT_PLAN
+    _fake_skill_loader(monkeypatch, loader)
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_skill="durable-plan-contract")
+    assert "skill_view" not in note and COMPACT_PLAN in note
+    assert plugin.pre_tool_call("skill_view", {"name": "durable-plan-contract"})["action"] == "block"
 
 
 @pytest.mark.parametrize("bad", ["", "  ", "two words", "x" * 101, "../etc/passwd;rm", 42])
