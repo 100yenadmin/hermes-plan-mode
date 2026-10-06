@@ -48,16 +48,18 @@ _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary
 _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_META_WORD})?)*:?$")
 _STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?\s*[:.)—–-]*\s*")
 _HEADING = re.compile(r"^\s*(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")
-_NUMBERED = re.compile(r"^\d+[.)]\s+(.+)$")
+_LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.+)$")
 
 
 def _unfenced(text: str) -> list[str]:
     """The plan's lines with fenced code blanked, so a `# comment` in a snippet is not a heading."""
     lines, fence = [], ""
     for line in text.splitlines():
-        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        marker = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
         if fence:
-            fence = "" if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) else fence
+            # Only a bare marker of the opener's kind and at least its length closes the fence.
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = ""
             lines.append("")
         elif marker:
             fence = marker[1]
@@ -70,51 +72,65 @@ def _unfenced(text: str) -> list[str]:
 def _steps(text: str) -> list[str]:
     """Pick the plan's steps for a short chat summary, not its section headings."""
     lines = _unfenced(text)
-    headings = [(index, len(match[1]), _plain(match[2])) for index, line in enumerate(lines)
-                if (match := _HEADING.match(line))]
-
-    def section_end(position: int) -> int:
-        start, level, _ = headings[position]
-        return next((index for index, sub_level, _ in headings[position + 1:] if sub_level <= level), len(lines))
+    # One pass: (line, level, text, label is meta or sits under one), each heading's direct children and
+    # section end, and whether its section holds numbered items / its own body holds bullets (meta parts excluded).
+    headings, children, ends, numbered, bullets, open_ = [], [], [], [], [], []
+    for index, line in enumerate(lines):
+        if (match := _HEADING.match(line)):
+            level, heading = len(match[1]), _plain(match[2])
+            while open_ and headings[open_[-1]][1] >= level:
+                ends[open_.pop()] = index
+            meta = bool(_META_SECTION.match(heading)) or bool(open_ and headings[open_[-1]][3])
+            if open_:
+                children[open_[-1]].append(len(headings))
+            headings.append((index, level, heading, meta))
+            children.append([]); ends.append(len(lines)); numbered.append(False); bullets.append(False)
+            open_.append(len(headings) - 1)
+        elif open_ and not headings[open_[-1]][3] and _LIST_ITEM.match(line):
+            if line[0].isdigit():
+                for position in open_:
+                    numbered[position] = True
+            else:
+                bullets[open_[-1]] = True
 
     def section_items(position: int) -> list[str]:
-        start, level, _ = headings[position]
-        end = section_end(position)
-        subs = [(sub_level, heading) for index, sub_level, heading in headings[position + 1:]
-                if index < end and sub_level > level]
-        if subs:
-            child = min(sub_level for sub_level, _ in subs)  # direct children only; deeper ones are details
-            return [heading for sub_level, heading in subs if sub_level == child]
-        return [match[1] for line in lines[start + 1:end]
-                if (match := re.match(r"^(?:\d+[.)]|[-*+])\s+(.+)$", line))]
+        named = [headings[child][2] for child in children[position] if not headings[child][3]]
+        if named:
+            return named  # direct sub-headings are the steps; their own sub-headings are details
+        body_end = headings[children[position][0]][0] if children[position] else ends[position]
+        return [match[1] for line in lines[headings[position][0] + 1:body_end] if (match := _LIST_ITEM.match(line))]
 
     def clean(items: list[str]) -> list[str]:
         return [_STEP_PREFIX.sub("", _plain(item)) or _plain(item) for item in items]
 
     for pattern in (_STEP_SECTION, _APPROACH_SECTION):
-        for position, (_, level, heading) in enumerate(headings):
-            if (level > 1 and pattern.search(heading) and not _META_SECTION.match(heading)
-                    and not _STEP_PREFIX.match(heading)):
+        for position, (_, level, heading, meta) in enumerate(headings):
+            if level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading):
                 items = section_items(position)
                 if items:
                     return clean(items)
-    step_headings = [heading for _, level, heading in headings if level > 1 and _STEP_PREFIX.match(heading)]
+    step_headings = [heading for _, level, heading, meta in headings
+                     if level > 1 and not meta and _STEP_PREFIX.match(heading)]
     if step_headings:
         return clean(step_headings)
-    # No step section: numbered items, plus sub-headings that are neither labels nor containers of a numbered list.
-    containers = {headings[position][0] for position in range(len(headings))
-                  if any(_NUMBERED.match(line) for line in lines[headings[position][0] + 1:section_end(position)])}
-    ordered = []
+    # No step section, in document order: numbered items; sub-headings that hold no list; the bullets of a
+    # sub-heading that holds no numbered list. Anything under a label heading ("Risks") is skipped.
+    by_line = {heading[0]: position for position, heading in enumerate(headings)}
+    ordered, current = [], None
     for index, line in enumerate(lines):
-        if (match := _NUMBERED.match(line)):
-            ordered.append(match[1])
-        elif ((match := _HEADING.match(line)) and 2 <= len(match[1]) <= 3 and index not in containers
-              and not _META_SECTION.match(_plain(match[2]))):
-            ordered.append(match[2])
+        if index in by_line:
+            current = by_line[index]
+            _, level, heading, meta = headings[current]
+            if 2 <= level <= 3 and not meta and not numbered[current] and not bullets[current]:
+                ordered.append(heading)
+        elif (match := _LIST_ITEM.match(line)) and not (current is not None and headings[current][3]):
+            if line[0].isdigit() or (current is not None and 2 <= headings[current][1] <= 3
+                                     and not numbered[current]):
+                ordered.append(match[1])
     if ordered:
         return ordered
-    bullets = [match[1] for line in lines if (match := re.match(r"^[-*+]\s+(.+)$", line))]
-    return bullets or [line for line in text.splitlines() if line.strip()]
+    bullet_items = [match[1] for line in lines if (match := re.match(r"^[-*+]\s+(.+)$", line))]
+    return bullet_items or [line for line in text.splitlines() if line.strip()]
 
 
 def approval_text(text, path, revision, platform, summary="") -> str:

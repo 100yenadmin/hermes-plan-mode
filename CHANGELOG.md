@@ -7,6 +7,15 @@
   then numbered items. Before, it took the first headings and bullets in the file. A live Telegram run showed
   "1. Goal 2. Current context / assumptions 3. Workspace root: …" instead of the steps. A "Plan (v2):" prefix is
   also dropped from the title.
+- The summary skips label sub-headings ("Tests", "Risks") and anything under them, takes the bullets of a section
+  that has no numbered list, and treats a fence marker with trailing text as code, not as the fence's end. It is
+  linear in the number of headings.
+- Updating plan-mode no longer makes Hermes re-sync its dependencies on the next start. The plugin has no Python
+  dependencies, but its `pyproject.toml` made it a member of Hermes' package-manager workspace, so every update
+  changed the member set and the next gateway or CLI start re-synced dependencies. On Hermes builds before
+  NousResearch/hermes-agent#131001 that start also rebuilt the TUI, web UI and Desktop app (about 4 minutes). The file is gone
+  (test settings moved to `pytest.ini`), so plan-mode is a plain plugin. The first start after this update still
+  syncs once, because the member set changes one last time.
 
 ## 0.3.2 - 2026-10-06
 

@@ -2363,6 +2363,14 @@ def test_v033_chat_summary_skips_meta_headings_without_a_step_section(tmp_path):
         "1. Rename module", "2. Update imports"]
 
 
+def test_v033_chat_summary_is_linear_in_headings():
+    import time
+    from plan_mode.approval import _steps
+    started = time.monotonic()
+    assert _steps("# X\n" + "## Steps\n" * 30000 + "## Steps\n1. ship\n") == ["ship"]
+    assert time.monotonic() - started < 3
+
+
 @pytest.mark.parametrize("text,expected", [
     # A "Step N" heading with detail bullets is a step, not a section of steps.
     ("# X\n\n## Step 1: Add API\n\n- route\n- handler\n\n## Step 2: Add tests\n\n- unit\n", ["Add API", "Add tests"]),
@@ -2370,6 +2378,15 @@ def test_v033_chat_summary_skips_meta_headings_without_a_step_section(tmp_path):
     ("# X\n\n## Steps\n\n### Add API\n\n#### Files\n\n#### Notes\n\n### Add tests\n", ["Add API", "Add tests"]),
     # A generic heading that holds a numbered list is a container, not a step.
     ("# X\n\n## Proposed changes\n\n1. Patch the parser\n2. Ship it\n", ["Patch the parser", "Ship it"]),
+    # A marker with trailing text does not close a fence, so a "## comment" inside stays code.
+    ("# X\n\n## Steps\n\n1. Patch\n\n```\n```not-close\n## Comment\n```\n\n2. Ship\n", ["Patch", "Ship"]),
+    # A label sub-heading inside the step section is not a step, and its bullets are not steps either.
+    ("# X\n\n## Steps\n\n1. Build\n2. Ship\n\n### Tests\n\n- run pytest\n", ["Build", "Ship"]),
+    # Without a step section, a heading whose body is a bullet list gives its bullets.
+    ("# X\n\n## Context\n\n- legacy\n\n## Proposed changes\n\n- Build the API\n- Add tests\n",
+     ["Build the API", "Add tests"]),
+    # Numbered items under a label heading are not steps.
+    ("# X\n\n## Deploy production\n\n## Risks\n\n1. Downtime\n2. Data loss\n", ["Deploy production"]),
     # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.
     ("# X\n\n## Context\n\n- legacy parser\n\n## Proposed Approach\n\n- Patch it\n- Ship it\n", ["Patch it", "Ship it"]),
     # A leading issue reference keeps its hash.
