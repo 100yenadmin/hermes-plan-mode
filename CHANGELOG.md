@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3 - 2026-10-06
+
+- Fix: the short approval summary on Telegram, Slack and Discord lists the plan's steps. It takes them from the
+  "Step-by-step tasks" section that core `/plan` asks for, or another steps/tasks section; then "Step N" headings;
+  then numbered items. Before, it took the first headings and bullets in the file. A live Telegram run showed
+  "1. Goal 2. Current context / assumptions 3. Workspace root: …" instead of the steps. A "Plan (v2):" prefix is
+  also dropped from the title.
+
 ## 0.3.2 - 2026-10-06
 
 - Fix: the TUI/Desktop approval card now shows a one-line prompt ("Plan rev N (file) …approve to start

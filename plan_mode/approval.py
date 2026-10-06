@@ -31,11 +31,54 @@ def _plain(text: str) -> str:
 def _title(text, summary, name) -> str:
     heading = re.search(r"^\s*#{1,6}\s+(.+)$", text, re.MULTILINE)
     title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
-    return re.sub(r"(?i)^plan(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
+    return re.sub(r"(?i)^plan(?:\s*\([^)]*\))?(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
 
 
 # Platforms whose approval card cuts the whole prompt at a fixed size (WhatsApp Cloud: 1024-char body).
 _CARD_LIMITS = {"whatsapp_cloud": 1000}
+
+
+# Section headings that hold the work itself (core /plan asks for "Step-by-step tasks"), and headings that never do.
+_STEP_SECTION = re.compile(r"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution)\b")
+_APPROACH_SECTION = re.compile(r"(?i)\b(approach|plan)\b")
+_META_SECTION = re.compile(r"(?i)^(goal|goals|current context|context|assumptions|background|summary|overview|"
+                           r"architecture|tests?|testing|validation|verification|risks?|tradeoffs|open questions|"
+                           r"notes?|out of scope|non-goals|files)\b")
+_STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?\s*[:.)—–-]*\s*")
+
+
+def _steps(text: str) -> list[str]:
+    """Pick the plan's steps for a short chat summary, not its section headings."""
+    lines = text.splitlines()
+    headings = [(index, len(match[1]), match[2].strip()) for index, line in enumerate(lines)
+                if (match := re.match(r"^\s*(#{1,6})\s+(.+?)\s*#*\s*$", line))]
+
+    def section_items(position: int) -> list[str]:
+        start, level, _ = headings[position]
+        end = next((index for index, sub_level, _ in headings[position + 1:] if sub_level <= level), len(lines))
+        subs = [heading for index, sub_level, heading in headings[position + 1:] if index < end and sub_level > level]
+        if subs:
+            return subs
+        return [match[1] for line in lines[start + 1:end]
+                if (match := re.match(r"^(?:\d+[.)]|[-*+])\s+(.+)$", line))]
+
+    for pattern in (_STEP_SECTION, _APPROACH_SECTION):
+        for position, (_, level, heading) in enumerate(headings):
+            if level > 1 and pattern.search(_plain(heading)) and not _META_SECTION.match(_plain(heading)):
+                items = section_items(position)
+                if items:
+                    return [_STEP_PREFIX.sub("", _plain(item)) or _plain(item) for item in items]
+    step_headings = [heading for _, level, heading in headings if level > 1 and _STEP_PREFIX.match(_plain(heading))]
+    if step_headings:
+        return [_STEP_PREFIX.sub("", _plain(item)) or _plain(item) for item in step_headings]
+    # No step section: numbered items and non-meta sub-headings in document order, then plain bullets.
+    ordered = [match[1] or match[2] for match in re.finditer(r"^(?:\d+[.)]\s+(.+)|#{2,3}\s+(.+?)\s*#*\s*)$",
+                                                             text, re.MULTILINE)
+               if match[1] or not _META_SECTION.match(_plain(match[2]))]
+    if ordered:
+        return ordered
+    bullets = re.findall(r"^[-*+]\s+(.+)$", text, re.MULTILINE)
+    return bullets or [line for line in lines if line.strip()]
 
 
 def approval_text(text, path, revision, platform, summary="") -> str:
@@ -48,9 +91,7 @@ def approval_text(text, path, revision, platform, summary="") -> str:
                 "approve to start implementing, deny to keep planning.")
     if str(platform).lower() in {"telegram", "slack", "discord"}:
         title = _title(text, summary, name)
-        steps = re.findall(r"^(?:[-*+]\s+|\d+[.)]\s+|#{2,3}\s+)(.+)$", text, re.MULTILINE)
-        if not steps:
-            steps = [line for line in text.splitlines() if line.strip()]
+        steps = _steps(text)
         result = f"Plan rev {revision}: {title}"
         result += "".join(f"\n{index}. {_plain(step)}" for index, step in enumerate(steps[:6], 1))
         return result if len(result) <= 250 else result[:249] + "…"

@@ -2288,3 +2288,76 @@ def test_v032_tui_submission_uses_one_line_card_text(plugin, session_env, tmp_pa
     plugin.post_tool_call("write_file", args, status="ok", **ids)
     message = _submit(plugin)["message"]
     assert "\n" not in message and len(message) < 400 and "Plan rev 1" in message
+
+
+# v0.3.3: the short chat summary lists the plan's steps, not its section headings.
+_CORE_TEMPLATE_PLAN = """# Plan: Add greet()
+
+## Goal
+
+Add a greet() helper.
+
+## Current context / assumptions
+
+- Workspace root: /srv/project
+- Nothing exists yet.
+
+## Architecture / proposed approach
+
+One function, one test file.
+
+## Step-by-step tasks
+
+### Step 1 — Write the failing test (2 min)
+
+Details.
+
+### Step 2 — Implement greet() (2 min)
+
+Details.
+
+### Step 3: Run the tests
+
+Details.
+
+## Tests / validation
+
+- pytest -q
+
+## Risks, tradeoffs, and open questions
+
+- None.
+"""
+
+
+@pytest.mark.parametrize("platform", ["telegram", "slack", "discord"])
+def test_v033_chat_summary_lists_steps_from_the_core_template(tmp_path, platform):
+    from plan_mode.approval import approval_text
+    result = approval_text(_CORE_TEMPLATE_PLAN, str(tmp_path / "p.md"), 1, platform)
+    assert result.splitlines() == [
+        "Plan rev 1: Add greet()", "1. Write the failing test (2 min)", "2. Implement greet() (2 min)",
+        "3. Run the tests"]
+    assert "Goal" not in result and "/srv/project" not in result
+
+
+def test_v033_chat_summary_uses_the_step_section_list_items(tmp_path):
+    from plan_mode.approval import approval_text
+    text = "# Plan (v2): Ship it\n\n## Goal\n\n- Ship.\n\n## Steps\n\n1. Build\n2. Test\n\n## Risks\n\n- Late.\n"
+    assert approval_text(text, str(tmp_path / "p.md"), 2, "telegram").splitlines() == [
+        "Plan rev 2: Ship it", "1. Build", "2. Test"]
+
+
+def test_v033_chat_summary_falls_back_to_step_headings_then_numbered_items(tmp_path):
+    from plan_mode.approval import approval_text
+    headings = "# Fix\n\n## Context\n\n- x\n\n## Step 1: Patch\n\n## Step 2: Verify\n"
+    assert approval_text(headings, str(tmp_path / "p.md"), 1, "slack").splitlines()[1:] == ["1. Patch", "2. Verify"]
+    numbered = "Fix the bug.\n\n- background note\n1. Reproduce\n2. Patch\n"
+    assert approval_text(numbered, str(tmp_path / "p.md"), 1, "discord").splitlines()[1:] == [
+        "1. Reproduce", "2. Patch"]
+
+
+def test_v033_chat_summary_skips_meta_headings_without_a_step_section(tmp_path):
+    from plan_mode.approval import approval_text
+    text = "# Tidy\n\n## Goal\n\n## Rename module\n\n## Update imports\n\n## Risks\n"
+    assert approval_text(text, str(tmp_path / "p.md"), 1, "telegram").splitlines()[1:] == [
+        "1. Rename module", "2. Update imports"]
