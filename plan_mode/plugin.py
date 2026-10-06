@@ -27,7 +27,7 @@ from .approval import (
     is_human_approval, make_rule_key, plan_digest,
 )
 from .render import (
-    AGENT_HINT, BUILTIN_OVERRIDE, LOCAL_PLATFORMS, executing_pointer,
+    AGENT_HINT, BUILTIN_OVERRIDE, LOCAL_PLATFORMS, NO_COMMITS, executing_pointer,
     plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -93,6 +93,11 @@ _TODO_HINT = (
     "mirror the plan's steps into todo_list, called as todo_list(todos=[{\"id\": \"1\", \"content\": \"...\", "
     "\"status\": \"in_progress\"}, ...]), and update the statuses with merge=true as you work."
 )
+
+_PLAN_STYLES = frozenset({"compact", "core"})
+_DEFAULT_PLAN_STYLE = "core"
+_DEFAULT_ALLOW_COMMITS = True
+_PLAN_SKILL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
 
 _V4A_FILE_RE = re.compile(
     r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+)$", re.MULTILINE
@@ -797,7 +802,7 @@ class PlanModePlugin:
             state["pending_note"] = ""
             self._save_command_state(raw_key, storage_key, state)
             return {"message": f"The user approved plan rev {submission['revision']} at {submission['path']} with "
-                    f"/planmode approve. Plan mode is off. Implement it now: {_TODO_HINT}",
+                    f"/planmode approve. Plan mode is off. Implement it now: {self._execute_hint()}",
                     "approved": True, "path": submission["path"], "revision": submission["revision"]}
         if opened:
             self._save_command_state(raw_key, storage_key, state)
@@ -814,7 +819,7 @@ class PlanModePlugin:
                 self._approve_submission(state, submission)
                 self._save_command_state(raw_key, storage_key, state)
                 return {"message": f"The user approved plan rev {revision} at {path}. Plan mode is off. "
-                        f"Implement it now: {_TODO_HINT}",
+                        f"Implement it now: {self._execute_hint()}",
                         "approved": True, "path": path, "revision": revision}
             submission["status"] = "stale"
             message = self._stale_note(revision)
@@ -835,7 +840,7 @@ class PlanModePlugin:
                     "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: "
                     f"question={question} and choices={[approve, keep]} "
                     "(these exact strings, this order, not multi-select). "
-                    f"If the user picks {approve}, plan mode turns off automatically; implement the plan in this turn: {_TODO_HINT} "
+                    f"If the user picks {approve}, plan mode turns off automatically; implement the plan in this turn: {self._execute_hint()} "
                     f"If they pick {keep} or answer otherwise, ask what to change and revise. "
                     "If clarify is unavailable, ask the user to run /planmode approve."
                 )
@@ -1045,7 +1050,7 @@ class PlanModePlugin:
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
                 state["pending_note"] = (
-                    f"The user approved the plan at {approved_path}. Implement it now."
+                    f"The user approved the plan at {approved_path}. Implement it now." + self._commit_rule()
                 )
                 state.update(phase="executing", approved_path=approved_path, approved_at=_utc_now())
                 state.pop("approved_revision", None)
@@ -1124,7 +1129,7 @@ class PlanModePlugin:
                 return False
             reader = _session_reader()
             session_key = reader("HERMES_SESSION_KEY", "") if reader else None
-            content = f"Implement the approved plan at {approved_path}."
+            content = f"Implement the approved plan at {approved_path}." + self._commit_rule()
             return bool(inject(content, session_key=session_key) if session_key else inject(content))
         except Exception:
             return False
@@ -1158,6 +1163,29 @@ class PlanModePlugin:
         if value is None:
             value = self.ctx.get_config(f"plan_mode.{name}", None)
         return default if value is None else value
+
+    def _plan_style(self) -> str:
+        style = str(self._config("plan_style", _DEFAULT_PLAN_STYLE)).strip().lower()
+        return style if style in _PLAN_STYLES else _DEFAULT_PLAN_STYLE
+
+    def _plan_skill(self) -> str:
+        # A skill name only; anything else (paths with spaces, prose, oversized values) is ignored.
+        name = self._config("plan_skill", "")
+        name = name.strip() if isinstance(name, str) else ""
+        return name if _PLAN_SKILL_RE.fullmatch(name) else ""
+
+    def _allow_commits(self) -> bool:
+        # YAML 1.1 reads a bare `off`/`no` as False; quoted strings are accepted as well.
+        value = self._config("allow_commits", _DEFAULT_ALLOW_COMMITS)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"false", "off", "no", "0"}
+        return value is not False
+
+    def _commit_rule(self) -> str:
+        return "" if self._allow_commits() else f" {NO_COMMITS}"
+
+    def _execute_hint(self) -> str:
+        return _TODO_HINT + self._commit_rule()
 
     def _footer_off(self) -> bool:
         # Hermes reads config.yaml as YAML 1.1, where a bare `footer: off` is the boolean False.
@@ -1490,7 +1518,8 @@ class PlanModePlugin:
                     assert state_key is not None
                     self._active_keys.add(state_key)
                     self._remember_session_id(state_key, state, kwargs.get("session_id"))
-                    note = planning_note(state.get("plans_dir"))
+                    note = planning_note(state.get("plans_dir"), style=self._plan_style(),
+                                         plan_skill=self._plan_skill(), commits=self._allow_commits())
                     if self._agent_owned(state):
                         note += f" {_AGENT_NOTE}"
                     if builtin:
@@ -1508,7 +1537,7 @@ class PlanModePlugin:
                     if state["executing_turns"] > 100:
                         self._clear_execution(state)
                     else:
-                        parts.append(executing_pointer(state))
+                        parts.append(executing_pointer(state, commits=self._allow_commits()))
                     digest = self._session_id_hash(kwargs.get("session_id"))
                     if digest:
                         state["session_id_hash"] = digest  # lets an unbound gateway reset find this state

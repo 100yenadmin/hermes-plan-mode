@@ -1914,7 +1914,13 @@ def test_v033_config_schema_declares_the_flat_settings():
     yaml = pytest.importorskip("yaml")  # PyYAML: a YAML 1.1 loader, like Hermes' manifest reader (not on Hermes main)
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
-    assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools"}
+    assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools",
+                           "plan_style", "allow_commits", "plan_skill"}
+    # The form's defaults and the code's defaults must agree, or an untouched setting behaves differently.
+    assert schema["plan_style"]["default"] == plugin_mod._DEFAULT_PLAN_STYLE
+    assert sorted(schema["plan_style"]["choices"]) == sorted(plugin_mod._PLAN_STYLES)
+    assert schema["allow_commits"]["default"] is plugin_mod._DEFAULT_ALLOW_COMMITS
+    assert schema["plan_skill"]["default"] == ""
     assert all("." not in key for key in schema)  # the form saves dotted keys nested but reads them back flat
     # Quoted in the manifest: a bare off would load as False under YAML 1.1 and break the dropdown.
     assert schema["footer"]["choices"] == ["auto", "off"] and schema["footer"]["default"] == "auto"
@@ -2770,3 +2776,81 @@ def test_v034_clarify_transition_updates_linked_ui_command_state(plugin, session
         assert "clarify" not in state["submission"]
     session_env.pop("HERMES_UI_SESSION_ID")
     assert "executing (rev 1:" in plugin.command("status")
+
+
+# --- 0.3.5: plan style, plan skill and commit policy -------------------------------------------------------------
+
+def _note(plugin, tmp_path, monkeypatch, session_env, **settings):
+    from plan_mode import render as render_mod
+    monkeypatch.setattr(render_mod, "plan_file_stamp", lambda now=None: "2026-10-05_120000")
+    plugin.ctx.settings.update(settings)
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    return plugin.pre_llm_call()["context"]
+
+
+def test_035_compact_style_replaces_the_plan_craft(plugin, session_env, tmp_path, monkeypatch):
+    from plan_mode.render import COMPACT_PLAN, NO_COMMITS
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact")
+    plans = tmp_path / ".hermes" / "plans"
+    assert (f"2. Write the plan as Markdown to {plans}/2026-10-05_120000-<slug>.md (that timestamp is current; "
+            f"do not look up the time). {COMPACT_PLAN}\n") in note
+    assert "with numbered steps" not in note and NO_COMMITS not in note
+
+
+def test_035_plan_skill_wins_over_style(plugin, session_env, tmp_path, monkeypatch):
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", plan_skill="durable-plan-contract")
+    assert "2. Load the durable-plan-contract skill with skill_view and write the plan in its format" in note
+    assert "Make it compact" not in note
+
+
+@pytest.mark.parametrize("bad", ["", "  ", "two words", "x" * 101, "../etc/passwd;rm", 42])
+def test_035_invalid_plan_skill_is_ignored(plugin, session_env, tmp_path, monkeypatch, bad):
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_skill=bad)
+    assert "skill_view" not in note and "with numbered steps" in note
+
+
+@pytest.mark.parametrize("value", ["fancy", None, 3])
+def test_035_unknown_style_falls_back_to_core(plugin, session_env, tmp_path, monkeypatch, value):
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style=value)
+    assert "with numbered steps" in note
+
+
+@pytest.mark.parametrize("value", [False, "false", "off", "no", "0", " Off "])
+def test_035_commits_off_reaches_every_execution_message(plugin, session_env, tmp_path, monkeypatch, submitted_plan, value):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = value
+    assert NO_COMMITS in plugin.pre_llm_call()["context"]
+    directive = _submit(plugin)
+    _decision(plugin, directive)
+    result = _submit_result(plugin)
+    assert result["approved"] and result["message"].endswith(NO_COMMITS)
+    assert plugin.pre_llm_call()["context"].endswith(NO_COMMITS)
+
+
+@pytest.mark.parametrize("value", [True, "true", "yes", None])
+def test_035_commits_allowed_keeps_the_043_text(plugin, session_env, submitted_plan, value):
+    from plan_mode.render import NO_COMMITS
+    if value is not None:
+        plugin.ctx.settings["allow_commits"] = value
+    assert NO_COMMITS not in plugin.pre_llm_call()["context"]
+    directive = _submit(plugin)
+    _decision(plugin, directive)
+    assert NO_COMMITS not in _submit_result(plugin)["message"]
+
+
+def test_035_commits_off_on_typed_approve_and_inject(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    plugin.command("approve")
+    assert plugin._load_state("sk:unit-session")["pending_note"].endswith(NO_COMMITS)
+    assert plugin._start_implementation(str(submitted_plan))
+    assert plugin.ctx.injected and all(content.endswith(NO_COMMITS) for content, _ in plugin.ctx.injected)
+
+
+def test_035_commits_off_on_the_clarify_fallback(plugin, submitted_plan):
+    from plan_mode.render import NO_COMMITS
+    plugin.ctx.settings["allow_commits"] = False
+    _submit(plugin)
+    result = _submit_result(plugin)
+    assert "clarify" in result and NO_COMMITS in result["message"]

@@ -12,6 +12,16 @@ AGENT_HINT = (
 BUILTIN_OVERRIDE = (
     "This overrides the /plan instruction to offer execution: submit the plan with plan_mode instead."
 )
+COMPACT_PLAN = (
+    "Make it compact and decision-complete, sized to the task, so the user can review it in a minute: Goal (one line); "
+    "Decisions and assumptions (including clarify answers); Changes (each file and what changes in it); Steps (numbered, "
+    "each with how it is checked); Validation (the exact commands). Name exact files, functions and commands, but include "
+    "code only where an exact signature, format or pattern is itself the decision. This format replaces any other plan "
+    "template or plan-writing guidance for this plan."
+)
+NO_COMMITS = (
+    "Do not commit, and do not plan commit steps, unless the user asked for commits; leave the changes for the user to review."
+)
 LOCAL_PLATFORMS = frozenset({
     "cli", "terminal", "tui", "desktop", "dashboard", "api_server", "webhook",
     "acp", "local", "batch", "cron", "subagent", "curator",
@@ -25,28 +35,38 @@ def plan_file_stamp(now=None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
 
 
-def planning_note(plans_dir, now=None) -> str:
+def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=True) -> str:
     stamp = plan_file_stamp(now)
+    target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
+    if plan_skill:
+        write = (f"2. Load the {plan_skill} skill with skill_view and write the plan in its format, as Markdown to {target}. "
+                 "Its format replaces any other plan template or plan-writing guidance for this plan.")
+    elif style == "compact":
+        write = f"2. Write the plan as Markdown to {target}. {COMPACT_PLAN}"
+    else:
+        write = f"2. Write the plan as Markdown to {target}, with numbered steps."
+    if not commits:
+        write += f" {NO_COMMITS}"
     return (
         f"Plan mode is ON: only read-only tools work, and files may be written only under {plans_dir}.\n"
         "1. Explore with read-only tools first and settle every fact the files can answer yourself. Then, before writing the plan, "
         "ask with the clarify tool about each open choice only the user can make (a preference or tradeoff that changes what "
         "gets built, such as behaviour, policy, format or scope): up to 4 short choices, recommended first. Do not guess these; "
         "if one goes unanswered, take the recommended choice and record it in the plan as an assumption.\n"
-        f"2. Write the plan as Markdown to {plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time), with numbered steps.\n"
+        f"{write}\n"
         '3. Show the complete plan in your reply, then call plan_mode(action="submit") on its own to ask the user to approve it (if plan_mode is not loaded, find it with tool_search "plan_mode"). Approval starts implementation in this same turn.\n'
         '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'
         "In group chats, keep secrets and private details out of the plan."
     )
 
 
-def executing_pointer(state: dict) -> str:
+def executing_pointer(state: dict, *, commits=True) -> str:
     revision = state.get("approved_revision")
     rev = f" (rev {revision})" if revision is not None else ""
     return (
         f"Executing the approved plan {state.get('approved_path')}{rev}. "
         "Keep todo_list statuses current; re-read the plan if your context was compacted."
-    )
+    ) + ("" if commits else f" {NO_COMMITS}")
 
 
 def plan_text(path: str, text: str, revision, status: str) -> str:

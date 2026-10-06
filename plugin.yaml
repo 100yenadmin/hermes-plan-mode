@@ -32,6 +32,22 @@ config_schema:
     default: auto
     label: Chat footer
     description: A one-line plan-mode or progress footer under short replies on chat platforms.
+  plan_style:
+    type: str
+    choices: [compact, core]
+    default: core
+    label: Plan style
+    description: "compact writes a short, decision-complete plan (the Claude Code and Codex style). core keeps Hermes' /plan craft: zero-context tasks, full code and a commit per step."
+  allow_commits:
+    type: bool
+    default: true
+    label: Allow commits
+    description: Off tells the agent not to plan or make git commits unless you ask, so the changes stay uncommitted for your review.
+  plan_skill:
+    type: str
+    default: ""
+    label: Plan skill
+    description: The name of a skill whose plan format to use instead, such as your own planning contract. Empty uses Plan style.
   extra_allowed_tools:
     type: list
     default: []
