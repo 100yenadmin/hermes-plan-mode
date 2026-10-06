@@ -2385,6 +2385,11 @@ def test_v033_chat_summary_is_linear_in_headings():
     # Without a step section, a heading whose body is a bullet list gives its bullets.
     ("# X\n\n## Context\n\n- legacy\n\n## Proposed changes\n\n- Build the API\n- Add tests\n",
      ["Build the API", "Add tests"]),
+    # Numbered steps win over another section's bullets; that section shows as its heading.
+    ("# X\n\n## Design\n\n- reuse the cache\n\n## Checklist\n\n1. Add the flag\n2. Ship\n",
+     ["Design", "Add the flag", "Ship"]),
+    # The last-resort bullet list skips label sections too.
+    ("# Plan\n- Build\n## Context\n- legacy\n", ["Build"]),
     # Numbered items under a label heading are not steps.
     ("# X\n\n## Deploy production\n\n## Risks\n\n1. Downtime\n2. Data loss\n", ["Deploy production"]),
     # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.

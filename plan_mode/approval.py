@@ -113,23 +113,30 @@ def _steps(text: str) -> list[str]:
                      if level > 1 and not meta and _STEP_PREFIX.match(heading)]
     if step_headings:
         return clean(step_headings)
-    # No step section, in document order: numbered items; sub-headings that hold no list; the bullets of a
-    # sub-heading that holds no numbered list. Anything under a label heading ("Risks") is skipped.
+    # No step section, in document order. With numbered items anywhere: those items, plus sub-headings that hold no
+    # numbered list. Without: sub-headings, a bullet list standing in for its heading. Label sections are skipped.
     by_line = {heading[0]: position for position, heading in enumerate(headings)}
-    ordered, current = [], None
-    for index, line in enumerate(lines):
+    owner, current = [], None
+    for index in range(len(lines)):
+        current = by_line.get(index, current)
+        owner.append(current)
+    items = {index: match[1] for index, line in enumerate(lines)
+             if index not in by_line and not (owner[index] is not None and headings[owner[index]][3])
+             and (match := _LIST_ITEM.match(line))}
+    has_numbered = any(lines[index][0].isdigit() for index in items)
+    ordered = []
+    for index in range(len(lines)):
         if index in by_line:
-            current = by_line[index]
-            _, level, heading, meta = headings[current]
-            if 2 <= level <= 3 and not meta and not numbered[current] and not bullets[current]:
+            position = by_line[index]
+            _, level, heading, meta = headings[position]
+            if 2 <= level <= 3 and not meta and not numbered[position] and (has_numbered or not bullets[position]):
                 ordered.append(heading)
-        elif (match := _LIST_ITEM.match(line)) and not (current is not None and headings[current][3]):
-            if line[0].isdigit() or (current is not None and 2 <= headings[current][1] <= 3
-                                     and not numbered[current]):
-                ordered.append(match[1])
+        elif index in items and (lines[index][0].isdigit() or (
+                not has_numbered and owner[index] is not None and 2 <= headings[owner[index]][1] <= 3)):
+            ordered.append(items[index])
     if ordered:
         return ordered
-    bullet_items = [match[1] for line in lines if (match := re.match(r"^[-*+]\s+(.+)$", line))]
+    bullet_items = [item for index, item in items.items() if not lines[index][0].isdigit()]
     return bullet_items or [line for line in text.splitlines() if line.strip()]
 
 
