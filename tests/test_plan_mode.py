@@ -1906,7 +1906,7 @@ def test_u2_footer_limits_opt_out_and_unresolved(plugin, submitted_plan, session
 def test_v033_config_schema_declares_the_flat_settings():
     from pathlib import Path
 
-    import yaml
+    yaml = pytest.importorskip("yaml")  # PyYAML: a YAML 1.1 loader, like Hermes' manifest reader (not on Hermes main)
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
     assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools"}
