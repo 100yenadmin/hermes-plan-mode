@@ -1107,13 +1107,20 @@ class PlanModePlugin:
             self._save_storage_state(other, copy)
 
     def _config(self, name: str, default: Any) -> Any:
-        value = self.ctx.get_config(f"plan_mode.{name}", None)
-        return self.ctx.get_config(name, default) if value is None else value
+        # Flat keys are what Settings ▸ Plugins writes (plugin.yaml config_schema); the nested plan_mode.<key> layout
+        # documented before 0.3.3 is still read, but only when the flat key is unset.
+        value = self.ctx.get_config(name, None)
+        if value is None:
+            value = self.ctx.get_config(f"plan_mode.{name}", None)
+        return default if value is None else value
+
+    def _footer_off(self) -> bool:
+        # Hermes reads config.yaml as YAML 1.1, where a bare `footer: off` is the boolean False.
+        footer = self._config("footer", "auto")
+        return footer is False or str(footer).strip().lower() == "off"
 
     def _extra_allowed_tools(self) -> set[str]:
-        value = self.ctx.get_config("plan_mode.extra_allowed_tools", None)
-        if value is None:
-            value = self.ctx.get_config("extra_allowed_tools", [])
+        value = self._config("extra_allowed_tools", [])
         if not isinstance(value, list):
             return set()
         return {item.strip() for item in value if isinstance(item, str) and item.strip()}
@@ -1404,7 +1411,7 @@ class PlanModePlugin:
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:
             platform = str(kwargs.get("platform") or "").strip().lower()
-            if (self._config("footer", "auto") == "off" or not platform
+            if (self._footer_off() or not platform
                     or platform in LOCAL_PLATFORMS or len(response_text) > _FOOTER_MAX_CHARS):
                 return None
             identity = derive_session_identity(platform)

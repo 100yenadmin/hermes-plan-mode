@@ -1885,14 +1885,44 @@ def test_u2_local_surfaces_no_footer(plugin, submitted_plan, platform):
 def test_u2_footer_limits_opt_out_and_unresolved(plugin, submitted_plan, session_env, monkeypatch):
     assert plugin.transform_llm_output(response_text="x" * 1801, platform="telegram") is None
     assert plugin.transform_llm_output(response_text="x" * 1800, platform="telegram") is not None
+    # A bare `footer: off` in config.yaml loads as False under YAML 1.1.
     for key in ("footer", "plan_mode.footer"):
-        plugin.ctx.settings[key] = "off"
-        assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
-        plugin.ctx.settings.clear()
+        for value in ("off", "OFF", False):
+            plugin.ctx.settings[key] = value
+            assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
+            plugin.ctx.settings.clear()
+    # The flat key (written by Settings ▸ Plugins) beats the legacy nested one.
+    plugin.ctx.settings.update({"footer": "auto", "plan_mode.footer": "off"})
+    assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is not None
+    plugin.ctx.settings.update({"footer": "off", "plan_mode.footer": "auto"})
+    assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
+    plugin.ctx.settings.clear()
     session_env["HERMES_SESSION_KEY"] = "other-session"
     assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
     monkeypatch.setattr(plugin, "_load_state", _raise_loader)
     assert plugin.transform_llm_output(response_text="Draft", platform="telegram") is None
+
+
+def test_v033_config_schema_declares_the_flat_settings():
+    from pathlib import Path
+
+    yaml = pytest.importorskip("yaml")  # PyYAML: a YAML 1.1 loader, like Hermes' manifest reader (not on Hermes main)
+    manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
+    schema = manifest["config_schema"]
+    assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools"}
+    assert all("." not in key for key in schema)  # the form saves dotted keys nested but reads them back flat
+    # Quoted in the manifest: a bare off would load as False under YAML 1.1 and break the dropdown.
+    assert schema["footer"]["choices"] == ["auto", "off"] and schema["footer"]["default"] == "auto"
+    assert schema["enforce_builtin_plan"]["default"] is True and schema["agent_hint"]["default"] is True
+    assert schema["extra_allowed_tools"] == {**schema["extra_allowed_tools"], "type": "list", "default": []}
+    assert all(spec.get("label") and spec.get("description") for spec in schema.values())
+
+
+def test_v033_extra_allowed_tools_flat_beats_nested(plugin):
+    plugin.ctx.settings.update({"extra_allowed_tools": ["flat_read"], "plan_mode.extra_allowed_tools": ["nested_read"]})
+    assert plugin._extra_allowed_tools() == {"flat_read"}
+    plugin.ctx.settings.pop("extra_allowed_tools")
+    assert plugin._extra_allowed_tools() == {"nested_read"}
 
 
 def test_u2_executing_footer_progress(plugin, executing_plan):

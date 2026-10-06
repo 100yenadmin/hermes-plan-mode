@@ -15,3 +15,25 @@ provides_hooks:
   - post_approval_response
   - on_session_finalize
   - on_session_reset
+config_schema:
+  enforce_builtin_plan:
+    type: bool
+    default: true
+    label: Enforce core /plan
+    description: Core /plan turns on enforced plan mode for the session, so writes wait for your approval.
+  agent_hint:
+    type: bool
+    default: true
+    label: Agent hint
+    description: Adds a short system-prompt hint naming the plan_mode tool. Applies to new sessions.
+  footer:
+    type: str
+    choices: [auto, "off"]
+    default: auto
+    label: Chat footer
+    description: A one-line plan-mode or progress footer under short replies on chat platforms.
+  extra_allowed_tools:
+    type: list
+    default: []
+    label: Extra read-only tools
+    description: Exact tool names you vouch for as read-only. Plan mode lets them run while planning.

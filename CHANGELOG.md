@@ -10,6 +10,12 @@
 - The summary skips label sections ("Tests", "Risks", "Implementation notes") and anything under them, reads a
   "changes" section as work, keeps task headings (bullets under them are details), and never reads fenced or indented
   code as a heading. It is linear in the number of headings.
+- Fix: `footer: off` in config.yaml now turns the chat footer off. Hermes reads config.yaml as YAML 1.1, where a bare
+  `off` is the boolean false, and the plugin only compared against the string "off".
+- Settings ▸ Plugins: plugin.yaml declares a `config_schema` for `enforce_builtin_plan`, `agent_hint`, `footer` and
+  `extra_allowed_tools`, so Hermes Desktop shows a form for them (inline under Capabilities ▸ Plugins on v2026.9.24).
+  The keys are flat, and a flat key now wins over the nested `plan_mode.<key>` layout, which is still read as a
+  fallback. The README leads with the form.
 - Updating plan-mode no longer makes Hermes re-sync its dependencies on the next start. The plugin has no Python
   dependencies, but its `pyproject.toml` made it a member of Hermes' package-manager workspace, so every update
   changed the member set and the next gateway or CLI start re-synced dependencies. On Hermes builds before

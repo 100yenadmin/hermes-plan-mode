@@ -163,7 +163,17 @@ mutations, cron and kanban mutations, `memory` (it has no read-only operation), 
 
 ## Configuration
 
-Profile `config.yaml`:
+In Hermes Desktop, open **Settings ▸ Plugins ▸ Plan mode**. On Hermes v2026.9.24 the same form sits inline on the
+plan-mode row under **Capabilities ▸ Plugins**.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Enforce core /plan (`enforce_builtin_plan`) | on | Core `/plan` turns on enforced plan mode for the session |
+| Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`; applies to new sessions |
+| Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
+| Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
+
+Or set them in the profile's `config.yaml` (flat keys under `settings`):
 
 ```yaml
 plugins:
@@ -171,17 +181,18 @@ plugins:
     plan-mode:
       allow_gateway_injection: false    # true: typed /planmode approve starts work at once on gateway/TUI
       settings:
-        plan_mode:
-          enforce_builtin_plan: true    # core /plan turns on enforced plan mode
-          agent_hint: true              # the ≤200-char system-prompt hint naming plan_mode
-          footer: auto                  # auto | off — the one-line footer on chat platforms
-          extra_allowed_tools: []       # exact tool names you trust as read-only
+        enforce_builtin_plan: true
+        agent_hint: true
+        footer: "off"                   # quote it: a bare off is read as false (also honored)
+        extra_allowed_tools: []
 ```
 
 - `extra_allowed_tools` is an explicit policy override: the operator vouches that those tools are read-only.
-- `allow_gateway_injection` is a core Hermes setting. It lets this plugin queue a message into a gateway or
-  TUI/Desktop session; the plugin uses it only to start implementation after a typed `/planmode approve`.
-- `agent_hint` applies to new sessions; the hint is frozen into each session's system prompt.
+- `allow_gateway_injection` is a core Hermes setting, outside `settings`, so it is not in the form. It lets this
+  plugin queue a message into a gateway or TUI/Desktop session; the plugin uses it only to start implementation
+  after a typed `/planmode approve`.
+- The nested `settings.plan_mode.<key>` layout from earlier versions is still read when the flat key is unset, but
+  the form shows only flat keys: move old values up one level so the form and the plugin agree.
 
 ## Compared with other plan modes
 
