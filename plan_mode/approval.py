@@ -45,16 +45,16 @@ _SECTION_END = r"\s*(?:\([^)]*\))?\s*:?$"
 _STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes){_SECTION_END}")
 _APPROACH_SECTION = re.compile(rf"(?i)\b(approach|plan){_SECTION_END}")
 _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
-              r"(?:test(?:ing)?|validation|verification|qa|rollback) plan|"
+              r"(?:test(?:ing)?|validation|verification|qa|rollback) (?:plan|steps)|"
               r"architecture(?:\s*/\s*proposed approach)?|tests?|testing|validation|verification|risks?|tradeoffs|open questions|notes?|"
               r"out of scope|non-goals|files(?: likely to change)?)")
 _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_META_WORD})?)*:?$")
 # A work word followed by a label word ("Implementation notes", "Task overview") is a label section too; a task such
 # as "Write release notes" is not.
-_META_TAIL = re.compile(r"(?i)\b(?:steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes|approach|"
+_META_TAIL = re.compile(r"(?i)^(?:steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes|approach|"
                         r"plan)\s+(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
                         r"open questions|non-goals|out of scope)\s*:?$")
-_STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?(?![a-z0-9])\s*[:.)—–-]*\s*")
+_STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+(?:\.\d+)*[a-z]?(?![a-z0-9])\s*[:.)—–-]*\s*")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")  # 4+ spaces is indented code
 _LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.+)$")
 
@@ -82,7 +82,7 @@ def _steps(text: str) -> list[str]:
     lines = _unfenced(text)
     # One pass: (line, level, text, label is meta or sits under one), each heading's direct children and
     # section end, and whether its section holds numbered items (meta parts excluded).
-    headings, children, ends, numbered, open_ = [], [], [], [], []
+    headings, children, ends, numbered, under_step, open_ = [], [], [], [], [], []
     for index, line in enumerate(lines):
         if (match := _HEADING.match(line)):
             level, heading = len(match[1]), _plain(match[2])
@@ -93,6 +93,8 @@ def _steps(text: str) -> list[str]:
                     or bool(open_ and headings[open_[-1]][1] > 1 and headings[open_[-1]][3]))
             if open_:
                 children[open_[-1]].append(len(headings))
+            # A section nested under a "Step N" heading is that step's detail ("### Changes"), not the plan's work list.
+            under_step.append(any(_STEP_PREFIX.match(headings[position][2]) for position in open_))
             headings.append((index, level, heading, meta))
             children.append([]); ends.append(len(lines)); numbered.append(False)
             open_.append(len(headings) - 1)
@@ -112,7 +114,8 @@ def _steps(text: str) -> list[str]:
 
     for pattern in (_STEP_SECTION, _APPROACH_SECTION):
         for position, (_, level, heading, meta) in enumerate(headings):
-            if level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading):
+            if (level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading)
+                    and not under_step[position]):
                 items = section_items(position)
                 if items:
                     return clean(items)

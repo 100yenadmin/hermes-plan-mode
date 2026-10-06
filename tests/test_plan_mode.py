@@ -2414,6 +2414,14 @@ def test_v033_chat_summary_is_linear_in_headings():
     ("# X\n\n## Steps\n\n1. Build\n\n        ```\n\n2. Ship\n", ["Build", "Ship"]),
     # A document title that reads like a label does not hide the sections under it.
     ("# Context\n\n## Steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
+    # A label suffix counts only from the start of the heading.
+    ("# X\n\n## Add API\n\n## Write implementation notes\n", ["Add API", "Write implementation notes"]),
+    # Validation/rollback steps are labels; the implementation steps are the work.
+    ("# X\n\n## Validation steps\n\n- run pytest\n\n## Implementation steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
+    # A detail section under a "Step N" heading does not replace the step headings.
+    ("# X\n\n## Step 1: Add API\n\n### Changes\n\n- api.py\n\n## Step 2: Add tests\n", ["Add API", "Add tests"]),
+    # A dotted step number is removed whole.
+    ("# X\n\n## Step 1.1: Build API\n\n## Step 1.2: Add tests\n", ["Build API", "Add tests"]),
     # Numbered items under a label heading are not steps.
     ("# X\n\n## Deploy production\n\n## Risks\n\n1. Downtime\n2. Data loss\n", ["Deploy production"]),
     # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.
