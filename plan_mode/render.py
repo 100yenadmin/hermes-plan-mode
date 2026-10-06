@@ -39,8 +39,10 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
     stamp = plan_file_stamp(now)
     target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
     if plan_skill:
+        fallback = COMPACT_PLAN if style == "compact" else "Write it with numbered steps."
         write = (f"2. Load the {plan_skill} skill with skill_view and write the plan in its format, as Markdown to {target}. "
-                 "Its format replaces any other plan template or plan-writing guidance for this plan.")
+                 "Its format replaces any other plan template or plan-writing guidance for this plan. "
+                 f"If the skill cannot be loaded, use this format instead: {fallback}")
     elif style == "compact":
         write = f"2. Write the plan as Markdown to {target}. {COMPACT_PLAN}"
     else:

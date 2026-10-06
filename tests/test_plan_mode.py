@@ -2808,6 +2808,13 @@ def test_035_plan_skill_wins_over_style(plugin, session_env, tmp_path, monkeypat
     _fake_skill_loader(monkeypatch, lambda: {})
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", plan_skill="durable-plan-contract")
     assert "2. Load the durable-plan-contract skill with skill_view and write the plan in its format" in note
+    assert note.count("Make it compact") == 1 and "If the skill cannot be loaded, use this format instead: Make it compact" in note
+
+
+def test_035_plan_skill_names_the_core_fallback(plugin, session_env, tmp_path, monkeypatch):
+    _fake_skill_loader(monkeypatch, lambda: {})
+    note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="core", plan_skill="durable-plan-contract")
+    assert "If the skill cannot be loaded, use this format instead: Write it with numbered steps." in note
     assert "Make it compact" not in note
 
 
