@@ -2361,3 +2361,25 @@ def test_v033_chat_summary_skips_meta_headings_without_a_step_section(tmp_path):
     text = "# Tidy\n\n## Goal\n\n## Rename module\n\n## Update imports\n\n## Risks\n"
     assert approval_text(text, str(tmp_path / "p.md"), 1, "telegram").splitlines()[1:] == [
         "1. Rename module", "2. Update imports"]
+
+
+@pytest.mark.parametrize("text,expected", [
+    # A "Step N" heading with detail bullets is a step, not a section of steps.
+    ("# X\n\n## Step 1: Add API\n\n- route\n- handler\n\n## Step 2: Add tests\n\n- unit\n", ["Add API", "Add tests"]),
+    # Only the step section's direct child headings are steps; deeper headings are details.
+    ("# X\n\n## Steps\n\n### Add API\n\n#### Files\n\n#### Notes\n\n### Add tests\n", ["Add API", "Add tests"]),
+    # A generic heading that holds a numbered list is a container, not a step.
+    ("# X\n\n## Proposed changes\n\n1. Patch the parser\n2. Ship it\n", ["Patch the parser", "Ship it"]),
+    # A literal trailing hash is part of the title.
+    ("# X\n\n## Tasks\n\n### Update C#\n\n### Update F#\n", ["Update C#", "Update F#"]),
+    # Only label headings are meta; a task that starts with "Test" is kept.
+    ("# X\n\n## Implement endpoint\n\n## Test endpoint\n\n## Deploy endpoint\n",
+     ["Implement endpoint", "Test endpoint", "Deploy endpoint"]),
+    # A heading-like line inside fenced code does not end the section.
+    ("# X\n\n## Steps\n\n1. Write config\n\n```sh\n## generated configuration\n```\n\n2. Deploy\n",
+     ["Write config", "Deploy"]),
+])
+def test_v033_chat_summary_edge_cases(tmp_path, text, expected):
+    from plan_mode.approval import approval_text
+    lines = approval_text(text, str(tmp_path / "p.md"), 1, "telegram").splitlines()[1:]
+    assert lines == [f"{index}. {step}" for index, step in enumerate(expected, 1)]
