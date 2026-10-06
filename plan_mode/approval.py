@@ -55,27 +55,12 @@ def plan_digest(path) -> tuple[str, str]:
     return hashlib.sha256(data).hexdigest(), data.decode("utf-8", errors="replace")
 
 
-_CODE_SPAN = re.compile(r"(`+)(.+?)\1")
-_STAR_EMPHASIS = re.compile(r"(\*\*|\*)(?=\S)(.+?)(?<=\S)\1")
-# Underscore emphasis only between word boundaries, so snake_case and __init__.py keep their underscores.
-_UNDERSCORE_EMPHASIS = re.compile(r"(?<!\w)(__|_)(?=\S)(.+?)(?<=\S)\1(?=$|[\s,;:!?)\]])")
-
-
 def _plain(text: str) -> str:
-    text = re.sub(r"!?\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"^\s*#+\s+", "", text).replace("\0", "")  # NUL marks the protected code spans below
-    spans: list[str] = []
-
-    def keep(match) -> str:
-        spans.append(match[2].strip())
-        return f"\0{len(spans) - 1}\0"
-
-    text = _CODE_SPAN.sub(keep, text)
-    text = _STAR_EMPHASIS.sub(r"\2", text)
-    text = _UNDERSCORE_EMPHASIS.sub(r"\2", text)
-    text = re.sub(r"[*`]|~~", "", text)
-    text = re.sub(r"\0(\d+)\0", lambda match: spans[int(match[1])], text)
-    return " ".join(text.split())
+    # Underscores are kept: compact plans name snake_case functions and __init__.py files, and an identifier is worth
+    # more in a chat summary than hiding _underscore emphasis_. One character class, so it is linear and idempotent.
+    # Link text and URL stop at the next bracket, so a line of unmatched "[" or "](" stays linear.
+    text = re.sub(r"!?\[([^\[\]]+)\]\([^()\[\]\s]*\)", r"\1", text)
+    return " ".join(re.sub(r"[*`~]", "", re.sub(r"^\s*#+\s+", "", text)).split())
 
 
 def _title(text, summary, name) -> str:

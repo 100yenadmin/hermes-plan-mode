@@ -11,9 +11,10 @@
   user asked, so changes stay uncommitted for review. Values other than a boolean or a true/false word keep the default.
 - New setting **Plan skill** (`plan_skill`), empty by default. The name of a skill (such as a durable planning
   contract) whose plan format the agent loads with `skill_view` and uses instead of Plan style.
-- Fix: the short approval summary on Telegram, Slack and Discord keeps underscores in identifiers. `register_channel`
-  showed as `registerchannel` and `__init__.py` as `init.py`, because every `_` was stripped as Markdown emphasis. Code
-  spans are kept whole, and underscore emphasis is removed only between word boundaries.
+- Fix: the short approval summary on Telegram, Slack and Discord keeps underscores, so `register_channel` and
+  `__init__.py` no longer show as `registerchannel` and `init.py`. Underscore emphasis such as `_this_` now stays
+  visible; `*` emphasis, backticks and strikethrough are still removed. Link stripping no longer slows down
+  quadratically on a long line of unmatched `[`.
 - Why the defaults changed: an end-to-end comparison on eight coding tasks (same model and effort, one run per task,
   blind judge, decided by bars written before the runs) met every bar. Compact plans were about half as long, all
   eight tasks still passed their checks with no edit before approval, there were no commits (core made 1-4 per task),
