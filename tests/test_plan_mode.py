@@ -2993,3 +2993,13 @@ def test_035_agent_activation_result_carries_the_planning_note(plugin, session_e
     assert COMPACT_PLAN in result and NO_COMMITS in result and "You entered plan mode yourself" in result
     plugin.command("off")
     assert COMPACT_PLAN not in plugin.command("on refactor")  # the user's command reply stays short
+
+
+def test_035_nested_changes_groups_do_not_outrank_steps():
+    from plan_mode.approval import _steps
+    changes = ("## Changes\n### Parser implementation\n- src/parser.py: include the token position.\n"
+               "### CLI implementation\n- src/cli.py: print the error and exit 2.\n")
+    steps = "## Steps\n1. Add token positions. Check: parser tests.\n2. Handle errors in the CLI. Check: CLI tests.\n"
+    plan = "# Parser errors\n## Goal\nReport errors.\n" + changes + steps + "## Validation\n- pytest -q\n"
+    assert _steps(plan) == ["Add token positions. Check: parser tests.", "Handle errors in the CLI. Check: CLI tests."]
+    assert _steps("# Parser errors\n" + changes) == ["Parser implementation", "CLI implementation"]

@@ -121,7 +121,7 @@ def _steps(text: str) -> list[str]:
     lines = _unfenced(text)
     # One pass: (line, level, text, label is meta or sits under one), each heading's direct children and
     # section end, and whether its section holds numbered items (meta parts excluded).
-    headings, children, ends, numbered, under_step, open_ = [], [], [], [], [], []
+    headings, children, ends, numbered, under_step, under_changes, open_ = [], [], [], [], [], [], []
     for index, line in enumerate(lines):
         if (match := _HEADING.match(line)):
             level, heading = len(match[1]), _plain(match[2])
@@ -134,6 +134,8 @@ def _steps(text: str) -> list[str]:
                 children[open_[-1]].append(len(headings))
             # A section nested under a "Step N" heading is that step's detail ("### Changes"), not the plan's work list.
             under_step.append(any(_STEP_PREFIX.match(headings[position][2]) for position in open_))
+            # Likewise "### Parser implementation" under "## Changes" groups changes; it must not outrank "## Steps".
+            under_changes.append(any(_CHANGES_SECTION.search(headings[position][2]) for position in open_))
             headings.append((index, level, heading, meta))
             children.append([]); ends.append(len(lines)); numbered.append(False)
             open_.append(len(headings) - 1)
@@ -154,7 +156,7 @@ def _steps(text: str) -> list[str]:
     for pattern in (_STEP_SECTION, _CHANGES_SECTION, _APPROACH_SECTION):
         for position, (_, level, heading, meta) in enumerate(headings):
             if (level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading)
-                    and not under_step[position]):
+                    and not under_step[position] and not (pattern is _STEP_SECTION and under_changes[position])):
                 items = section_items(position)
                 if items:
                     return clean(items)
