@@ -2919,3 +2919,26 @@ def test_035_commits_off_clarify_approval_then_pointer(plugin, submitted_plan):
     _answer_clarify(plugin, block, block["choices"][0], status="answered")
     assert plugin._load_state("sk:unit-session")["phase"] == "executing"
     assert plugin.pre_llm_call()["context"].endswith(NO_COMMITS)
+
+
+# 0.3.5: compact plans name exact files and functions, so the chat summary must keep identifiers intact.
+@pytest.mark.parametrize("text, expected", [
+    ("Add `register_channel` and test_import_rows", "Add register_channel and test_import_rows"),
+    ("Edit __init__.py and `__init__.py`", "Edit __init__.py and __init__.py"),
+    ("## Step 1: **Create** `ledger/csvio.py`", "Step 1: Create ledger/csvio.py"),
+    ("**bold** _em_ __strong__ *it* ~~gone~~", "bold em strong it gone"),
+    ("[docs](https://example.invalid) and ![img](x.png)", "docs and img"),
+    ("stray \0 nul \x000\x00 markers", "stray nul 0 markers"),
+])
+def test_035_summary_keeps_identifier_underscores(text, expected):
+    from plan_mode.approval import _plain
+    assert _plain(text) == expected
+
+
+def test_035_telegram_summary_lists_snake_case_steps():
+    from plan_mode.approval import approval_text
+    plan = ("# Notify channel registry\n\n## Steps\n1. Add `notify/channels.py` with `register_channel`.\n"
+            "2. Export it from `notify/__init__.py`.\n")
+    text = approval_text(plan, "/p/plan.md", 1, "telegram")
+    assert "1. Add notify/channels.py with register_channel." in text
+    assert "2. Export it from notify/__init__.py." in text
