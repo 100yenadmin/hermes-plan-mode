@@ -29,7 +29,7 @@ def _plain(text: str) -> str:
 
 
 def _title(text, summary, name) -> str:
-    heading = re.search(r"^ {0,3}#{1,6}\s+(.+)$", text, re.MULTILINE)
+    heading = re.search(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$", text, re.MULTILINE)
     title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
     return re.sub(r"(?i)^plan(?:\s*\([^)]*\))?(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
 
@@ -38,15 +38,18 @@ def _title(text, summary, name) -> str:
 _CARD_LIMITS = {"whatsapp_cloud": 1000}
 
 
-# Section headings that hold the work itself (core /plan asks for "Step-by-step tasks"), and section labels that never
-# do. A label heading is made only of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept.
-_STEP_SECTION = re.compile(r"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes?)\b")
-_APPROACH_SECTION = re.compile(r"(?i)\b(approach|plan)\b")
+# Section headings that hold the work itself (core /plan asks for "Step-by-step tasks"): the work word ends the label,
+# so a task heading such as "Apply changes to parser" is not one. Section labels that never hold the work are made only
+# of meta words ("Tests / validation"), so a task such as "Test endpoint" is kept, or end in a label word.
+_SECTION_END = r"\s*(?:\([^)]*\))?\s*:?$"
+_STEP_SECTION = re.compile(rf"(?i)\b(steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes){_SECTION_END}")
+_APPROACH_SECTION = re.compile(rf"(?i)\b(approach|plan){_SECTION_END}")
 _META_WORD = (r"(?:goals?|current context|context|assumptions|background|summary|overview|"
+              r"(?:test(?:ing)?|validation|verification|qa|rollback) plan|"
               r"architecture(?:\s*/\s*proposed approach)?|tests?|testing|validation|verification|risks?|tradeoffs|open questions|notes?|"
               r"out of scope|non-goals|files(?: likely to change)?)")
 _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_META_WORD})?)*:?$")
-# A work word followed by a label word ("Implementation notes", "Task overview") names a label section, not the work.
+# A heading that ends in a label word ("Implementation notes", "Task overview") is a label section too.
 _META_TAIL = re.compile(r"(?i)\b(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
                         r"open questions|non-goals|out of scope)\s*:?$")
 _STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+[a-z]?\s*[:.)—–-]*\s*")
@@ -83,7 +86,8 @@ def _steps(text: str) -> list[str]:
             level, heading = len(match[1]), _plain(match[2])
             while open_ and headings[open_[-1]][1] >= level:
                 ends[open_.pop()] = index
-            meta = bool(_META_SECTION.match(heading)) or bool(open_ and headings[open_[-1]][3])
+            meta = (bool(_META_SECTION.match(heading) or _META_TAIL.search(heading))
+                    or bool(open_ and headings[open_[-1]][3]))
             if open_:
                 children[open_[-1]].append(len(headings))
             headings.append((index, level, heading, meta))
@@ -105,8 +109,7 @@ def _steps(text: str) -> list[str]:
 
     for pattern in (_STEP_SECTION, _APPROACH_SECTION):
         for position, (_, level, heading, meta) in enumerate(headings):
-            if (level > 1 and not meta and pattern.search(heading) and not _META_TAIL.search(heading)
-                    and not _STEP_PREFIX.match(heading)):
+            if level > 1 and not meta and pattern.search(heading) and not _STEP_PREFIX.match(heading):
                 items = section_items(position)
                 if items:
                     return clean(items)

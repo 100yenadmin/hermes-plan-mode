@@ -2162,7 +2162,7 @@ def test_u2r_todo_read_does_not_end_execution(plugin, session_env, executing_pla
 # Codex review R2 fixes.
 @pytest.mark.parametrize("heading, title", [
     ("Plan: Add power", "Add power"), ("Plan — Add power", "Add power"), ("Plan-mode docs", "Plan-mode docs"),
-    ("Planner fixes", "Planner fixes"),
+    ("Planner fixes", "Planner fixes"), ("Plan: Fix checkout ###", "Fix checkout"), ("Update C#", "Update C#"),
 ])
 def test_r2_title_keeps_compound_words(tmp_path, heading, title):
     from plan_mode.approval import approval_text
@@ -2397,6 +2397,14 @@ def test_v033_chat_summary_is_linear_in_headings():
     ("# X\n\n## Implementation notes\n\n- needs the v2 client\n\n## Steps\n\n1. Build\n2. Ship\n", ["Build", "Ship"]),
     # A hash line in indented code is not a heading, so it does not end the section.
     ("# X\n\n## Steps\n\n1. Write config\n\n        ## generated configuration\n\n2. Deploy\n", ["Write config", "Deploy"]),
+    # A task heading that merely contains a work word is a task, not a work section.
+    ("# X\n\n## Apply changes to parser\n\n- parser.py\n\n## Run tests\n\n- tests/test_parser.py\n",
+     ["Apply changes to parser", "Run tests"]),
+    # "Test plan" is a label section, not the approach.
+    ("# X\n\n## Add API\n\n## Deploy API\n\n## Test plan\n\n- Run pytest\n", ["Add API", "Deploy API"]),
+    # A label-suffixed section and its numbered notes stay out of the fallback.
+    ("# X\n\n## Implementation notes\n\n1. needs the v2 client\n\n## Add API\n\n## Deploy API\n",
+     ["Add API", "Deploy API"]),
     # Numbered items under a label heading are not steps.
     ("# X\n\n## Deploy production\n\n## Risks\n\n1. Downtime\n2. Data loss\n", ["Deploy production"]),
     # A lone "Proposed Approach" section supplies the steps; earlier context bullets do not.
