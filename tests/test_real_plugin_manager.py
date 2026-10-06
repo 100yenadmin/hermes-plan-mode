@@ -1144,7 +1144,8 @@ def test_v034_real_mismatched_tagged_question_blocked(real_clarify_host, monkeyp
     _inject_real_clarify_callback(host, monkeypatch, host.question["choices"][0], seen)
     question = {**host.question, "question": host.question["question"] + " altered"}
     result = host.call_clarify({"questions": [question]})
-    assert "BLOCKED" in result and seen == []
+    # Real Hermes returns a blocked call as {"error": <plugin message>}; the callback must never run.
+    assert json.loads(result)["error"].startswith("Use exactly these clarify args") and seen == []
     state = host.command.__self__._load_state("sk:submit-session")
     assert state["active"] and state["submission"]["status"] == "awaiting"
     assert state["submission"]["clarify"]["tool_call_id"] == ""
