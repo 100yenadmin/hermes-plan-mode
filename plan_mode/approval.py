@@ -2,10 +2,42 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import re
 import threading
 import uuid
+
+
+def gate_bypassed(entry) -> bool:
+    """Only an absent or untouched in-flight decision is an automatic allowance."""
+    return entry is None or bool(
+        isinstance(entry, dict)
+        and entry.get("choice") is None
+        and not entry.get("cancelled")
+        and not entry.get("presented")
+    )
+
+
+def clarify_answer(result, question, choices) -> str | None:
+    """Read only a matching, answered response from the clarify result JSON."""
+    try:
+        value = json.loads(result)
+        responses = value.get("responses", [value]) if isinstance(value, dict) else value
+        if not isinstance(responses, list):
+            return None
+        for response in responses:
+            if not isinstance(response, dict) or response.get("question") != question:
+                continue
+            if "choices_offered" in response and response["choices_offered"] != choices:
+                continue
+            if "status" in response and response["status"] != "answered":
+                continue
+            answer = response.get("user_response")
+            return answer.strip() if isinstance(answer, str) else None
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def make_rule_key(activation_id, revision, digest) -> str:

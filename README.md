@@ -137,7 +137,8 @@ The plugin registers one tool, `plan_mode` (toolset `plan-mode`):
 - `submit` (optional `path`, `summary`): asks you to approve the plan through Hermes' approval prompt. The agent
   should call it on its own, not batched with other tool calls.
 
-The tool cannot approve or reject a plan. Approval is your act, recorded by Hermes' approval hooks.
+The tool cannot approve or reject a plan. Approval is your act, recorded by Hermes' approval hooks or the
+plugin-issued `clarify` question's answer when Hermes approves automatically.
 
 On hosts with Tool Search on (the default from v2026.9.24), plugin tools sit behind `tool_search`, which plan mode
 allows. The plugin adds a short system-prompt hint (≤200 chars) naming `plan_mode` for multi-step or risky changes,
@@ -214,13 +215,17 @@ plugins:
 - **Approval is a human decision.** A submit asks Hermes to approve under a rule key unique to that plan revision
   (`plan-mode:<activation>:<rev>:<digest>:<nonce>`). A prompt approval counts only when Hermes'
   `post_approval_response` hook reports, for that exact key and tool call, the choice once, session or always,
-  without a cancel. Typed `/planmode approve` is the other human path. The tool has no approve action, so the model
+  without a cancel. A plugin-issued `clarify` answer or typed `/planmode approve` is also a human path. The tool has no approve action, so the model
   cannot approve its own plan.
 - **A submitted plan belongs to you.** After a submit, the agent can no longer turn plan mode off, even if it entered
   plan mode itself; a denial, a timeout or a missing human decision leaves the decision with you.
 - **No human, no approval.** With yolo or `approvals.mode: off`, Hermes approves the call without asking and fires no
-  hook. The plugin then keeps plan mode on and tells the agent to ask you for a typed `/planmode approve`. A host that
-  ignores the approval directive degrades the same way.
+  hook. The plugin keeps plan mode on and asks through `clarify`: buttons on Telegram/Discord/Slack, a card on
+  Desktop/TUI, a CLI prompt, or a numbered list elsewhere. Only the answer to that exact plugin-issued question
+  (or typed `/planmode approve`) approves the unchanged plan. Approval comes from your clarify answer, not Hermes'
+  approval prompt. **Approve plan rev N** starts implementation in the same turn; **Keep planning** or free text
+  sends the plan back for revision. If `clarify` is unavailable, use `/planmode approve`. A host that ignores the
+  approval directive uses the same fallback.
 - **"Always" behaves like once for plans,** because each revision has a new key. Hermes core still writes a
   `plugin_rule:plan-mode:…` entry to `command_allowlist` in `config.yaml` for every "Always". You can delete those
   entries.
@@ -288,7 +293,7 @@ plugins:
 - **Messaging gateway, TUI and Desktop:** Hermes `v2026.9.24` (0.21.5) or newer. Earlier builds refuse
   `/planmode on` on these surfaces instead of pretending plan mode is active.
 - **v0.3.0 features** use only the Hermes capability they need. Where the approval directive or the approval hooks
-  are missing, submit degrades to the typed `/planmode approve` flow. The system-prompt hint is skipped where the host
+  are missing, submit asks through `clarify`, with typed `/planmode approve` as the fallback if clarify is unavailable. The system-prompt hint is skipped where the host
   has no prompt-section API, and typed approval skips `inject_message` where the host has none.
 - Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11) and a pinned `main` (Python
   3.14, the version for which `main` declares its runtime dependencies).

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4 - 2026-10-06
+
+- When Hermes approves a submit automatically (yolo or `approvals.mode: off`), ask for human approval through the
+  core `clarify` tool with the exact choices **Approve plan rev N** and **Keep planning**. Approval comes only
+  from that question's correlated tool result, or typed `/planmode approve`; it starts implementation in the same
+  turn. Keep planning and free text become review feedback. Denied, cancelled or unanswered human approval
+  prompts do not trigger this fallback.
+- Bind the question to its nonce, tool call, activation and unchanged plan digest. Block altered tagged questions
+  and parallel approval questions; leave non-answers awaiting so the question can be re-asked. Typed commands,
+  resubmission and session cleanup clear the question. Status and turn notes show approval asked in chat.
+
 ## 0.3.3 - 2026-10-06
 
 - Fix: the short approval summary on Telegram, Slack and Discord lists the plan's steps. It takes them from the

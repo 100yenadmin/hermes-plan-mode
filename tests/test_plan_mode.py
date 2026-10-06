@@ -1463,6 +1463,7 @@ def test_u1_human_approval_turns_off_in_same_call(plugin, submitted_plan, choice
     assert state["active"] is False and state["phase"] == "executing"
     assert state["approved_revision"] == 1 and state["approved_at"]
     assert state["pending_note"] == "" and state["submission"]["status"] == "approved"
+    assert "clarify" not in state["submission"]
     assert not {"activation_id", "entered_by", "agent_activation_id"} & state.keys()
     assert plugin.pre_tool_call("terminal", {}) is None
     assert "executing (rev 1:" in plugin.command("status")
@@ -1480,7 +1481,7 @@ def test_u1_only_correlated_human_decision_approves(plugin, submitted_plan, deci
     elif decision == "unrelated":
         plugin.ctx.hooks["post_approval_response"](pattern_key="plugin_rule:other", choice="once")
     result = _submit_result(plugin)
-    assert "No human approval was recorded" in result["message"]
+    assert ("no human has approved" if decision in {"none", "unrelated"} else "No human approval was recorded") in result["message"]
     assert "approvals.mode: off" in result["message"]
     assert plugin._load_state("sk:unit-session")["submission"]["status"] == "awaiting"
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
@@ -1489,7 +1490,7 @@ def test_u1_only_correlated_human_decision_approves(plugin, submitted_plan, deci
 
 def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submitted_plan):
     _submit(plugin)
-    assert "No human approval" in _submit_result(plugin)["message"]
+    assert "no human has approved" in _submit_result(plugin)["message"]
     newer = submitted_plan.with_name("newer.md")
     plugin.pre_tool_call("write_file", {"path": str(newer)})
     newer.write_text("# Newer", encoding="utf-8")
@@ -1535,6 +1536,7 @@ def test_u1_blocked_submit_note_once_and_typed_fallback(plugin, submitted_plan, 
     plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", session_id="s1", status="blocked")
     state = plugin._load_state("sk:unit-session")
     assert state["active"]
+    assert "clarify" not in state["submission"]
     expected_status = "rejected" if choice == "deny" else "awaiting"
     assert state["submission"]["status"] == expected_status
     assert f"Last submission: rev 1 {expected_status}" in plugin.command("status")
@@ -1977,7 +1979,7 @@ def test_u1_submit_hands_agent_entered_plan_mode_to_the_user(plugin, session_env
     assert "plan_mode(action='off')" in plugin.pre_llm_call()["context"]
     directive = _submit(plugin)
     if outcome == "yolo":
-        assert "No human approval" in _submit_result(plugin)["message"]
+        assert "no human has approved" in _submit_result(plugin)["message"]
     else:
         if outcome == "deny":
             _decision(plugin, directive, "deny")
@@ -2471,3 +2473,289 @@ def test_v033_chat_summary_edge_cases(tmp_path, text, expected):
     from plan_mode.approval import approval_text
     lines = approval_text(text, str(tmp_path / "p.md"), 1, "telegram").splitlines()[1:]
     assert lines == [f"{index}. {step}" for index, step in enumerate(expected, 1)]
+
+
+# 0.3.4: only the plugin-issued clarify question's tool result can approve.
+@pytest.mark.parametrize("entry, expected", [
+    (None, True),
+    ({"choice": None, "cancelled": False, "presented": False}, True),
+    ({"choice": "deny", "cancelled": False, "presented": False}, False),
+    ({"choice": "once", "cancelled": False, "presented": False}, False),
+    ({"choice": None, "cancelled": True, "presented": False}, False),
+    ({"choice": None, "cancelled": False, "presented": True}, False),
+    ([], False),
+])
+def test_v034_gate_bypassed(entry, expected):
+    from plan_mode.approval import gate_bypassed
+    assert gate_bypassed(entry) is expected
+
+
+@pytest.fixture
+def clarify_plan(plugin, submitted_plan):
+    _submit(plugin)
+    result = _submit_result(plugin)
+    block = plugin._load_state("sk:unit-session")["submission"]["clarify"]
+    assert result["clarify"] == {"question": block["question"], "choices": block["choices"]}
+    return block
+
+
+def _clarify_args(block, older=False):
+    question = {"question": block["question"], "choices": block["choices"], "multi_select": False}
+    return question if older else {"questions": [question]}
+
+
+def _clarify_result(block, answer, **extra):
+    return json.dumps({"responses": [{"question": block["question"],
+                       "choices_offered": block["choices"], "user_response": answer, **extra}]})
+
+
+def _ask_clarify(plugin, block, call_id="clarify-1", **kwargs):
+    return plugin.pre_tool_call("clarify", _clarify_args(block, **kwargs), tool_call_id=call_id)
+
+
+def _answer_clarify(plugin, block, answer, call_id="clarify-1", **kwargs):
+    plugin.post_tool_call("clarify", tool_call_id=call_id, status="ok",
+                          result=_clarify_result(block, answer, **kwargs))
+
+
+def test_v034_issued_question_status_and_turn_note(plugin, clarify_plan):
+    block = clarify_plan
+    assert re.fullmatch(r"[a-f0-9]{8}", block["nonce"])
+    assert block["question"] == f"Approve plan rev 1 (plan.md) and start implementing it? [plan-mode {block['nonce']}]"
+    assert block["choices"] == ["Approve plan rev 1", "Keep planning"]
+    assert block["tool_call_id"] == ""
+    assert block["activation_id"] == plugin._load_state("sk:unit-session")["activation_id"]
+    assert "awaiting approval (rev 1, asked in chat)" in plugin.command("status")
+    note = plugin.pre_llm_call()["context"].splitlines()[-1]
+    assert note == (f"Plan rev 1 awaits approval: ask with clarify using exactly question={block['question']}, "
+                    f"choices={block['choices']}, or the user can run /planmode approve.")
+    assert len(note) < 400
+
+
+@pytest.mark.parametrize("older", [False, True])
+@pytest.mark.parametrize("suffix", ["", " (Recommended)"])
+def test_v034_clarify_approves_same_turn(plugin, clarify_plan, older, suffix):
+    block = clarify_plan
+    args = _clarify_args(block, older)
+    item = args if older else args["questions"][0]
+    item["choices"] = [" " + choice + " " for choice in block["choices"]]
+    assert plugin.pre_tool_call("clarify", args, tool_call_id="clarify-1") is None
+    _answer_clarify(plugin, block, "  " + block["choices"][0] + suffix + "  ", status="answered")
+    state = plugin._load_state("sk:unit-session")
+    assert not state["active"] and state["phase"] == "executing"
+    assert state["approved_revision"] == 1 and state["approved_at"]
+    assert state["approved_path"] == state["submission"]["path"]
+    assert state["submission"]["status"] == "approved"
+    assert state["submission"]["approved_via"] == "clarify"
+    assert "clarify" not in state["submission"] and state["pending_note"] == ""
+    assert not {"activation_id", "entered_by", "agent_activation_id"} & state.keys()
+    assert plugin.pre_tool_call("terminal", {}) is None
+    assert plugin.ctx.injected == []  # the current tool turn continues
+
+
+def test_v034_args_forgery_does_not_approve(plugin, clarify_plan):
+    block = clarify_plan
+    args = _clarify_args(block)
+    args["user_response"] = block["choices"][0]
+    assert plugin.pre_tool_call("clarify", args, tool_call_id="clarify-1") is None
+    plugin.post_tool_call("clarify", args, tool_call_id="clarify-1", status="ok",
+                         result=_clarify_result(block, "Keep planning"))
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "rejected"
+    assert "clarify" not in state["submission"]
+    assert state["pending_note"] == plugin._rejection_note(1)
+
+
+def test_v034_stale_nonce_cannot_approve_new_revision(plugin, clarify_plan):
+    old = dict(clarify_plan)
+    assert _ask_clarify(plugin, old) is None
+    _submit(plugin, call_id="submit-2")
+    _submit_result(plugin)
+    current = plugin._load_state("sk:unit-session")["submission"]["clarify"]
+    assert current["nonce"] != old["nonce"] and current["question"] != old["question"]
+    _answer_clarify(plugin, old, old["choices"][0])
+    assert plugin._load_state("sk:unit-session")["submission"]["status"] == "awaiting"
+    assert _ask_clarify(plugin, current, call_id="clarify-2") is None
+    _answer_clarify(plugin, old, old["choices"][0], call_id="clarify-2")
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "awaiting"
+    assert state["submission"]["clarify"]["tool_call_id"] == ""
+
+
+def test_v034_edited_plan_is_stale(plugin, clarify_plan, submitted_plan):
+    assert _ask_clarify(plugin, clarify_plan) is None
+    submitted_plan.write_text("# Edited")
+    _answer_clarify(plugin, clarify_plan, clarify_plan["choices"][0])
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "stale"
+    assert state["pending_note"] == plugin._stale_note(1)
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+
+@pytest.mark.parametrize("bad", ["two", "extra", "multi", "reordered", "text", "bare", "nonstring", "missing-id"])
+def test_v034_wrong_tagged_shape_blocked_and_untracked(plugin, clarify_plan, bad):
+    block = clarify_plan
+    args = _clarify_args(block)
+    question = args["questions"][0]
+    if bad == "two":
+        args["questions"].append({"question": "Other?"})
+    elif bad == "extra":
+        question["choices"] = block["choices"] + ["Other"]
+    elif bad == "multi":
+        question["multi_select"] = True
+    elif bad == "reordered":
+        question["choices"] = block["choices"][::-1]
+    elif bad == "text":
+        question["question"] += " Changed"
+    elif bad == "bare":
+        args["questions"] = [block["question"]]
+    elif bad == "nonstring":
+        question["choices"] = [42, "Keep planning"]
+    call_id = "" if bad == "missing-id" else "bad-call"
+    response = plugin.pre_tool_call("clarify", args, tool_call_id=call_id)
+    assert response["action"] == "block" and block["question"] in response["message"]
+    _answer_clarify(plugin, block, block["choices"][0], call_id=call_id)
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "awaiting"
+    assert state["submission"]["clarify"]["tool_call_id"] == ""
+
+
+@pytest.mark.parametrize("args", [{"questions": ["Ordinary question?"]}, {"question": "Ordinary question?"}])
+def test_v034_untracked_clarify_does_not_change_state(plugin, clarify_plan, args):
+    assert plugin.pre_tool_call("clarify", args, tool_call_id="untracked") is None
+    _answer_clarify(plugin, clarify_plan, clarify_plan["choices"][0], call_id="untracked")
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "awaiting"
+    assert state["submission"]["clarify"]["tool_call_id"] == ""
+
+
+def test_v034_parallel_clarify_blocked(plugin, clarify_plan):
+    assert _ask_clarify(plugin, clarify_plan) is None
+    assert _ask_clarify(plugin, clarify_plan, call_id="clarify-2")["action"] == "block"
+    _answer_clarify(plugin, clarify_plan, clarify_plan["choices"][0], call_id="clarify-2")
+    assert plugin._load_state("sk:unit-session")["submission"]["status"] == "awaiting"
+    assert clarify_plan["tool_call_id"] == "clarify-1"
+
+
+@pytest.mark.parametrize("kind", ["unanswered", "skipped", "timeout", "error", "malformed", "empty", "list", "choices", "question"])
+def test_v034_non_answer_allows_reask(plugin, clarify_plan, kind):
+    block = clarify_plan
+    assert _ask_clarify(plugin, block) is None
+    result = _clarify_result(block, block["choices"][0], status=kind if kind in {"unanswered", "skipped", "timeout"} else "answered")
+    if kind == "malformed":
+        result = "not json"
+    elif kind in {"empty", "list"}:
+        result = _clarify_result(block, "" if kind == "empty" else [block["choices"][0]])
+    elif kind in {"choices", "question"}:
+        value = json.loads(result)
+        value["responses"][0]["choices_offered" if kind == "choices" else "question"] = [] if kind == "choices" else "Wrong question"
+        result = json.dumps(value)
+    plugin.post_tool_call("clarify", tool_call_id="clarify-1", status="error" if kind == "error" else "ok", result=result)
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "awaiting"
+    assert block["tool_call_id"] == ""
+    assert _ask_clarify(plugin, block, call_id="clarify-2") is None
+    _answer_clarify(plugin, block, block["choices"][0], call_id="clarify-2")
+    assert not plugin._load_state("sk:unit-session")["active"]
+
+
+@pytest.mark.parametrize("shape", ["single", "list", "responses"])
+def test_v034_older_result_without_status(plugin, clarify_plan, shape):
+    block = clarify_plan
+    assert _ask_clarify(plugin, block, older=True) is None
+    response = {"question": block["question"], "user_response": block["choices"][0]}
+    value = response if shape == "single" else [response] if shape == "list" else {"responses": [response]}
+    plugin.post_tool_call("clarify", tool_call_id="clarify-1", status="ok", result=json.dumps(value))
+    assert plugin._load_state("sk:unit-session")["submission"]["status"] == "approved"
+
+
+@pytest.mark.parametrize("answer", ["approve plan rev 1", "Make it smaller", "x" * 300])
+def test_v034_free_text_is_bounded_feedback(plugin, clarify_plan, answer):
+    assert _ask_clarify(plugin, clarify_plan) is None
+    _answer_clarify(plugin, clarify_plan, "  " + answer + "  ")
+    state = plugin._load_state("sk:unit-session")
+    assert state["active"] and state["submission"]["status"] == "rejected"
+    assert state["pending_note"] == plugin._rejection_note(1) + f' Feedback: "{answer[:280]}"'
+    assert "clarify" not in state["submission"]
+
+
+@pytest.mark.parametrize("decision", ["deny", "cancel", "presented"])
+def test_v034_non_bypassed_gate_never_issues_clarify(plugin, submitted_plan, decision):
+    directive = _submit(plugin)
+    if decision == "deny":
+        _decision(plugin, directive, "deny")
+    elif decision == "cancel":
+        _decision(plugin, directive, cancelled=True)
+    else:
+        plugin._ledger.record_presented(pattern_key="plugin_rule:" + directive["rule_key"])
+    result = _submit_result(plugin)
+    assert "clarify" not in result
+    assert "clarify" not in plugin._load_state("sk:unit-session")["submission"]
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+
+@pytest.mark.parametrize("changed", ["inactive", "activation", "status", "missing-file"])
+def test_v034_approval_rechecks_state_and_fails_closed(plugin, clarify_plan, submitted_plan, changed):
+    assert _ask_clarify(plugin, clarify_plan) is None
+    state = plugin._load_state("sk:unit-session")
+    if changed == "inactive":
+        state["active"] = False
+    elif changed == "activation":
+        state["activation_id"] = "different"
+    elif changed == "status":
+        state["submission"]["status"] = "rejected"
+    else:
+        submitted_plan.unlink()
+    plugin._save_state("sk:unit-session", state)
+    _answer_clarify(plugin, clarify_plan, clarify_plan["choices"][0])
+    state = plugin._load_state("sk:unit-session")
+    assert state["submission"]["status"] != "approved" and state.get("phase") != "executing"
+    assert state["submission"]["clarify"]["tool_call_id"] == ""
+
+
+@pytest.mark.parametrize("action", ["approve", "reject", "off", "on", "reset", "finalize"])
+def test_v034_commands_and_lifecycle_clear_clarify(plugin, clarify_plan, session_env, action):
+    if action == "reset":
+        plugin.on_session_reset()
+    elif action == "finalize":
+        session_env["HERMES_SESSION_KEY"] = ""
+        state = plugin._load_state("sk:unit-session")
+        plugin._save_state(f"cli:{os.getpid()}", state)
+        plugin.on_session_finalize(platform="cli")
+        assert plugin._load_state(f"cli:{os.getpid()}") == {}
+        return
+    else:
+        plugin.command(action)
+    assert "clarify" not in plugin._load_state("sk:unit-session").get("submission", {})
+
+
+@pytest.mark.parametrize("value", ["bad", "null", "[]", '{"responses": 42}', '{"question": "Q", "user_response": 1}'])
+def test_v034_clarify_answer_malformed(value):
+    from plan_mode.approval import clarify_answer
+    assert clarify_answer(value, "Q", ["A", "K"]) is None
+
+
+def test_v034_clarify_answer_selects_matching_response():
+    from plan_mode.approval import clarify_answer
+    value = {"responses": [{"question": "Other", "user_response": "A"},
+                           {"question": "Q", "choices_offered": ["K", "A"], "user_response": "A"},
+                           {"question": "Q", "choices_offered": ["A", "K"], "status": "answered", "user_response": " A "}]}
+    assert clarify_answer(json.dumps(value), "Q", ["A", "K"]) == "A"
+
+
+def test_v034_clarify_transition_updates_linked_ui_command_state(plugin, session_env, tmp_path):
+    session_env["HERMES_UI_SESSION_ID"] = "clarify-tab"
+    _agent_plan(plugin, session_env, tmp_path)
+    _submit(plugin)
+    result = _submit_result(plugin)
+    block = plugin._load_state("ui:clarify-tab")["submission"]["clarify"]
+    assert result["clarify"]["question"] == block["question"]
+    assert _ask_clarify(plugin, block) is None
+    _answer_clarify(plugin, block, block["choices"][0])
+    for key in ("ui:clarify-tab", "sk:unit-session"):
+        state = plugin._load_state(key)
+        assert not state["active"] and state["phase"] == "executing"
+        assert state["submission"]["status"] == "approved"
+        assert "clarify" not in state["submission"]
+    session_env.pop("HERMES_UI_SESSION_ID")
+    assert "executing (rev 1:" in plugin.command("status")
