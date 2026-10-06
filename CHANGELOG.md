@@ -17,6 +17,10 @@
   `__init__.py` no longer show as `registerchannel` and `init.py`. Underscore emphasis such as `_this_` now stays
   visible; `*` emphasis, backticks and strikethrough are still removed. Link stripping no longer slows down
   quadratically on a long line of unmatched `[`.
+- When the agent turns plan mode on itself, the `plan_mode` result now carries the planning note (plan style or
+  skill, and the commit rule), because that turn's planning note has already been sent.
+- The short chat approval summary takes a Steps or Tasks section before a per-file Changes list, which the compact
+  format writes first. A linked image such as a badge is unwrapped to its text.
 - Why the defaults changed: an end-to-end comparison on eight coding tasks (same model and effort, one run per task,
   blind judge, decided by bars written before the runs) met every bar. Compact plans were about half as long, all
   eight tasks still passed their checks with no edit before approval, there were no commits (core made 1-4 per task),
