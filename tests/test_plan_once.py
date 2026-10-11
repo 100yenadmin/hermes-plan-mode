@@ -526,7 +526,8 @@ def test_default_lean_adds_plan_once_only_on_tui_sessions(tui_default, monkeypat
 
 @pytest.mark.parametrize("settings", [{"plan_profile": "classic"}, {"plan_style": "core"},
                                       {"plan_skill": "my-plan"}, {"levers": "lean_craft,todo_batch"}])
-def test_default_plan_once_needs_the_lean_default(tui_default, settings):
+def test_default_plan_once_needs_the_lean_default(tui_default, monkeypatch, settings):
+    monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: None)  # the plan skill is loadable
     ctx = FakeContext()
     ctx.settings.update(settings)
     assert "plan_once" not in pm.PlanModePlugin(ctx)._levers()
