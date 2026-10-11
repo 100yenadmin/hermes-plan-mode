@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 (unreleased)
+
+- Three new lean levers remove unnecessary planning rounds.
+- `bridge_calls` gives direct tool_call examples for plan_mode and todo_list, removing lookups.
+- `blocked_tools` names the blocked tools and tells the agent to put commands and tests in the plan instead of retrying.
+- `skill_policy` skips process skills while planning and follows the approved plan during execution.
+- Light reminders keep whole sentences within 400 characters. Classic text and tool decisions are unchanged.
+Measured: TBD
+
 ## 0.4.1 - 2026-10-11
 
 - **Plan once, on by default on TUI, Desktop and `hermes serve`** (lean profile). The agent writes the plan once, in

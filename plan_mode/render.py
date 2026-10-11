@@ -42,6 +42,36 @@ LEAN_CRAFT = (
     "only at the absolute path given above, never the relative .hermes/plans path from the /plan instructions."
 )
 LEAN_EXECUTION = "Implement directly, with no red-first ceremony unless the user asked for TDD."
+BRIDGE_SUBMIT = (
+    '(if plan_mode is not in your tool list, call tool_call(calls=[{"name": "plan_mode", '
+    '"arguments": {"action": "submit"}}]) directly; no tool_search or tool_describe is needed)'
+)
+BRIDGE_TODO = (
+    ' If todo_list is not in your tool list, call it through tool_call with no lookup: '
+    'tool_call(calls=[{"name": "todo_list", "arguments": {"todos": [{"id": "1", "content": "<step>", '
+    '"status": "in_progress"}]}}]); add "merge": true when you update statuses.'
+)
+BLOCKED_TOOLS = (
+    "Until the user approves, terminal, execute_code, delegation and MCP tools are blocked, so you cannot run "
+    "commands or tests now: do not try them; read files instead and put the commands in the test plan."
+)
+BLOCKED_TOOL_MESSAGE = (
+    "Plan mode is on: {name} is blocked until the user approves the plan. Commands and tests run only after "
+    "approval: put them in the plan's test plan and do not retry blocked tools."
+)
+SKILL_POLICY = (
+    "While planning, this overrides the system prompt's rule to load matching skills: plan mode sets the process "
+    "and this plan format, so do not load skills about planning, plan writing, brainstorming, TDD, debugging, "
+    "code review or codebase inspection. Load a skill only for facts this task needs, such as an API, a command "
+    "or a repo convention."
+)
+SKILL_EXECUTION = "The approved plan is the process: do not load planning, TDD or code-review skills unless the user asked."
+LIGHT_BRIDGE = (
+    ' If plan_mode is not in your tool list: tool_call(calls=[{"name": "plan_mode", '
+    '"arguments": {"action": "submit"}}]).'
+)
+LIGHT_BLOCKED = " Terminal and execute_code stay blocked until approval."
+LIGHT_SKILL = " Do not load planning, TDD or debugging skills."
 LOCAL_PLATFORMS = frozenset({
     "cli", "terminal", "tui", "desktop", "dashboard", "api_server", "webhook",
     "acp", "local", "batch", "cron", "subagent", "curator",
@@ -114,13 +144,35 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
             'The plugin saves only the text between the tags as the plan file; do not write the plan file yourself. '
             'Approval starts implementation in this same turn.'
         ) + note[end:]
+    if "bridge_calls" in levers:
+        # Every step-3 variant carries this parenthetical; tests assert the swap happened in each one.
+        note = note.replace('(if plan_mode is not loaded, find it with tool_search "plan_mode")', BRIDGE_SUBMIT)
     if "lean_craft" in levers and style == "compact" and not plan_skill:
         note += "\n" + (LEAN_CRAFT.split(" Write the plan file ")[0] if reply_plan else LEAN_CRAFT)
     if "sticky" in levers:
         note += '\nWhile plan mode is on, a request to implement or "just do it" means plan the implementation and submit; do not call blocked tools.'
+    if "blocked_tools" in levers:
+        note += "\n" + BLOCKED_TOOLS
+    if "skill_policy" in levers and not plan_skill:
+        note += "\n" + SKILL_POLICY
     if "reentry" in levers and previous_plan:
         note += f"\nPrevious plan: {previous_plan}. Read it; refine it for the same task or start a new file for a different task."
     return note
+
+
+def light_note(plans_dir, *, levers=frozenset()) -> str:
+    base = (f"Plan mode is ON. Plans directory: {plans_dir}. Submit with plan_mode; "
+            'do not ask "should I proceed?" in prose.')
+    if len(base) > 400:
+        return base[:400]
+    sentences = [base]
+    for lever, sentence in (("bridge_calls", LIGHT_BRIDGE), ("blocked_tools", LIGHT_BLOCKED),
+                            ("skill_policy", LIGHT_SKILL)):
+        if lever in levers:
+            sentences.append(sentence)
+    while len("".join(sentences)) > 400:
+        sentences.pop()
+    return "".join(sentences)
 
 
 def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
@@ -134,6 +186,8 @@ def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
         result = result.replace("Keep todo_list statuses current;", "If using todo_list, batch status updates with the next real tool call;")
     if "lean_craft" in levers:
         result += " " + LEAN_EXECUTION
+    if "skill_policy" in levers:
+        result += " " + SKILL_EXECUTION
     return result
 
 

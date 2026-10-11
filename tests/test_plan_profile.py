@@ -34,13 +34,14 @@ def test_profile_fallback_uses_constant(make_plugin, monkeypatch, value):
 def test_profile_constants_and_selection(make_plugin):
     assert pm.PROFILE_DEFAULT == "lean"
     assert pm.LEAN_LEVERS == frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky",
-                                       "reentry", "approved_text", "light_notes", "question_shape"})
+                                       "reentry", "approved_text", "light_notes", "question_shape",
+                                       "bridge_calls", "blocked_tools", "skill_policy"})
     lean = make_plugin()
     lean.ctx.settings.clear()  # genuinely untouched config, including the override key
     assert lean._plan_profile() == "lean" and lean._plan_style() == "compact"
     assert lean._plan_skill() == "" and lean._levers() == pm.LEAN_LEVERS
     lean._levers().clear()  # the selector returns a mutable copy, never the shared profile
-    assert len(pm.LEAN_LEVERS) == 8
+    assert len(pm.LEAN_LEVERS) == 11
     assert make_plugin(plan_profile="classic")._levers() == set()
 
 

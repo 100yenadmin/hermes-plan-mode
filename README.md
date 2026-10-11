@@ -222,7 +222,8 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 #### Experimental levers
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
-`light_notes` and `question_shape`, plus `plan_once` on TUI, Desktop and `hermes serve` sessions. Three more are
+`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools` and `skill_policy`, plus `plan_once` on TUI, Desktop
+and `hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Three more are
 measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces
 the profile's set, including the automatic `plan_once`, so include the lean levers you want to keep:
 
@@ -231,7 +232,7 @@ plugins:
   entries:
     plan-mode:
       settings:
-        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,plan_budget"
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,plan_budget"
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
@@ -282,7 +283,7 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.1 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.2 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every interactive surface |

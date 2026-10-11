@@ -27,7 +27,8 @@ from .approval import (
     is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
 from .render import (
-    AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, executing_pointer,
+    AGENT_HINT, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
+    SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -99,13 +100,12 @@ _BATCH_TODO_HINT = (
 )
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
-                     "commit_override", "approval_ask"})
+                     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy"})
 _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
                  "the approval, not a clarifying question. ")
-# The lever set the pre-registered benchmark rounds validated (rounds 3 and 5; see CHANGELOG 0.4.0). Measured only with
-# plan_style compact and no plan skill, so it applies only there; classic, core and plan_skill keep 0.3.5 behaviour.
+# Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
-                         "light_notes", "question_shape"})
+                         "light_notes", "question_shape", "bridge_calls", "blocked_tools", "skill_policy"})
 PROFILE_DEFAULT = "lean"
 
 _PLAN_STYLES = frozenset({"compact", "core"})
@@ -1154,6 +1154,8 @@ class PlanModePlugin:
                 )
                 if "lean_craft" in self._note_levers():
                     state["pending_note"] += " " + LEAN_EXECUTION
+                if "skill_policy" in self._note_levers():
+                    state["pending_note"] += " " + SKILL_EXECUTION
                 state.update(phase="executing", approved_path=approved_path, approved_at=_utc_now())
                 state.pop("approved_revision", None)
                 if submission.get("path") == approved_path:
@@ -1300,6 +1302,8 @@ class PlanModePlugin:
         levers = self._levers()
         if "lean_craft" in levers and (self._plan_style() != "compact" or self._plan_skill()):
             levers.remove("lean_craft")
+        if self._plan_skill():
+            levers.discard("skill_policy")
         return levers
 
     def _planning_note(self, state: dict, platform: str = "") -> str:
@@ -1475,8 +1479,15 @@ class PlanModePlugin:
 
     def _execute_hint(self) -> str:
         levers = self._note_levers()
-        return (_BATCH_TODO_HINT if "todo_batch" in levers else _TODO_HINT) + self._commit_rule() + (
-            " " + LEAN_EXECUTION if "lean_craft" in levers else "")
+        hint = _BATCH_TODO_HINT if "todo_batch" in levers else _TODO_HINT
+        if "bridge_calls" in levers:
+            hint += BRIDGE_TODO
+        hint += self._commit_rule()
+        if "lean_craft" in levers:
+            hint += " " + LEAN_EXECUTION
+        if "skill_policy" in levers:
+            hint += " " + SKILL_EXECUTION
+        return hint
 
     def post_llm_call(self, **kwargs: Any) -> None:
         """Turn-end hook (after the tool loop), including local surfaces without footers."""
@@ -1688,6 +1699,8 @@ class PlanModePlugin:
                         f"Use only absolute paths resolving inside {plans_dir}; relative, outside, "
                         "traversal, and symlink-escaping targets are refused.",
                     )
+                if "blocked_tools" in self._note_levers():
+                    return {"action": "block", "message": BLOCKED_TOOL_MESSAGE.format(name=name or "unknown tool")}
                 return _block_message(name or "unknown tool")
         except Exception as exc:
             return _block_message(
@@ -1728,6 +1741,7 @@ class PlanModePlugin:
                         else:
                             self._approve_submission(state, submission, via="clarify")
                             if ("approved_text" in self._levers() or "lean_craft" in self._note_levers()
+                                    or {"bridge_calls", "skill_policy"} & self._note_levers()
                                     or self._saved_plan_note(submission)):
                                 note = (self._saved_plan_note(submission) + f"The user approved plan rev {submission['revision']}. "
                                         f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission))
@@ -1869,8 +1883,8 @@ class PlanModePlugin:
                     self._active_keys.add(state_key)
                     self._remember_session_id(state_key, state, kwargs.get("session_id"))
                     short = "light_notes" in self._levers() and state.get("light_note_seen")
-                    note = (f"Plan mode is ON. Plans directory: {state.get('plans_dir')}. Submit with plan_mode; "
-                            'do not ask "should I proceed?" in prose.')[:400] if short else self._planning_note(state, identity.surface)
+                    note = (light_note(state.get("plans_dir"), levers=self._note_levers()) if short
+                            else self._planning_note(state, identity.surface))
                     if "light_notes" in self._levers():
                         state["light_note_seen"] = True
                         self._save_state(state_key, state)
