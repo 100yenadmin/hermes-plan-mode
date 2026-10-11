@@ -147,6 +147,7 @@ def test_profile_status_adds_only_one_line(make_plugin, monkeypatch, profile, co
 
 
 def test_profile_manifest_select_and_validation(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins_settings", reason="Hermes build lacks plugin settings fields")
     from pathlib import Path
     from hermes_cli import config, plugins, plugins_settings
 

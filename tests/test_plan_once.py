@@ -25,6 +25,8 @@ def message(text=TEXT, *, codex=True, ids=("submit",)):
 
 @pytest.fixture
 def once(session_env, tmp_path, monkeypatch, plan_profile):
+    pytest.importorskip("hermes_cli.config_effective")
+    pytest.importorskip("agent.history_commentary", reason="Hermes build lacks the commentary helpers plan_once needs")
     monkeypatch.delenv("PLAN_MODE_LEVERS", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
     session_env.update(TERMINAL_CWD=str(tmp_path), HERMES_UI_SESSION_ID="",
@@ -214,3 +216,13 @@ def test_once_prior_activation_capture_not_reused(once):
     plugin.command("off")
     plugin.command("on new task")
     assert submit(plugin)["action"] == "block"
+
+
+def test_once_ineligible_without_commentary_helpers(once, monkeypatch):
+    """Hermes before v2026.9.24 has no agent.history_commentary: keep the file-writing note."""
+    plugin, _ = once
+    assert "Write the complete plan as your reply text" in plugin.pre_llm_call()["context"]
+    monkeypatch.setitem(sys.modules, "agent.history_commentary", None)
+    note = plugin.pre_llm_call()["context"]
+    assert "Write the complete plan as your reply text" not in note
+    assert 'plan_mode(action="submit") with no path' not in note

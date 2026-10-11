@@ -228,11 +228,11 @@ plugins:
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
 - `plan_budget` asks for compact plans of under about 1,200 characters for small changes. In its pre-registered round
   it halved plan length and finished 24% faster, but one judge scored plan clarity lower.
-- `plan_once` is for TUI, Desktop and `hermes serve` only, with interim messages on (and, for Codex models, commentary
-  shown). The agent writes the plan once, as its reply, and the plugin saves that text as the plan file. It was 19%
-  faster, but it did not hold the plan-quality bar. Hermes reads `display.show_commentary` when it builds the agent,
-  so after changing that setting start a new session before relying on `plan_once`. The approval card shows the saved
-  plan up to 3,500 characters.
+- `plan_once` is for TUI, Desktop and `hermes serve` on Hermes v2026.9.24 or later, with interim messages on (and, for
+  Codex models, commentary shown). The agent writes the plan once, as its reply, and the plugin saves that text as the
+  plan file. It was 19% faster, but it did not hold the plan-quality bar. Hermes reads `display.show_commentary` when
+  it builds the agent, so after changing that setting start a new session before relying on `plan_once`. The approval
+  card shows the saved plan up to 3,500 characters.
 
 ### Compact plans
 

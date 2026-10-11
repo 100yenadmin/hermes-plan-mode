@@ -1183,6 +1183,7 @@ def test_plan_once_real_capture_dispatch(real_submit_host, monkeypatch, tmp_path
     from gateway.session_context import clear_session_vars, set_session_vars
     if "post_api_request" not in host.plugins.VALID_HOOKS:
         pytest.skip("Hermes lacks post_api_request")
+    pytest.importorskip("agent.history_commentary", reason="Hermes build lacks the commentary helpers plan_once needs")
     # Loaded server marker plus the actual turn-bound public ContextVar signal.
     monkeypatch.setitem(sys.modules, "tui_gateway.server", SimpleNamespace(
         _active_config_path=lambda: tmp_path / "home/config.yaml"))
@@ -1237,6 +1238,7 @@ def test_approved_text_real_clarify_result(real_clarify_host, monkeypatch):
     ({"plan_profile": "lean", "levers": "sticky"}, "lean (custom levers)"),
 ])
 def test_real_plugin_manager_plan_profile(tmp_path, monkeypatch, settings, expected):
+    pytest.importorskip("hermes_cli.plugins")
     from hermes_cli import plugins
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from gateway.session_context import clear_session_vars, set_session_vars

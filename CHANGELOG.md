@@ -40,7 +40,8 @@
 - **Experimental, not part of any profile:** `plan_once` writes the plan only once on TUI, Desktop and `hermes serve`. The
   agent writes the plan as its reply, and the plugin saves exactly that visible text as the plan file. It was 19%
   faster in a pre-registered round, but it did not hold the plan-quality bar, so it stays opt-in until a revised
-  version passes.
+  version passes. It needs Hermes v2026.9.24 or later; on older Hermes it stays off and the plan file is written as
+  usual.
 - `plugin.yaml` declares every hook the plugin can register, including the conditional `post_llm_call`,
   `transform_tool_result` and `post_api_request`, so `hermes plugins validate` passes with the lean default.
 - The classic CLI approval prompt no longer claims the plan is shown above. It now says the plan is in the reply

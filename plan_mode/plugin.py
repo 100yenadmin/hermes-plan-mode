@@ -335,6 +335,8 @@ def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
             or not reader("HERMES_UI_SESSION_ID", "")):
         return False
     try:
+        # Capture needs this (Hermes v2026.9.24+); without it the note must not promise a saved reply.
+        from agent.history_commentary import visible_commentary  # noqa: F401
         from hermes_cli.config import require_readable_config_before_write
         from hermes_cli.config_effective import load_user_config_effective
         from utils import is_truthy_value
