@@ -75,6 +75,9 @@ platform.
   before the approval prompt by default. On those, and everywhere without a budget, the approval text carries the
   full plan, capped at about 3500 chars (about 1000 on WhatsApp Cloud) with a pointer to the file.
 - `/planmode show` prints up to 3500 chars of the plan; the plan file holds the rest.
+- **Exercised vs supported.** We have run plan mode end to end on the CLI, TUI, Desktop, `hermes serve` and Telegram
+  (approved by text; the buttons were not clicked). The other platforms in the table are supported through Hermes'
+  own approval and question UIs, but we have not exercised them.
 
 ## Install
 
@@ -176,7 +179,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
-| Allow commits (`allow_commits`) | off | Off: the agent neither plans nor makes git commits unless you ask, so changes stay uncommitted for your review. On: it may commit as the plan style suggests |
+| Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask, so changes stay uncommitted for your review. This is an instruction, not enforced (see Known limitations). On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
 
 ### The lean profile (default since 0.4.0)
@@ -274,7 +277,7 @@ plugins:
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every interactive surface |
 | Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted |
 | Deny with feedback, revise | yes | yes | no | yes; a typed reason only via gateway `/deny <reason>`, otherwise the agent asks |
-| Implement in the same turn | yes | yes | no | yes via the prompt; typed approve may need a message |
+| Implement after approval | same turn | one click, as a new turn | no | same turn via the prompt; typed approve may need a message |
 | Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list` + footer on chat platforms |
 | Agent may enter | yes | no | no | yes |
 | Autonomy choice / clear context at approval | yes | partial | no | no |
