@@ -24,7 +24,7 @@ import uuid
 
 from .approval import (
     DecisionLedger, approval_text, clarify_answer, gate_bypassed,
-    is_human_approval, make_rule_key, plan_digest, _title,
+    is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
 from .render import (
     AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, NO_COMMITS, executing_pointer,
@@ -395,7 +395,7 @@ class PlanModePlugin:
         # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
-        self._reply_captures: dict[tuple[str, str], tuple[Any, str, bool, str]] = {}
+        self._reply_captures: dict[tuple[str, str], tuple[Any, str, bool, str, str]] = {}
         manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
         self._registration_profile = self._profile_name_for_home(manager_home)
 
@@ -848,7 +848,7 @@ class PlanModePlugin:
                 and submission.get("status") == "approved" and not state.get("active")):
             state["pending_note"] = ""
             self._save_command_state(raw_key, storage_key, state)
-            return {"message": f"The user approved plan rev {submission['revision']} at {submission['path']} with "
+            return {"message": self._saved_plan_note(submission) + f"The user approved plan rev {submission['revision']} at {submission['path']} with "
                     f"/planmode approve. Plan mode is off. Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission),
                     "approved": True, "path": submission["path"], "revision": submission["revision"]}
         if opened:
@@ -865,7 +865,7 @@ class PlanModePlugin:
             if unchanged:
                 self._approve_submission(state, submission)
                 self._save_command_state(raw_key, storage_key, state)
-                return {"message": f"The user approved plan rev {revision} at {path}. Plan mode is off. "
+                return {"message": self._saved_plan_note(submission) + f"The user approved plan rev {revision} at {path}. Plan mode is off. "
                         f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission),
                         "approved": True, "path": path, "revision": revision}
             submission["status"] = "stale"
@@ -1125,6 +1125,8 @@ class PlanModePlugin:
                                 state["approved_while_open"] = submission["rule_key"]
                     except (OSError, ValueError):
                         pass
+                if submission.get("path") == approved_path:
+                    state["pending_note"] = self._saved_plan_note(submission) + state["pending_note"]
                 self._forget_submission(state)
                 state["pending_note"] += self._approved_excerpt({"path": approved_path, "revision": state.get("approved_revision", 0)})
                 self._save_command_state(identity.key, command_storage_key, state)
@@ -1265,6 +1267,36 @@ class PlanModePlugin:
                              commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform,
                              reply_plan="plan_once" in self._levers() and _plan_once_visible())
 
+    @staticmethod
+    def _reply_plan(text: str) -> tuple[str, str]:
+        """Extract one public plan block, using approval's fence rules."""
+        lines = text.splitlines(keepends=True)
+        tags = [(index, match[1]) for index, line in enumerate(_unfenced(text))
+                if (match := re.fullmatch(r" {0,3}(<proposed_plan>|</proposed_plan>)[ \t]*", line))]
+        opening = [index for index, tag in tags if tag == "<proposed_plan>"]
+        closing = [index for index, tag in tags if tag == "</proposed_plan>"]
+        if not tags:
+            return "", "There are no proposed_plan tag lines."
+        if len(opening) > 1 or len(closing) > 1:
+            return "", "There is more than one proposed_plan opening or closing tag."
+        if len(opening) != 1 or len(closing) != 1:
+            return "", "The proposed_plan tags are unbalanced."
+        if opening[0] >= closing[0]:
+            return "", "The proposed_plan tags are in the wrong order."
+        inner = lines[opening[0] + 1:closing[0]]
+        while inner and not inner[0].strip():
+            inner.pop(0)
+        while inner and not inner[-1].strip():
+            inner.pop()
+        text = "".join(inner).rstrip("\r\n")
+        if not text:
+            return "", "The proposed_plan block is empty."
+        if len(text) < 80:
+            return "", "The proposed_plan inner text is under 80 characters."
+        if len(text.encode("utf-8")) > 65536:
+            return "", "The proposed_plan inner text exceeds 64 KiB."
+        return text + "\n", ""
+
     def post_api_request(self, assistant_message: Any = None, **kwargs: Any) -> None:
         """Capture only public reply text, paired with dispatch's effective call IDs."""
         if "plan_once" not in self._levers():
@@ -1299,12 +1331,11 @@ class PlanModePlugin:
                 else:
                     content = field("content")
                     text = strip_think_blocks(None, content).strip() if isinstance(content, str) else ""
-                # Keep oversized replies out of the bounded in-memory cache too.
-                if len(text) < 80 or len(text.encode("utf-8")) > 65536:
-                    return
+                # Cache only bounded inner text (or the reason it cannot be saved).
+                text, error = self._reply_plan(text)
                 for call_id in ids:
                     if call_id:
-                        self._reply_captures[(key, call_id)] = (state.get("activation_id"), text, codex, provider)
+                        self._reply_captures[(key, call_id)] = (state.get("activation_id"), text, codex, provider, error)
                 while len(self._reply_captures) > 256:
                     self._reply_captures.pop(next(iter(self._reply_captures)))
         except Exception:
@@ -1319,9 +1350,13 @@ class PlanModePlugin:
             f"{plans_dir}, then call plan_mode(action=\"submit\", path=\"<absolute target path>\")."))
         if not capture or capture[0] != state.get("activation_id"):
             return fallback
-        _, text, codex, provider = capture
+        _, text, codex, provider, error = capture
         if not _plan_once_visible(provider=provider, codex=codex):
             return fallback
+        if error:
+            return _block_message(PLAN_MODE_TOOL, error +
+                " Please wrap the plan in one <proposed_plan> … </proposed_plan> block and submit again. " +
+                fallback["message"])
         submission = state.get("submission") or {}
         if submission.get("status") == "pending" and self._ledger.is_inflight(submission.get("rule_key")):
             return _block_message(PLAN_MODE_TOOL, "A plan approval prompt is already open; wait for the user's answer.")
@@ -1346,7 +1381,14 @@ class PlanModePlugin:
         except OSError:
             return _block_message(PLAN_MODE_TOOL, "Saving the visible reply failed; write the plan and submit with its path.")
         self._remember_plan_targets(key, state, [path])
+        state["plugin_saved_plans"] = (state.get("plugin_saved_plans") or [])[-255:] + [path]
         return {"path": path}
+
+    def _saved_plan_note(self, submission: dict) -> str:
+        if "plan_once" in self._levers() and submission.get("plugin_saved"):
+            return ("The plan was saved for you from your reply; saving it is done. Your task now is to "
+                    "implement it in this turn. ")
+        return ""
 
     def _approved_excerpt(self, submission: dict) -> str:
         if "approved_text" not in self._levers():
@@ -1467,6 +1509,8 @@ class PlanModePlugin:
             "revision": revision, "digest": digest, "path": path, "rule_key": rule_key,
             "tool_call_id": tool_call_id or None, "status": "pending", "submitted_at": _utc_now(),
         }
+        if "plan_once" in self._levers() and path in state.get("plugin_saved_plans", []):
+            state["submission"]["plugin_saved"] = True
         # Submitting asks the user, so from here only the user's approve, reject or off ends plan mode.
         state["entered_by"] = "user"
         state.pop("agent_activation_id", None)
@@ -1636,8 +1680,9 @@ class PlanModePlugin:
                             state["pending_note"] = self._stale_note(submission["revision"])
                         else:
                             self._approve_submission(state, submission, via="clarify")
-                            if "approved_text" in self._levers() or "lean_craft" in self._note_levers():
-                                note = (f"The user approved plan rev {submission['revision']}. "
+                            if ("approved_text" in self._levers() or "lean_craft" in self._note_levers()
+                                    or self._saved_plan_note(submission)):
+                                note = (self._saved_plan_note(submission) + f"The user approved plan rev {submission['revision']}. "
                                         f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission))
                                 self._clarify_notes[(state_key, call_id)] = (kwargs.get("result"), note)
                                 while len(self._clarify_notes) > 256:

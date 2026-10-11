@@ -98,12 +98,15 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         )
     if "plan_once" in levers and reply_plan:
         note = note.replace(f"as Markdown to {target}", "as Markdown in your reply text")
-        note = note.replace("2. Write the plan as Markdown in your reply text", "2. Write the complete plan as your reply text, in Markdown")
+        note = note.replace("2. Write the plan as Markdown in your reply text",
+                            "2. Write the complete plan in your reply, in Markdown, between a line <proposed_plan> and a line "
+                            "</proposed_plan>, with a blank line after the opening tag and before the closing tag; anything "
+                            "else you say goes outside the tags")
         start, end = note.index("3. "), note.index("\n4. ")
         note = note[:start] + (
             '3. In that same response, call plan_mode(action="submit") with no path, on its own '
             '(if plan_mode is not loaded, find it with tool_search "plan_mode"). '
-            'The plugin saves your reply as the plan file; do not write the plan file yourself. '
+            'The plugin saves only the text between the tags as the plan file; do not write the plan file yourself. '
             'Approval starts implementation in this same turn.'
         ) + note[end:]
     if "lean_craft" in levers and style == "compact" and not plan_skill:

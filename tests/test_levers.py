@@ -107,7 +107,7 @@ def test_plan_once_fallback_surfaces(make_plugin, session_env, platform):
     plugin.command("on")
     note = plugin.pre_llm_call()["context"]
     assert "post_api_request" in plugin.ctx.hooks
-    assert "Write the complete plan as your reply text" not in note
+    assert "Write the complete plan in your reply, in Markdown, between a line <proposed_plan>" not in note
     if platform == "mattermost":
         assert "3–5 line summary plus the path" in note
         assert "3,000 characters" in note
