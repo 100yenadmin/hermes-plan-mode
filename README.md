@@ -339,6 +339,9 @@ plugins:
   session is reopened in a new tab, while a plan executes, `/planmode done` may not reach that tab and the execution
   pointer can stay until the todos finish or 100 turns pass
   ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
+- **The no-commit rule is an instruction.** After approval plan mode is off, and terminal commands are not inspected.
+  In benchmark runs the agent committed in 2 of 108 lean runs, both after loading a TDD skill that commits per step,
+  and in 0 of 70 classic runs ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)).
 - **No autonomy choice at approval** (Hermes has no per-mode edit-accept setting) and **no
   clear-context-and-implement** (not reachable from a plugin).
 - **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs

@@ -33,6 +33,8 @@
     (round 3, three runs per task).
   - An earlier wording of the question limits made the agent stop asking (0 of 5 hidden preferences found). It was
     caught by its own bar and replaced before release.
+  - The no-commit rule is still an instruction. Across all lean benchmark runs the agent committed in 2 of 108,
+    both after loading a TDD skill (0.3.5: 0 of 70); tracked in #18.
 - **Experimental, not part of any profile:** `plan_budget` gives compact plans a length budget: what changes and who consumes
   it, not how to write it. In a pre-registered round it halved plan length and finished 24% faster, with the same test
   results. One of the two blind judges scored plan fit and clarity lower, so it stays opt-in (the `levers` setting;
