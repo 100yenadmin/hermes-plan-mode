@@ -38,6 +38,12 @@ config_schema:
     default: compact
     label: Plan style
     description: "compact writes a short, decision-complete plan (the Claude Code and Codex style). core keeps Hermes' /plan craft: zero-context tasks, full code and a commit per step."
+  plan_profile:
+    type: str
+    choices: ["lean", "classic"]
+    default: "classic"
+    label: Plan profile
+    description: "Select a validated lever set by name. classic uses no levers; lean is reserved for the benchmark-selected set."
   allow_commits:
     type: bool
     default: false

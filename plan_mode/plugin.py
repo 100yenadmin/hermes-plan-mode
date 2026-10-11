@@ -99,6 +99,8 @@ _BATCH_TODO_HINT = (
 )
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget"})
+LEAN_LEVERS = frozenset()  # The orchestrator fills this in after the benchmark verdicts.
+PROFILE_DEFAULT = "classic"
 
 _PLAN_STYLES = frozenset({"compact", "core"})
 _DEFAULT_PLAN_STYLE = "compact"
@@ -767,8 +769,7 @@ class PlanModePlugin:
         state["plan_files"] = files[-256:]
         self._save_state(key, state)
 
-    @staticmethod
-    def _status_text(state: dict[str, Any], files: list[str]) -> str:
+    def _status_text(self, state: dict[str, Any], files: list[str]) -> str:
         mode = "on" if state.get("active") else "off"
         entered = state.get("entered_at") or "not set"
         plans_dir = state.get("plans_dir") or "not set"
@@ -782,8 +783,9 @@ class PlanModePlugin:
         else:
             phase = "planning" if state.get("active") else "off"
         last = f"\nLast submission: rev {submission['revision']} {submission['status']}" if submission else ""
+        custom = " (custom levers)" if self._lever_override() else ""
         return (
-            f"Plan mode: {mode}\nEntered at: {entered}\n"
+            f"Plan mode: {mode}\nPlan profile: {self._plan_profile()}{custom}\nEntered at: {entered}\n"
             f"Phase: {phase}{last}\nPlans directory: {plans_dir}\nPlan files:\n{rendered}"
         )
 
@@ -1230,10 +1232,20 @@ class PlanModePlugin:
         style = str(self._config("plan_style", _DEFAULT_PLAN_STYLE)).strip().lower()
         return style if style in _PLAN_STYLES else _DEFAULT_PLAN_STYLE
 
-    def _levers(self) -> set[str]:
+    def _plan_profile(self) -> str:
+        profile = str(self._config("plan_profile", PROFILE_DEFAULT)).strip().lower()
+        return profile if profile in {"lean", "classic"} else PROFILE_DEFAULT
+
+    def _lever_override(self) -> Any:
         value = self._config("levers", "")
         if value is None or (isinstance(value, str) and not value.strip()):
             value = os.environ.get("PLAN_MODE_LEVERS", "")
+        return value.strip() if isinstance(value, str) else value
+
+    def _levers(self) -> set[str]:
+        value = self._lever_override()
+        if isinstance(value, str) and not value:
+            return set(LEAN_LEVERS) if self._plan_profile() == "lean" else set()
         names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
         return set(_LEVERS) if "all" in names else names & _LEVERS
 

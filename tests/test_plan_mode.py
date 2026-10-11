@@ -1920,7 +1920,11 @@ def test_v033_config_schema_declares_the_flat_settings():
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
     assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools",
-                           "plan_style", "allow_commits", "plan_skill"}
+                           "plan_style", "allow_commits", "plan_skill", "plan_profile"}
+    assert schema["plan_profile"]["type"] == schema["plan_style"]["type"] == "str"
+    assert schema["plan_profile"]["choices"] == ["lean", "classic"]
+    assert schema["plan_profile"]["default"] == plugin_mod.PROFILE_DEFAULT == "classic"
+    assert schema["plan_profile"]["label"] == "Plan profile"
     # The form's defaults and the code's defaults must agree, or an untouched setting behaves differently.
     assert schema["plan_style"]["default"] == plugin_mod._DEFAULT_PLAN_STYLE
     assert sorted(schema["plan_style"]["choices"]) == sorted(plugin_mod._PLAN_STYLES)

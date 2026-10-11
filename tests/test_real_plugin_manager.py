@@ -1221,3 +1221,44 @@ def test_approved_text_real_clarify_result(real_clarify_host, monkeypatch):
     result = json.loads(host.call_clarify({"questions": [{**host.question, "multi_select": False}]}))
     assert "## Implement" in result["plan_mode_approval"]
     assert "Plan: " in result["plan_mode_approval"]
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({"plan_profile": "classic"}, "classic"),
+    ({"plan_profile": "lean"}, "lean"),
+    ({"plan_mode": {"plan_profile": "lean"}}, "lean"),
+    ({"plan_profile": "classic", "plan_mode": {"plan_profile": "lean"}}, "classic"),
+    ({"plan_profile": "lean", "levers": "sticky"}, "lean (custom levers)"),
+])
+def test_real_plugin_manager_plan_profile(tmp_path, monkeypatch, settings, expected):
+    from hermes_cli import plugins
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from gateway.session_context import clear_session_vars, set_session_vars
+
+    home, workspace, bundled = tmp_path / "home", tmp_path / "workspace", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    # JSON is valid YAML on all three hosts; nested settings exercise real ctx.get_config.
+    (home / "config.yaml").write_text(json.dumps({"plugins": {
+        "enabled": ["plan-mode"], "load_timeout_seconds": 0,
+        "entries": {"plan-mode": {"settings": settings}}}}), encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.delenv("PLAN_MODE_LEVERS", raising=False)
+    home_token = set_hermes_home_override(str(home))
+    tokens = set_session_vars(source="cli", session_key="profile-test", session_id="profile-test", cwd=str(workspace))
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        manager = plugins.get_plugin_manager()
+        manager.discover_and_load()
+        assert manager._plugins["plan-mode"].enabled
+        command = plugins.get_plugin_command_handler("planmode")
+        assert f"Plan profile: {expected}" in command("status").splitlines()
+        assert "Plan mode is on" in command("on profile test")
+        assert f"Plan profile: {expected}" in command("status").splitlines()
+    finally:
+        clear_session_vars(tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)

@@ -54,16 +54,20 @@ def approve_gate(plugin, path):
     return json.loads(plugin.tool({"action": "submit"}))
 
 
-def test_default_off_golden(make_plugin, monkeypatch):
+@pytest.mark.parametrize("profile", [None, "classic"])
+def test_default_off_golden(make_plugin, monkeypatch, profile):
     golden = json.loads((Path(__file__).parent / "fixtures/default_off_035.json").read_text())
     assert golden["approved"]["approved"] is True
     assert "clarify" in golden["bypass"]
-    plugin = make_plugin()
+    plugin = make_plugin(**({"plan_profile": profile} if profile else {}))
+    assert plugin._levers() == set()
     for style, commits, skill in itertools.product(["core", "compact"], [False, True], ["", "project-plan"]):
         assert render.planning_note("/workspace/.hermes/plans", datetime(2026, 10, 11, 12, 34, 56),
-                                    style=style, commits=commits, plan_skill=skill) == golden["notes"][f"{style}:{commits}:{skill}"]
+                                    style=style, commits=commits, plan_skill=skill,
+                                    levers=plugin._note_levers()) == golden["notes"][f"{style}:{commits}:{skill}"]
     for commits in [False, True]:
-        assert render.executing_pointer({"approved_path": "/plans/fixed.md", "approved_revision": 3}, commits=commits) == golden["pointers"][str(commits)]
+        assert render.executing_pointer({"approved_path": "/plans/fixed.md", "approved_revision": 3},
+                                        commits=commits, levers=plugin._note_levers()) == golden["pointers"][str(commits)]
     for name, expected in golden["constants"].items():
         assert getattr(pm, name) == expected
     for platform, expected in golden["approvals"].items():
