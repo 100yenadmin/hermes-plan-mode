@@ -15,8 +15,9 @@ hook, except writes to the plan file.
 
 1. Start planning with `/plan <task>` or `/planmode on [task]`. The agent can also enter on its own with the
    `plan_mode` tool.
-2. The agent explores with read-only tools. When a requirement is ambiguous it asks with `clarify` (up to 4 short
-   choices, recommended first).
+2. The agent explores with read-only tools. For a choice only you can make, it asks with `clarify` before it writes
+   the plan. With the default `lean` profile it prefers one question and asks at most three, each with 2–3 choices,
+   recommended first.
 3. It writes the plan as Markdown under `<cwd>/.hermes/plans`.
 4. It shows the complete plan in its reply, then calls `plan_mode(action="submit")`.
 5. Hermes shows its normal approval prompt for plan revision N: buttons, a card, the CLI panel, or `/approve` text.
@@ -173,9 +174,41 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`; applies to new sessions |
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
+| Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
 | Allow commits (`allow_commits`) | off | Off: the agent neither plans nor makes git commits unless you ask, so changes stay uncommitted for your review. On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
+
+### The lean profile (default since 0.4.0)
+
+Lean keeps everything that makes plan mode safe: the approval gate, the plan file, and asking before guessing. It cuts
+the rest.
+- **Planning note.** It replaces core `/plan`'s ceremony with a short note: no 2–5-minute task slicing, no copy-paste
+  code, and no red/green TDD steps unless you ask for TDD.
+- **Plan format.** It is Codex-style: Summary; Key changes, grouped by behaviour and naming every touched file and
+  every consumer of a changed interface; Test plan with exact commands; Assumptions.
+- **Questions.** The agent asks only about choices that reading the repo cannot settle. It prefers one question, asks
+  at most three, and gives each 2–3 choices written as label — consequence, recommended first.
+- **Fewer bookkeeping calls.**
+  - `todo_list` is used only for plans with 4 or more steps, and status updates ride along with real work.
+  - Later planning turns get a short reminder instead of the full note.
+- **Other changes.**
+  - The approval result includes the approved plan text.
+  - Re-entering plan mode points at your previous plan.
+  - "Just do it" while planning means: plan it and submit.
+
+How it was measured: pre-registered rounds with bars written before the runs and a blind adjudicator, on eight coding
+tasks with the same model (gpt-6.1-sol, medium effort) and Hermes v0.21.6.
+- Lean finished 42% faster than 0.3.5 (wall time 0.58×, 95% CI 0.55–0.62, faster on all 8 tasks).
+- It used 28% fewer cost-weighted tokens (0.72×, CI 0.63–0.80).
+- It had the same test results and no approval leaks.
+- On two tasks where the user had an unstated preference, it asked and matched it in 10 of 10 runs, as 0.3.5 did. On
+  the eight tasks without one it asked 15 questions against 0.3.5's 22.
+- Two blind judges from different model families scored plan and code quality the same as or better than 0.3.5.
+
+Set `plan_profile: classic` to get the 0.3.5 behaviour back.
+
+### Compact plans
 
 Compact plans without commits are the default since 0.3.5. In an end-to-end comparison on eight coding tasks (same
 model, blind judge, one run per task), compact plans were about half as long as core's and every task still passed its
@@ -194,6 +227,7 @@ plugins:
         agent_hint: true
         footer: "off"                   # quote it: a bare off is read as false (also honored)
         extra_allowed_tools: []
+        plan_profile: lean              # or classic (0.3.5 behaviour)
         plan_style: compact             # or core
         allow_commits: false
         plan_skill: ""                  # e.g. durable-plan-contract

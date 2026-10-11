@@ -54,12 +54,11 @@ def approve_gate(plugin, path):
     return json.loads(plugin.tool({"action": "submit"}))
 
 
-@pytest.mark.parametrize("profile", [None, "classic"])
-def test_default_off_golden(make_plugin, monkeypatch, profile):
+def test_default_off_golden(make_plugin, monkeypatch):
     golden = json.loads((Path(__file__).parent / "fixtures/default_off_035.json").read_text())
     assert golden["approved"]["approved"] is True
     assert "clarify" in golden["bypass"]
-    plugin = make_plugin(**({"plan_profile": profile} if profile else {}))
+    plugin = make_plugin(plan_profile="classic")
     assert plugin._levers() == set()
     for style, commits, skill in itertools.product(["core", "compact"], [False, True], ["", "project-plan"]):
         assert render.planning_note("/workspace/.hermes/plans", datetime(2026, 10, 11, 12, 34, 56),
@@ -89,7 +88,7 @@ def test_default_off_golden(make_plugin, monkeypatch, profile):
 
 @pytest.mark.parametrize("value,expected", [("all", LEVER_NAMES), ("sticky, reentry unknown", {"sticky", "reentry"}), ("", set())])
 def test_switch(make_plugin, value, expected, monkeypatch):
-    plugin = make_plugin(value)
+    plugin = make_plugin(value, plan_profile="classic")
     assert plugin._levers() == expected
     plugin.ctx.settings = {"plan_mode.levers": "sticky"}
     assert plugin._levers() == {"sticky"}
@@ -116,9 +115,10 @@ def test_plan_once_fallback_surfaces(make_plugin, session_env, platform):
         assert "Show the complete plan in your reply" in note
 
 
-def test_plan_once_fallback_file_digest(make_plugin, session_env):
+@pytest.mark.parametrize("profile", ["classic", "lean"])
+def test_plan_once_fallback_file_digest(make_plugin, session_env, profile):
     session_env["HERMES_SESSION_PLATFORM"] = "mattermost"
-    plugin = make_plugin("plan_once")
+    plugin = make_plugin("plan_once", plan_profile=profile)
     path = write_plan(plugin)
     gate = plugin.pre_tool_call("plan_mode", {"action": "submit"}, **IDS)
     assert gate["action"] == "approve" and TEXT in gate["message"]
@@ -127,8 +127,9 @@ def test_plan_once_fallback_file_digest(make_plugin, session_env):
     assert Path(state["submission"]["path"]) == path
 
 
-def test_plan_once_fallback_symlink_refusal(make_plugin, tmp_path):
-    plugin = make_plugin("plan_once")
+@pytest.mark.parametrize("profile", ["classic", "lean"])
+def test_plan_once_fallback_symlink_refusal(make_plugin, tmp_path, profile):
+    plugin = make_plugin("plan_once", plan_profile=profile)
     plugin.command("on")
     plans = tmp_path / ".hermes/plans"
     plans.rmdir()
@@ -241,8 +242,9 @@ def test_reentry(make_plugin, approved):
 
 
 @pytest.mark.parametrize("route", ["gate", "typed", "clarify"])
-def test_approved_text(make_plugin, route):
-    plugin = make_plugin("approved_text")
+@pytest.mark.parametrize("profile", ["classic", "lean"])
+def test_approved_text(make_plugin, route, profile):
+    plugin = make_plugin("approved_text", plan_profile=profile)
     path = write_plan(plugin, TEXT + "\n" + "x" * 6000)
     if route == "gate":
         message = approve_gate(plugin, path)["message"]

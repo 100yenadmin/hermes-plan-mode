@@ -8,7 +8,7 @@ import pytest
 from plan_mode import plugin as pm
 from plan_mode.approval import _title, approval_text
 from test_levers import make_plugin, write_plan
-from test_plan_mode import session_env
+from test_plan_mode import plan_profile, session_env
 from test_plan_once import capture, once, submit
 
 
@@ -16,8 +16,8 @@ CAUSES = "(yolo, approvals.mode: off, or an unattended surface such as the API s
 
 
 @pytest.mark.parametrize("presented", [False, True])
-def test_p040_bypass_names_unattended_surfaces(make_plugin, monkeypatch, presented):
-    plugin = make_plugin()
+def test_p040_bypass_names_unattended_surfaces(make_plugin, monkeypatch, presented, plan_profile):
+    plugin = make_plugin(plan_profile=plan_profile)
     monkeypatch.setattr(pm.secrets, "token_hex", lambda size: "fixednonce")
     plugin._save_command_state = lambda *args: None
     state = {"active": True, "activation_id": "fixed", "submission": {
@@ -40,8 +40,8 @@ def test_p040_bypass_names_unattended_surfaces(make_plugin, monkeypatch, present
         assert "clarify" in result
 
 
-def test_p040_submit_disallows_permanent_approval(make_plugin):
-    plugin = make_plugin()
+def test_p040_submit_disallows_permanent_approval(make_plugin, plan_profile):
+    plugin = make_plugin(plan_profile=plan_profile)
     path = write_plan(plugin)
     directive = plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)},
                                      tool_call_id="submit")

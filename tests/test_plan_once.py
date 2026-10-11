@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from plan_mode import plugin as pm
-from test_plan_mode import FakeContext, session_env
+from test_plan_mode import FakeContext, plan_profile, session_env
 
 
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
@@ -24,7 +24,7 @@ def message(text=TEXT, *, codex=True, ids=("submit",)):
 
 
 @pytest.fixture
-def once(session_env, tmp_path, monkeypatch):
+def once(session_env, tmp_path, monkeypatch, plan_profile):
     monkeypatch.delenv("PLAN_MODE_LEVERS", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
     session_env.update(TERMINAL_CWD=str(tmp_path), HERMES_UI_SESSION_ID="",
@@ -37,7 +37,7 @@ def once(session_env, tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "tui_gateway.server", SimpleNamespace(
         _active_config_path=lambda: tmp_path / "home/config.yaml"))
     ctx = FakeContext()
-    ctx.settings["levers"] = "plan_once"
+    ctx.settings.update(levers="plan_once", plan_profile=plan_profile)
     plugin = pm.PlanModePlugin(ctx)
     plugin.register()
     assert "Plan mode is on" in plugin.command("on parser")

@@ -99,8 +99,11 @@ _BATCH_TODO_HINT = (
 )
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget"})
-LEAN_LEVERS = frozenset()  # The orchestrator fills this in after the benchmark verdicts.
-PROFILE_DEFAULT = "classic"
+# The lever set the pre-registered benchmark rounds validated (rounds 3 and 5; see CHANGELOG 0.4.0). Measured only with
+# plan_style compact and no plan skill, so it applies only there; classic, core and plan_skill keep 0.3.5 behaviour.
+LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
+                         "light_notes", "question_shape"})
+PROFILE_DEFAULT = "lean"
 
 _PLAN_STYLES = frozenset({"compact", "core"})
 _DEFAULT_PLAN_STYLE = "compact"
@@ -1245,7 +1248,8 @@ class PlanModePlugin:
     def _levers(self) -> set[str]:
         value = self._lever_override()
         if isinstance(value, str) and not value:
-            return set(LEAN_LEVERS) if self._plan_profile() == "lean" else set()
+            lean = self._plan_profile() == "lean" and self._plan_style() == "compact" and not self._plan_skill()
+            return set(LEAN_LEVERS) if lean else set()
         names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
         return set(_LEVERS) if "all" in names else names & _LEVERS
 

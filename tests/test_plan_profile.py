@@ -10,14 +10,14 @@ from test_plan_mode import session_env
 @pytest.mark.parametrize("key", ["plan_profile", "plan_mode.plan_profile"])
 @pytest.mark.parametrize("value,expected", [
     ("lean", "lean"), ("classic", "classic"), (" LEAN ", "lean"),
-    ("unknown", "classic"), ("", "classic"), (None, "classic"),
+    ("unknown", "lean"), ("", "lean"), (None, "lean"),
 ])
 def test_profile_parsing(make_plugin, key, value, expected):
     plugin = make_plugin(**{key: value})
     assert plugin._plan_profile() == expected
 
 
-@pytest.mark.parametrize("flat,expected", [("classic", "classic"), ("", "classic"), (None, "lean")])
+@pytest.mark.parametrize("flat,expected", [("classic", "classic"), ("", "lean"), (None, "lean")])
 def test_profile_flat_precedence_matches_style(make_plugin, flat, expected):
     plugin = make_plugin(**{"plan_profile": flat, "plan_mode.plan_profile": "lean",
                             "plan_style": flat, "plan_mode.plan_style": "core"})
@@ -31,19 +31,23 @@ def test_profile_fallback_uses_constant(make_plugin, monkeypatch, value):
     assert make_plugin(plan_profile=value)._plan_profile() == "lean"
 
 
-def test_profile_constants_and_selection(make_plugin, monkeypatch):
-    assert pm.PROFILE_DEFAULT == "classic"
-    assert pm.LEAN_LEVERS == frozenset()
-    sample = frozenset({"codex_compact", "todo_batch"})
-    monkeypatch.setattr(pm, "LEAN_LEVERS", sample)
-    lean = make_plugin(plan_profile="lean")
-    assert lean._levers() == sample
+def test_profile_constants_and_selection(make_plugin):
+    assert pm.PROFILE_DEFAULT == "lean"
+    assert pm.LEAN_LEVERS == frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky",
+                                       "reentry", "approved_text", "light_notes", "question_shape"})
+    lean = make_plugin()
+    lean.ctx.settings.clear()  # genuinely untouched config, including the override key
+    assert lean._plan_profile() == "lean" and lean._plan_style() == "compact"
+    assert lean._plan_skill() == "" and lean._levers() == pm.LEAN_LEVERS
     lean._levers().clear()  # the selector returns a mutable copy, never the shared profile
-    assert pm.LEAN_LEVERS == sample
+    assert len(pm.LEAN_LEVERS) == 8
     assert make_plugin(plan_profile="classic")._levers() == set()
 
 
 @pytest.mark.parametrize("profile", ["classic", "lean"])
+@pytest.mark.parametrize("style", ["core", "compact"])
+@pytest.mark.parametrize("skill", ["", "project-plan"])
+@pytest.mark.parametrize("blocked", [False, True])
 @pytest.mark.parametrize("configured,env,expected", [
     ("sticky", "reentry", {"sticky"}),
     ("", "reentry", {"reentry"}),
@@ -56,15 +60,15 @@ def test_profile_constants_and_selection(make_plugin, monkeypatch):
     ("", " \t ", None),
     (["sticky"], "all", set()),
 ])
-def test_profile_override_precedence(make_plugin, monkeypatch, profile, configured, env, expected):
-    sample = frozenset({"codex_compact", "todo_batch"})
-    monkeypatch.setattr(pm, "LEAN_LEVERS", sample)
+def test_profile_override_precedence(make_plugin, monkeypatch, profile, style, skill, blocked, configured, env, expected):
+    monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: "blocked" if blocked else None)
     monkeypatch.setenv("PLAN_MODE_LEVERS", env)
-    plugin = make_plugin(configured, plan_profile=profile)
+    plugin = make_plugin(configured, plan_profile=profile, plan_style=style, plan_skill=skill)
     if expected is None:
-        expected = sample if profile == "lean" else set()
+        expected = pm.LEAN_LEVERS if profile == "lean" and style == "compact" and (not skill or blocked) else set()
     assert plugin._levers() == expected
-    plugin.ctx.settings = {"plan_mode.levers": "sticky", "plan_profile": profile}
+    plugin.ctx.settings = {"plan_mode.levers": "sticky", "plan_profile": profile,
+                           "plan_style": style, "plan_skill": skill}
     assert plugin._levers() == {"sticky"}
 
 
@@ -72,27 +76,54 @@ def test_profile_override_precedence(make_plugin, monkeypatch, profile, configur
 @pytest.mark.parametrize("commits", [False, True])
 @pytest.mark.parametrize("skill", ["", "project-plan"])
 def test_lean_model_text_equals_explicit_levers(make_plugin, monkeypatch, style, commits, skill):
-    sample = frozenset({"codex_compact", "todo_batch"})
-    monkeypatch.setattr(pm, "LEAN_LEVERS", sample)
+    monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: None)
     monkeypatch.setattr(render, "plan_file_stamp", lambda now=None: "2026-10-11_123456")
+    selected = pm.LEAN_LEVERS if style == "compact" and not skill else set()
     strings = []
     for settings in ({"plan_profile": "lean"},
-                     {"plan_profile": "classic", "levers": "codex_compact,todo_batch"}):
+                     {"plan_profile": "classic", "levers": ",".join(sorted(selected))}):
         plugin = make_plugin(plan_style=style, allow_commits=commits, plan_skill=skill, **settings)
-        assert plugin._levers() == sample
-        path = write_plan(plugin)
+        assert plugin._levers() == selected
+        plugin.command("on parser")
         note = plugin.pre_llm_call()["context"]
+        path = write_plan(plugin)
         result = approve_gate(plugin, path)
         pointer = plugin.pre_llm_call()["context"]
         strings.append((note, result["message"], pointer, plugin._execute_hint()))
-        assert "same response" in result["message"]
-        assert "batch status updates with the next real tool call" in pointer
+        assert ("same response" in result["message"]) == bool(selected)
+        assert ("batch status updates with the next real tool call" in pointer) == bool(selected)
         if style == "compact" and not skill:
             assert "every consumer" in note
     assert strings[0] == strings[1]
 
 
+@pytest.mark.parametrize("style,skill,blocked,expected", [
+    ("core", "", False, set()), ("compact", "project-plan", False, set()),
+    ("compact", "project-plan", True, pm.LEAN_LEVERS),
+])
+def test_profile_default_style_and_effective_skill(make_plugin, monkeypatch, style, skill, blocked, expected):
+    import json
+    from pathlib import Path
+    monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: "inline shell enabled" if blocked else None)
+    plugin = make_plugin(plan_style=style, plan_skill=skill)
+    assert plugin._plan_profile() == "lean"
+    assert plugin._plan_skill() == (skill if not blocked else "")
+    assert plugin._levers() == expected
+    if style == "core":
+        golden = json.loads((Path(__file__).parent / "fixtures/default_off_035.json").read_text())
+        monkeypatch.setattr(render, "plan_file_stamp", lambda now=None: "2026-10-11_123456")
+        state = {"plans_dir": "/workspace/.hermes/plans"}
+        for commits in (False, True):
+            plugin.ctx.settings["allow_commits"] = commits
+            assert plugin._planning_note(state) == golden["notes"][f"core:{commits}:"]
+    elif blocked:
+        plugin.command("on")
+        assert "skill_view" not in plugin.pre_llm_call()["context"]
+        assert plugin.pre_tool_call("skill_view", {"name": skill})["action"] == "block"
+
+
 @pytest.mark.parametrize("profile,configured,env,label", [
+    (None, "", "", "lean"),
     ("classic", "", "", "classic"), ("lean", "", "", "lean"),
     ("lean", "sticky", "", "lean (custom levers)"),
     ("classic", "", "all", "classic (custom levers)"),
@@ -101,7 +132,7 @@ def test_lean_model_text_equals_explicit_levers(make_plugin, monkeypatch, style,
 ])
 def test_profile_status_adds_only_one_line(make_plugin, monkeypatch, profile, configured, env, label):
     monkeypatch.setenv("PLAN_MODE_LEVERS", env)
-    plugin = make_plugin(configured, plan_profile=profile)
+    plugin = make_plugin(configured, **({"plan_profile": profile} if profile is not None else {}))
     response = plugin.command("status")
     line = f"Plan profile: {label}"
     assert response.splitlines().count(line) == 1
@@ -126,7 +157,7 @@ def test_profile_manifest_select_and_validation(tmp_path, monkeypatch):
     field = next(field for field in fields if field["key"] == "plan_profile")
     assert field["type"] == "enum" and field["choices"] == ["lean", "classic"]
     assert field["label"] == "Plan profile"
-    assert field["value"] == field["default"] == pm.PROFILE_DEFAULT == "classic"
+    assert field["value"] == field["default"] == pm.PROFILE_DEFAULT == "lean"
     schema = plugins_settings._manifest_config_schema(root)
     assert "levers" not in schema
     for value in ("classic", "lean"):

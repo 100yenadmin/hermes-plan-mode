@@ -41,9 +41,9 @@ config_schema:
   plan_profile:
     type: str
     choices: ["lean", "classic"]
-    default: "classic"
+    default: "lean"
     label: Plan profile
-    description: "Select a validated lever set by name. classic uses no levers; lean is reserved for the benchmark-selected set."
+    description: "lean (default) makes compact plans faster and leaner: shorter planning notes, fewer bookkeeping calls, a Codex-style plan format and bounded clarifying questions. It applies with Plan style compact and no Plan skill. classic keeps the 0.3.5 behaviour."
   allow_commits:
     type: bool
     default: false

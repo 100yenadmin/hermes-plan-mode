@@ -13,6 +13,8 @@ from types import ModuleType
 
 import pytest
 
+from test_plan_mode import plan_profile
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -900,7 +902,7 @@ def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatc
 
 
 @pytest.fixture
-def real_submit_host(tmp_path, monkeypatch):
+def real_submit_host(tmp_path, monkeypatch, plan_profile):
     pytest.importorskip("hermes_cli.plugins")
     approval = pytest.importorskip("tools.approval")
     if not callable(getattr(approval, "request_tool_approval", None)):
@@ -917,7 +919,9 @@ def real_submit_host(tmp_path, monkeypatch):
     bundled.mkdir()
     _copy_plugin(home / "plugins" / "plan-mode")
     (home / "config.yaml").write_text(
-        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\napprovals:\n  mode: manual\n",
+        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n"
+        f"  entries:\n    plan-mode:\n      settings:\n        plan_profile: {plan_profile}\n"
+        "approvals:\n  mode: manual\n",
         encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
@@ -1018,7 +1022,8 @@ def real_u2_host(tmp_path, monkeypatch):
     bundled.mkdir()
     _copy_plugin(home / "plugins" / "plan-mode")
     (home / "config.yaml").write_text(
-        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n", encoding="utf-8")
+        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n"
+        "  entries:\n    plan-mode:\n      settings:\n        plan_profile: classic\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
     monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
@@ -1224,6 +1229,7 @@ def test_approved_text_real_clarify_result(real_clarify_host, monkeypatch):
 
 
 @pytest.mark.parametrize("settings,expected", [
+    ({}, "lean"),
     ({"plan_profile": "classic"}, "classic"),
     ({"plan_profile": "lean"}, "lean"),
     ({"plan_mode": {"plan_profile": "lean"}}, "lean"),
