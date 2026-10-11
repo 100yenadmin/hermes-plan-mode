@@ -35,7 +35,8 @@
     loaded in 12 of 12), so the override's effect could not be measured;
   - with approvals off and "do not ask questions" in the task, the approval question came unprompted in the first
     turn in 7 of 8 runs without `approval_ask` and 6 of 8 with it; in the other runs it came after one nudge;
-  - the 0.4.0 default committed in 1 of 24 runs of the plan_once comparison, after a TDD skill loaded on its own.
+  - in the eight-task comparison the 0.4.0 default (the control) committed in 1 of 24 runs, after a TDD skill loaded
+    on its own.
 
   Neither joins a profile; #18 and #19 stay open.
 - **README.** The no-commit rule is described as an instruction; the comparison table says Codex continues in a new
