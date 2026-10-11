@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- CI now tests Hermes 0.21.6 and a current `main` (both on Python 3.14) and the 0.21.2 floor (`v2026.9.11`); the old
+  `main` pin is dropped. 0.3.5 passes unchanged on 0.21.6 and `main`.
+- Docs: compatibility is stated in Hermes versions (0.21.2 for the classic CLI, 0.21.5 for gateway, TUI and Desktop),
+  and 0.21.6 is recommended because enabling a tool plugin from Desktop, the TUI or the dashboard on 0.21.5 can
+  replace the CLI tool set.
+
 ## 0.3.5 - 2026-10-07
 
 - New setting **Plan style** (`plan_style`). `compact` is the default: it asks for a short, decision-complete plan
