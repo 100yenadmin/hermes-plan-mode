@@ -377,6 +377,7 @@ def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
         # pre_llm_call has no provider kwarg; unknown providers fail conservatively.
         needs_commentary = codex or not provider or provider == "openai-codex"
         interim = bool(is_truthy_value(display.get("interim_assistant_messages", True)))
+        # Hermes reads this flag with bool() for the agent and is_truthy_value() for history; require both.
         commentary = (bool(display.get("show_commentary", True))
                       and bool(is_truthy_value(display.get("show_commentary", True))))
         # Hermes retains its agent's display flags across turns. Never treat a

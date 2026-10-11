@@ -333,4 +333,7 @@ def test_approval_ask_lever(make_plugin, monkeypatch, levers, asks):
     result = plugin._complete_submission("raw", "storage", state)
     assert result["clarify"]["choices"] == ["Approve plan rev 3", "Keep planning"]
     assert (pm._APPROVAL_ASK in result["message"]) is asks
-    assert "not multi-select). If the user picks" in result["message"] or asks
+    if asks:
+        assert "not multi-select). " + pm._APPROVAL_ASK + "If the user picks" in result["message"]
+    else:
+        assert "not multi-select). If the user picks" in result["message"]
