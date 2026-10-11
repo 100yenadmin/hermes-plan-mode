@@ -108,8 +108,8 @@ file it approves that file, as in v0.2. On the messaging gateway, plugin command
 typed approval the plugin asks Hermes to start the work at once:
 
 - CLI: works.
-- Gateway and TUI/Desktop on Hermes main: only with `allow_gateway_injection: true` (see Configuration).
-- TUI/Desktop on v2026.9.24: not available.
+- Gateway and TUI/Desktop on Hermes 0.21.6 or newer: only with `allow_gateway_injection: true` (see Configuration).
+- TUI/Desktop on 0.21.5 (`v2026.9.24`): not available.
 
 When you type it while the approval prompt is still open, approving that prompt continues the waiting turn with the implementation. Denying the prompt or letting it time out does not cancel your typed approval: the work then starts in the next turn (queued where injection is available, otherwise with your next message). `/planmode done` before then cancels it.
 
@@ -228,11 +228,11 @@ plugins:
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
 - `plan_budget` asks for compact plans of under about 1,200 characters for small changes. In its pre-registered round
   it halved plan length and finished 24% faster, but one judge scored plan clarity lower.
-- `plan_once` is for TUI, Desktop and `hermes serve` on Hermes v2026.9.24 or later, with interim messages on (and, for
-  Codex models, commentary shown). The agent writes the plan once, as its reply, and the plugin saves that text as the
-  plan file. It was 19% faster, but it did not hold the plan-quality bar. Hermes reads `display.show_commentary` when
-  it builds the agent, so after changing that setting start a new session before relying on `plan_once`. The approval
-  card shows the saved plan up to 3,500 characters.
+- `plan_once` is for TUI, Desktop and `hermes serve` on Hermes 0.21.5 (v2026.9.24) or later, with interim messages on
+  (and, for Codex models, commentary shown). The agent writes the plan once, as its reply, and the plugin saves that
+  text as the plan file. It was 19% faster, but it did not hold the plan-quality bar. Hermes reads
+  `display.show_commentary` when it builds the agent, so after changing that setting start a new session before
+  relying on `plan_once`. The approval card shows the saved plan up to 3,500 characters.
 
 ### Compact plans
 
@@ -359,15 +359,17 @@ plugins:
 
 ## Compatibility
 
-- **Classic CLI:** enforced on released Hermes ≤ 0.21.4 (`v2026.9.21`) and newer. The plugin requires Hermes
-  ≥ 0.21.2.
-- **Messaging gateway, TUI and Desktop:** Hermes `v2026.9.24` (0.21.5) or newer. Earlier builds refuse
+- **Classic CLI:** enforced on Hermes 0.21.3 (`v2026.9.14`) and newer; the plugin requires 0.21.3.
+- **Messaging gateway, TUI and Desktop:** Hermes 0.21.5 (`v2026.9.24`) or newer. Earlier builds refuse
   `/planmode on` on these surfaces instead of pretending plan mode is active.
+- **0.21.6 recommended.** On 0.21.5, turning a tool-providing plugin on from Desktop, the TUI or the dashboard can
+  replace the CLI tool set with that plugin's tools when no tool list was saved (fixed in 0.21.6). On 0.21.5, enable
+  plan-mode with `hermes plugins enable plan-mode` or in `config.yaml` instead.
 - **v0.3.0 features** use only the Hermes capability they need. Where the approval directive or the approval hooks
   are missing, submit asks through `clarify`, with typed `/planmode approve` as the fallback if clarify is unavailable. The system-prompt hint is skipped where the host
   has no prompt-section API, and typed approval skips `inject_message` where the host has none.
-- Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11) and a pinned `main` (Python
-  3.14, the version for which `main` declares its runtime dependencies).
+- Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11), `v0.21.6` and a
+  pinned `main` (Python 3.14, the version for which 0.21.6 and `main` declare their runtime dependencies).
 
 ## How to test
 

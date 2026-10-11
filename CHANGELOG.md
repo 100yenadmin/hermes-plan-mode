@@ -40,8 +40,8 @@
 - **Experimental, not part of any profile:** `plan_once` writes the plan only once on TUI, Desktop and `hermes serve`. The
   agent writes the plan as its reply, and the plugin saves exactly that visible text as the plan file. It was 19%
   faster in a pre-registered round, but it did not hold the plan-quality bar, so it stays opt-in until a revised
-  version passes. It needs Hermes v2026.9.24 or later; on older Hermes it stays off and the plan file is written as
-  usual.
+  version passes. It needs Hermes 0.21.5 (v2026.9.24) or later; on older Hermes it stays off and the plan file is
+  written as usual.
 - `plugin.yaml` declares every hook the plugin can register, including the conditional `post_llm_call`,
   `transform_tool_result` and `post_api_request`, so `hermes plugins validate` passes with the lean default.
 - The classic CLI approval prompt no longer claims the plan is shown above. It now says the plan is in the reply
@@ -58,6 +58,13 @@
   - A `# comment` inside a fenced code block is no longer mistaken for a heading.
   - Plans without headings keep the file name as their title.
 - `/planmode status` shows the Plan profile.
+- CI now tests Hermes 0.21.6 and a current `main` (both on Python 3.14); the old `main` pin is dropped.
+- The minimum Hermes is now 0.21.3 (`requires_hermes: ">=0.21.3"`), the oldest version CI tests. 0.21.2 was never
+  tested, and its approval gate still prompts the user when `approvals.mode` is `off`, which the approvals-off path's
+  tests do not expect.
+- Docs: compatibility is stated in Hermes versions (0.21.3 for the classic CLI, 0.21.5 for gateway, TUI and Desktop),
+  and 0.21.6 is recommended because enabling a tool plugin from Desktop, the TUI or the dashboard on 0.21.5 can
+  replace the CLI tool set.
 
 ## 0.3.5 - 2026-10-07
 

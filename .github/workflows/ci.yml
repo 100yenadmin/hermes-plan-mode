@@ -27,19 +27,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # v2026.9.14 (0.21.3) is the requires_hermes floor.
           - name: v2026.9.14
             ref: v2026.9.14
             python: "3.11"
           - name: v2026.9.21
             ref: v2026.9.21
             python: "3.11"
+          # v2026.9.24 (0.21.5) is the floor for gateway, TUI and Desktop enforcement.
           - name: v2026.9.24
             ref: v2026.9.24
             python: "3.11"
-          # Hermes main declares its runtime dependencies for Python >= 3.14 only (older
-          # interpreters get them from Hermes' lazy installer), so main is tested on 3.14.
-          - name: main-7157422022
-            ref: 7157422022ff06f3e632d1dd394ee1253b17ad37
+          # From 0.21.6, Hermes declares its runtime dependencies for Python >= 3.14 only (older
+          # interpreters get them from Hermes' lazy installer), so 0.21.6 and main are tested on 3.14.
+          - name: v0.21.6
+            ref: v0.21.6
+            python: "3.14"
+          - name: main-d4d2ab7b5d
+            ref: d4d2ab7b5d104166e7e22a02cafd12f1fe456a31
             python: "3.14"
     env:
       HERMES_DISABLE_LAZY_INSTALLS: "1"
