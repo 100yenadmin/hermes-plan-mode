@@ -22,6 +22,7 @@ COMPACT_PLAN = (
 NO_COMMITS = (
     "Do not commit, and do not plan commit steps, unless the user asked for commits; leave the changes for the user to review."
 )
+COMMIT_OVERRIDE = "This overrides any commit step in a loaded skill, such as a TDD skill's."
 CODEX_COMPACT_PLAN = (
     "Summary; Key changes, grouped by behaviour or subsystem, naming every touched file and every consumer of a "
     "changed interface; Test plan (exact commands); Assumptions. Concise by default; a straightforward change fits "
@@ -49,6 +50,10 @@ LOCAL_PLATFORMS = frozenset({
 })
 
 
+def no_commits(levers=frozenset()) -> str:
+    return f"{NO_COMMITS} {COMMIT_OVERRIDE}" if "commit_override" in levers else NO_COMMITS
+
+
 def plan_file_stamp(now=None) -> str:
     """Local timestamp for plan file names; the model cannot read the clock while terminal is blocked."""
     return (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
@@ -71,7 +76,7 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
     else:
         write = f"2. Write the plan as Markdown to {target}, with numbered steps."
     if not commits:
-        write += f" {NO_COMMITS}"
+        write += f" {no_commits(levers)}"
     note = (
         f"Plan mode is ON: only read-only tools work, and files may be written only under {plans_dir}.\n"
         "1. Explore with read-only tools first and settle every fact the files can answer yourself. Then, before writing the plan, "
@@ -124,7 +129,7 @@ def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
     result = (
         f"Executing the approved plan {state.get('approved_path')}{rev}. "
         "Keep todo_list statuses current; re-read the plan if your context was compacted."
-    ) + ("" if commits else f" {NO_COMMITS}")
+    ) + ("" if commits else f" {no_commits(levers)}")
     if "todo_batch" in levers:
         result = result.replace("Keep todo_list statuses current;", "If using todo_list, batch status updates with the next real tool call;")
     if "lean_craft" in levers:

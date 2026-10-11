@@ -16,6 +16,7 @@ from test_plan_mode import FakeContext, session_env
 LEVER_NAMES = {
     "plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
+    "commit_override", "approval_ask",
 }
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
 IDS = dict(session_id="s", turn_id="t", api_request_id="r", tool_call_id="submit")
@@ -301,3 +302,35 @@ def test_light_notes(make_plugin):
     plugin.command("reject revise")
     assert "1. Explore" in plugin.pre_llm_call()["context"]
     assert len(plugin.pre_llm_call()["context"]) <= 400
+
+
+def test_commit_override_lever(make_plugin, tmp_path):
+    rule = f"{render.NO_COMMITS} {render.COMMIT_OVERRIDE}"
+    pointer_state = {"approved_path": "/plans/fixed.md", "approved_revision": 1}
+    assert render.no_commits() == render.NO_COMMITS and render.no_commits({"commit_override"}) == rule
+    plugin = make_plugin("commit_override")
+    path = write_plan(plugin)
+    assert rule in plugin.pre_llm_call()["context"]
+    result = approve_gate(plugin, path)
+    assert result["approved"] and rule in result["message"]
+    assert rule in render.executing_pointer(pointer_state, commits=False, levers={"commit_override"})
+    # Without the lever (classic, and the 0.4.0 lean set) the 0.3.5 wording stays byte-identical.
+    for levers in (set(), set(pm.LEAN_LEVERS)):
+        assert render.COMMIT_OVERRIDE not in render.executing_pointer(pointer_state, commits=False, levers=levers)
+    assert render.COMMIT_OVERRIDE not in render.executing_pointer(pointer_state, commits=True, levers={"commit_override"})
+    allowed = make_plugin("commit_override", allow_commits=True)
+    assert allowed._commit_rule() == ""
+
+
+@pytest.mark.parametrize("levers,asks", [("approval_ask", True), ("", False), ("lean_craft,sticky", False)])
+def test_approval_ask_lever(make_plugin, monkeypatch, levers, asks):
+    plugin = make_plugin(levers, plan_profile="classic")
+    plugin._save_command_state = lambda *args: None
+    monkeypatch.setattr(pm, "plan_digest", lambda path: ("digest", "# Fixed plan"))
+    state = {"active": True, "activation_id": "fixed", "submission": {
+        "path": "/plans/fixed.md", "revision": 3, "rule_key": "plan-mode:fixed", "digest": "digest",
+        "tool_call_id": "submit", "status": "pending"}}
+    result = plugin._complete_submission("raw", "storage", state)
+    assert result["clarify"]["choices"] == ["Approve plan rev 3", "Keep planning"]
+    assert (pm._APPROVAL_ASK in result["message"]) is asks
+    assert "not multi-select). If the user picks" in result["message"] or asks

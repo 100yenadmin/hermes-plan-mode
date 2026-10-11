@@ -27,8 +27,8 @@ from .approval import (
     is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
 from .render import (
-    AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, NO_COMMITS, executing_pointer,
-    plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
+    AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, executing_pointer,
+    no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
 READ_ONLY_TOOLS = frozenset(
@@ -98,7 +98,10 @@ _BATCH_TODO_HINT = (
     "as the next real tool call, never in a response by itself; batch independent read-only checks."
 )
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
-                     "sticky", "reentry", "approved_text", "light_notes", "plan_budget"})
+                     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
+                     "commit_override", "approval_ask"})
+_APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
+                 "the approval, not a clarifying question. ")
 # The lever set the pre-registered benchmark rounds validated (rounds 3 and 5; see CHANGELOG 0.4.0). Measured only with
 # plan_style compact and no plan skill, so it applies only there; classic, core and plan_skill keep 0.3.5 behaviour.
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
@@ -891,6 +894,7 @@ class PlanModePlugin:
                     "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: "
                     f"question={question} and choices={[approve, keep]} "
                     "(these exact strings, this order, not multi-select). "
+                    + (_APPROVAL_ASK if "approval_ask" in self._levers() else "") +
                     f"If the user picks {approve}, plan mode turns off automatically; implement the plan in this turn: {self._execute_hint()} "
                     f"If they pick {keep} or answer otherwise, ask what to change and revise. "
                     "If clarify is unavailable, ask the user to run /planmode approve."
@@ -1429,7 +1433,7 @@ class PlanModePlugin:
         return _DEFAULT_ALLOW_COMMITS
 
     def _commit_rule(self) -> str:
-        return "" if self._allow_commits() else f" {NO_COMMITS}"
+        return "" if self._allow_commits() else f" {no_commits(self._levers())}"
 
     def _execute_hint(self) -> str:
         levers = self._note_levers()
