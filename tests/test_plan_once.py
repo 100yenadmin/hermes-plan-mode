@@ -14,7 +14,16 @@ from test_plan_mode import FakeContext, plan_profile, session_env
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
 
 
-def message(text=TEXT, *, codex=True, ids=("submit",)):
+SAVED_NOTE = ("The plan was saved for you from your reply; saving it is done. Your task now is to "
+              "implement it in this turn.")
+SIGN_OFF = "I'm Hermes, built by Nous Research. `/help` shows available commands."
+
+
+def reply(text):
+    return f"<proposed_plan>\n{text}\n</proposed_plan>"
+
+
+def message(text=reply(TEXT), *, codex=True, ids=("submit",)):
     items = [{"type": "message", "role": "assistant", "phase": phase,
               "content": [{"type": "output_text", "text": value}]}
              for phase, value in [("analysis", "PRIVATE REASONING"), ("commentary", text)]]
@@ -47,9 +56,9 @@ def once(session_env, tmp_path, monkeypatch, plan_profile):
     return plugin, config
 
 
-def capture(plugin, text=TEXT, *, codex=True, ids=("submit",)):
+def capture(plugin, text=TEXT, *, codex=True, ids=("submit",), raw=False):
     plugin.ctx.hooks["post_api_request"](
-        assistant_message=message(text, codex=codex, ids=ids),
+        assistant_message=message(text if raw else reply(text), codex=codex, ids=ids),
         provider="openai-codex" if codex else "anthropic", session_id="s")
 
 
@@ -67,7 +76,7 @@ def test_once_eligibility_matrix(once, session_env, surface, ui, interim, commen
     session_env.update(HERMES_SESSION_PLATFORM=surface, HERMES_UI_SESSION_ID="ui-1" if ui else "")
     config["display"].update(interim_assistant_messages=interim, show_commentary=commentary)
     note = plugin.pre_llm_call()["context"]
-    assert ("Write the complete plan as your reply text" in note) == (ui and interim and commentary)
+    assert ("Write the complete plan in your reply, in Markdown, between a line <proposed_plan>" in note) == (ui and interim and commentary)
     if ui and interim and commentary:
         assert 'plan_mode(action="submit") with no path' in note
         assert "do not write the plan file yourself" in note
@@ -82,7 +91,7 @@ def test_once_requires_gateway_signal(once, monkeypatch, signal):
         monkeypatch.delitem(sys.modules, "tui_gateway.server")
     else:
         monkeypatch.setattr(pm, "_session_context_is_engaged", lambda: False)
-    assert "Write the complete plan as your reply text" not in plugin.pre_llm_call()["context"]
+    assert "Write the complete plan in your reply, in Markdown, between a line <proposed_plan>" not in plugin.pre_llm_call()["context"]
 
 
 def test_once_unreadable_config_falls_back(once, monkeypatch):
@@ -99,17 +108,21 @@ def test_once_unreadable_config_falls_back(once, monkeypatch):
 @pytest.mark.parametrize("codex", [True, False])
 def test_once_capture_writes_exact_visible_bytes_and_approves(once, codex):
     plugin, _ = once
-    capture(plugin, "<think>PRIVATE</think>\n" + TEXT, codex=codex)
+    capture(plugin, "<think>PRIVATE</think>\nPreamble\n" + reply("\n" + TEXT + "\n \n") + "\n" + SIGN_OFF, codex=codex, raw=True)
     gate = submit(plugin)
     assert gate["action"] == "approve"
     state = plugin._load_state("ui:ui-1")
     path = Path(state["submission"]["path"])
-    assert path.read_bytes() in (TEXT.encode(), (TEXT + "\n").encode())
+    assert path.read_bytes() == (TEXT + "\n").encode()
+    assert "parser-plan" in path.name
+    assert SIGN_OFF not in path.read_text() and "Preamble" not in path.read_text()
     assert str(path) in state["plan_files"]
     assert state["submission"]["digest"] == hashlib.sha256(path.read_bytes()).hexdigest()
     plugin.ctx.hooks["post_approval_response"](
         pattern_key="plugin_rule:" + gate["rule_key"], choice="once", tool_call_id="submit")
-    assert json.loads(plugin.tool({"action": "submit"}))["approved"] is True
+    result = json.loads(plugin.tool({"action": "submit"}))
+    assert result["approved"] is True
+    assert result["message"].startswith(SAVED_NOTE + " ")
 
 
 @pytest.mark.parametrize("text", [None, "short", "x" * (65536 + 1), "é" * 40000],
@@ -167,7 +180,7 @@ def test_once_plain_provider_does_not_require_commentary(once):
     plugin, config = once
     config["model"]["provider"] = "anthropic"
     config["display"]["show_commentary"] = False
-    assert "Write the complete plan as your reply text" in plugin.pre_llm_call()["context"]
+    assert "Write the complete plan in your reply, in Markdown, between a line <proposed_plan>" in plugin.pre_llm_call()["context"]
     capture(plugin, codex=False)
     assert submit(plugin)["action"] == "approve"
 
@@ -221,8 +234,126 @@ def test_once_prior_activation_capture_not_reused(once):
 def test_once_ineligible_without_commentary_helpers(once, monkeypatch):
     """Hermes before v2026.9.24 has no agent.history_commentary: keep the file-writing note."""
     plugin, _ = once
-    assert "Write the complete plan as your reply text" in plugin.pre_llm_call()["context"]
+    assert "Write the complete plan in your reply" in plugin.pre_llm_call()["context"]
     monkeypatch.setitem(sys.modules, "agent.history_commentary", None)
     note = plugin.pre_llm_call()["context"]
-    assert "Write the complete plan as your reply text" not in note
+    assert "Write the complete plan in your reply" not in note
     assert 'plan_mode(action="submit") with no path' not in note
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_once_ignores_fenced_tag_lines(once, fence):
+    plugin, _ = once
+    inner = TEXT + f"\n{fence}text\n<proposed_plan>\nexample\n</proposed_plan>\n{fence}"
+    capture(plugin, f"{fence}\n<proposed_plan>\nignored\n</proposed_plan>\n{fence}\n" + reply(inner), raw=True)
+    assert submit(plugin)["action"] == "approve"
+    path = Path(plugin._load_state("ui:ui-1")["submission"]["path"])
+    assert path.read_bytes() == (inner + "\n").encode()
+
+
+@pytest.mark.parametrize("text,reason", [
+    (TEXT, "no"),
+    (reply(TEXT) + "\n" + reply(TEXT), "more than one"),
+    ("<proposed_plan>\n" + TEXT, "unbalanced"),
+    ("</proposed_plan>\n" + TEXT + "\n<proposed_plan>", "order"),
+    (reply("\n \n"), "empty"),
+    (reply("short"), "80"),
+    (reply("x" * 65537), "64 KiB"),
+    (reply("é" * 40000), "64 KiB"),
+    ("Preamble\n    <proposed_plan>\n" + TEXT + "\n    </proposed_plan>\nSign-off", "no"),
+    ("prefix <proposed_plan>\n" + TEXT + "\n</proposed_plan>", "unbalanced"),
+], ids=["missing-tags", "two-pairs", "unbalanced", "reversed", "empty", "short",
+        "oversized", "oversized-utf8", "indented-code", "inline-tag"])
+def test_once_invalid_blocks_explain_fallback(once, text, reason):
+    plugin, _ = once
+    capture(plugin, text, raw=True)
+    result = submit(plugin)
+    assert result["action"] == "block"
+    assert reason in result["message"]
+    assert "wrap the plan in one <proposed_plan>" in result["message"]
+    assert "absolute" in result["message"] and "path" in result["message"]
+    assert not plugin._load_state("ui:ui-1")["plan_files"]
+
+
+@pytest.mark.parametrize("indent", ["", " ", "   "])
+def test_once_inner_cap_and_tag_indentation(once, indent):
+    plugin, _ = once
+    inner = "# Boundary plan\n" + "x" * (65536 - len("# Boundary plan\n"))
+    capture(plugin, "preamble" * 10000 + f"\n{indent}<proposed_plan>\n{inner}\n{indent}</proposed_plan>\n" + SIGN_OFF,
+            raw=True)
+    assert submit(plugin)["action"] == "approve"
+    path = Path(plugin._load_state("ui:ui-1")["submission"]["path"])
+    assert path.read_bytes() == (inner + "\n").encode()
+
+
+@pytest.mark.parametrize("route", ["gate", "clarify", "typed", "typed-open"])
+@pytest.mark.parametrize("plugin_saved", [True, False])
+def test_once_saved_approval_note_routes(once, session_env, route, plugin_saved):
+    plugin, _ = once
+    if plugin_saved:
+        capture(plugin)
+        gate = submit(plugin)
+    else:
+        plugin.pre_llm_call()
+        path = Path(plugin._load_state("ui:ui-1")["plans_dir"]) / "explicit.md"
+        assert plugin.pre_tool_call("write_file", {"path": str(path)}) is None
+        path.write_text(TEXT)
+        gate = submit(plugin, path=str(path))
+    assert gate["action"] == "approve"
+    state = plugin._load_state("ui:ui-1")
+    path = state["submission"]["path"]
+    if route == "gate":
+        plugin.ctx.hooks["post_approval_response"](
+            pattern_key="plugin_rule:" + gate["rule_key"], choice="once", tool_call_id="submit")
+        message = json.loads(plugin.tool({"action": "submit"}))["message"]
+        expected = f"The user approved plan rev 1 at {path}. Plan mode is off. Implement it now: {plugin._execute_hint()}"
+    elif route == "clarify":
+        clarify = json.loads(plugin.tool({"action": "submit"}))["clarify"]
+        args = {"questions": [clarify]}
+        assert plugin.pre_tool_call("clarify", args, tool_call_id="clarify") is None
+        payload = json.dumps({"question": clarify["question"], "user_response": clarify["choices"][0]})
+        plugin.post_tool_call("clarify", args, tool_call_id="clarify", status="ok", result=payload)
+        transformed = plugin.transform_tool_result("clarify", args, tool_call_id="clarify", result=payload)
+        message = json.loads(transformed)["plan_mode_approval"] if transformed else ""
+        expected = f"The user approved plan rev 1. Implement it now: {plugin._execute_hint()}"
+        if not plugin_saved:
+            expected = ""  # plan_once alone never transformed explicit-file clarify results
+    else:
+        if route == "typed":
+            plugin.tool({"action": "submit"})  # no open card, so the queued note is injected
+        session_env["HERMES_UI_SESSION_ID"] = ""  # command-only alias
+        plugin.command("approve")
+        alias = plugin._load_state("sk:unit-session")
+        assert alias["submission"].get("plugin_saved", False) is plugin_saved
+        session_env["HERMES_UI_SESSION_ID"] = "ui-1"
+        if route == "typed-open":
+            message = json.loads(plugin.tool({"action": "submit"}))["message"]
+            expected = (f"The user approved plan rev 1 at {path} with /planmode approve. "
+                        f"Plan mode is off. Implement it now: {plugin._execute_hint()}")
+        else:
+            message = plugin._load_state("ui:ui-1")["pending_note"]
+            expected = f"The user approved the plan at {path}. Implement it now." + plugin._commit_rule()
+    assert message == (SAVED_NOTE + " " if plugin_saved else "") + expected
+
+
+def test_once_planning_note_delimiters(once):
+    plugin, _ = once
+    note = plugin.pre_llm_call()["context"]
+    assert "<proposed_plan>" in note and "</proposed_plan>" in note
+    assert "between a line <proposed_plan> and a line </proposed_plan>" in note and "outside" in note
+    assert "saves only the text between the tags" in note
+
+
+def test_po2_note_puts_tags_in_step_two_with_blank_lines(once):
+    plugin, _ = once
+    note = plugin.pre_llm_call()["context"]
+    step2 = note[note.index("2. "):note.index("\n3. ")]
+    assert "between a line <proposed_plan> and a line </proposed_plan>" in step2
+    assert "blank line after the opening tag and before the closing tag" in step2
+    assert "outside the tags" in step2
+    assert "saves only the text between the tags" in note[note.index("\n3. "):]
+
+
+def test_po2_tag_lines_tolerate_trailing_spaces():
+    text, error = pm.PlanModePlugin._reply_plan("Intro\n<proposed_plan>  \n\n" + "x" * 90 + "\n\n</proposed_plan>\t\nBye")
+    assert error == "" and text == "x" * 90 + "\n"

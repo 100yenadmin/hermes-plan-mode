@@ -1192,7 +1192,8 @@ def test_plan_once_real_capture_dispatch(real_submit_host, monkeypatch, tmp_path
     text = "# Captured plan\n\nChange parser.py and cli.py. Add a behaviour test. Run pytest tests/test_parser.py."
     response = SimpleNamespace(content="", codex_message_items=[{
         "type": "message", "role": "assistant", "phase": "commentary",
-        "content": [{"type": "output_text", "text": text}]}],
+        "content": [{"type": "output_text", "text": "Preamble\n<proposed_plan>\n" + text +
+                     "\n</proposed_plan>\nI'm Hermes, built by Nous Research. `/help` shows available commands."}]}],
         tool_calls=[SimpleNamespace(id="response-item", call_id="submit-1")])
     try:
         assert host.plugins.has_hook("post_api_request")
@@ -1204,7 +1205,7 @@ def test_plan_once_real_capture_dispatch(real_submit_host, monkeypatch, tmp_path
         plugin = host.command.__self__
         state = plugin._load_state("ui:ui-proof")
         path = Path(state["submission"]["path"])
-        assert path.read_bytes() in (text.encode(), (text + "\n").encode())
+        assert path.read_bytes() == (text + "\n").encode()
         assert str(path) in state["plan_files"]
         # Complete the prepared directive through real human-decision hook dispatch.
         host.plugins.invoke_hook("post_approval_response", pattern_key="plugin_rule:" + state["submission"]["rule_key"],
