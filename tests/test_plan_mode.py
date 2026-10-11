@@ -2113,7 +2113,7 @@ def test_u1_cli_approval_text_is_one_line(tmp_path):
     text = "# Add divide\n\n## Goal\nDo it.\n\n1. Tests\n2. Code\n"
     result = approval_text(text, str(tmp_path / "p.md"), 2, "cli")
     assert "\n" not in result and len(result) < 300
-    assert result.startswith("Plan rev 2 (p.md): Add divide.") and "shown above" in result
+    assert result.startswith("Plan rev 2 (p.md): Add divide.") and "deny and run /planmode show" in result
 
 
 def test_u1_classic_cli_submit_uses_one_line_prompt(plugin, session_env, tmp_path):

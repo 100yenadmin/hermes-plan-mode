@@ -24,7 +24,7 @@ import uuid
 
 from .approval import (
     DecisionLedger, approval_text, clarify_answer, gate_bypassed,
-    is_human_approval, make_rule_key, plan_digest,
+    is_human_approval, make_rule_key, plan_digest, _title,
 )
 from .render import (
     AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, NO_COMMITS, executing_pointer,
@@ -880,7 +880,7 @@ class PlanModePlugin:
                     "tool_call_id": "", "activation_id": state.get("activation_id"),
                 }
                 message = (
-                    "Hermes approved this call automatically on this host (yolo or approvals.mode: off), "
+                    "Hermes approved this call automatically on this host (yolo, approvals.mode: off, or an unattended surface such as the API server or a webhook), "
                     f"so no human has approved plan rev {revision} yet. Plan mode stays on. "
                     "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: "
                     f"question={question} and choices={[approve, keep]} "
@@ -892,7 +892,7 @@ class PlanModePlugin:
                 self._save_command_state(raw_key, storage_key, state)
                 return {"message": message, "clarify": {"question": question, "choices": [approve, keep]}}
             message = (f"No human approval was recorded for plan rev {revision}: this host approved the call "
-                       "automatically (yolo or approvals.mode: off) or does not route plugin approvals. "
+                       "automatically (yolo, approvals.mode: off, or an unattended surface such as the API server or a webhook) or does not route plugin approvals. "
                        "Plan mode stays on. Show the plan and ask the user to run /planmode approve "
                        "(or /planmode reject <feedback>).")
         self._save_command_state(raw_key, storage_key, state)
@@ -1313,8 +1313,7 @@ class PlanModePlugin:
         submission = state.get("submission") or {}
         if submission.get("status") == "pending" and self._ledger.is_inflight(submission.get("rule_key")):
             return _block_message(PLAN_MODE_TOOL, "A plan approval prompt is already open; wait for the user's answer.")
-        heading = re.search(r"^#{1,6}\s+(.+)$", text, re.MULTILINE)
-        slug = re.sub(r"[^a-z0-9]+", "-", heading[1].lower()).strip("-")[:60] if heading else ""
+        slug = re.sub(r"[^a-z0-9]+", "-", _title(text, "", "").lower()).strip("-")[:60]
         slug = slug or hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
         path = os.path.join(plans_dir, f"{plan_file_stamp()}-{slug}-{secrets.token_hex(6)}.md")
         temporary = os.path.join(plans_dir, f".plan-once-{secrets.token_hex(12)}.tmp")
@@ -1469,7 +1468,7 @@ class PlanModePlugin:
             # text as one prompt line (the TUI prints it as the card's title), so a full plan would push the choices
             # off-screen; the turn note already put the full plan in the reply above.
             platform = "cli"
-        return {"action": "approve", "message": approval_text(text, path, revision, platform, args.get("summary") or ""), "rule_key": rule_key}
+        return {"action": "approve", "message": approval_text(text, path, revision, platform, args.get("summary") or ""), "rule_key": rule_key, "allow_permanent": False}
 
     def pre_tool_call(
         self, tool_name: str = "", args: Any = None, **kwargs: Any

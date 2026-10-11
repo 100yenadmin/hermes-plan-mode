@@ -20,7 +20,7 @@
     "AGENT_HINT": "For multi-step or risky changes you can enter enforced plan mode with the plan_mode tool (action \"on\"; find it with tool_search) and submit a plan for the user's approval before building."
   },
   "approvals": {
-    "cli": "Plan rev 3 (fixed.md): Fixed plan. The full plan is shown above; approve to start implementing, deny to keep planning.",
+    "cli": "Plan rev 3 (fixed.md): Fixed plan. Approve to start implementing, deny to keep planning (the plan is in the reply above; if it is not, deny and run /planmode show).",
     "telegram": "Plan rev 3: Fixed plan\n1. Change parser.py\n2. Run tests",
     "discord": "Plan rev 3: Fixed plan\n1. Change parser.py\n2. Run tests",
     "slack": "Plan rev 3: Fixed plan\n1. Change parser.py\n2. Run tests",
@@ -33,7 +33,7 @@
     "revision": 3
   },
   "bypass": {
-    "message": "Hermes approved this call automatically on this host (yolo or approvals.mode: off), so no human has approved plan rev 3 yet. Plan mode stays on. Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: question=Approve plan rev 3 (fixed.md) and start implementing it? [plan-mode fixednonce] and choices=['Approve plan rev 3', 'Keep planning'] (these exact strings, this order, not multi-select). If the user picks Approve plan rev 3, plan mode turns off automatically; implement the plan in this turn: mirror the plan's steps into todo_list, called as todo_list(todos=[{\"id\": \"1\", \"content\": \"...\", \"status\": \"in_progress\"}, ...]), and update the statuses with merge=true as you work. Do not commit, and do not plan commit steps, unless the user asked for commits; leave the changes for the user to review. If they pick Keep planning or answer otherwise, ask what to change and revise. If clarify is unavailable, ask the user to run /planmode approve.",
+    "message": "Hermes approved this call automatically on this host (yolo, approvals.mode: off, or an unattended surface such as the API server or a webhook), so no human has approved plan rev 3 yet. Plan mode stays on. Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: question=Approve plan rev 3 (fixed.md) and start implementing it? [plan-mode fixednonce] and choices=['Approve plan rev 3', 'Keep planning'] (these exact strings, this order, not multi-select). If the user picks Approve plan rev 3, plan mode turns off automatically; implement the plan in this turn: mirror the plan's steps into todo_list, called as todo_list(todos=[{\"id\": \"1\", \"content\": \"...\", \"status\": \"in_progress\"}, ...]), and update the statuses with merge=true as you work. Do not commit, and do not plan commit steps, unless the user asked for commits; leave the changes for the user to review. If they pick Keep planning or answer otherwise, ask what to change and revise. If clarify is unavailable, ask the user to run /planmode approve.",
     "clarify": {
       "question": "Approve plan rev 3 (fixed.md) and start implementing it? [plan-mode fixednonce]",
       "choices": [
