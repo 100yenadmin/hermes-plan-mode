@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.1 - 2026-10-11
+
+- **Plan once, on by default on TUI, Desktop and `hermes serve`** (lean profile). The agent writes the plan once, in
+  its reply between a `<proposed_plan>` line and a `</proposed_plan>` line, and the plugin saves that text as the plan
+  file, instead of writing the file and then repeating the plan in the reply. The CLI and the chat platforms are
+  unchanged. Where the reply would not be shown (interim messages off, or commentary hidden for Codex models), the
+  agent writes the plan file as before.
+  - In its pre-registered round (round 8, blind adjudication, gpt-6.1-sol medium, Hermes v0.21.6, eight tasks, three
+    runs each) it finished 22% faster (wall time 0.78×, 95% CI 0.73–0.85; faster on 8 of 8 tasks) and used about 23%
+    fewer cost-weighted tokens (0.77×, CI upper bound 0.94). Test results were the same (24 of 24), with no approval
+    leaks and no commits. Both blind judges scored the plans the same (plan fit + clarity 9.58 vs 9.50 and 9.96 vs
+    9.92 of 10). The plan was saved from the reply in 23 of 24 runs; in the other run the agent wrote the file.
+  - Round 7 measured it on the 0.4.0 lever set with the same speed and quality result, apart from one commit after a
+    TDD skill that the control column also had (#18).
+  - Checked by eye in one TUI and one Desktop session: the reply shows the plan between the two tag lines, then
+    Hermes' approval card; approving starts the implementation in the same turn.
+  - To turn it off, set `levers` to the lean list without `plan_once` (see the README).
+- **plan_once v2.** It saves only the `<proposed_plan>` block from the reply, refuses zero, several or unbalanced blocks
+  with a reason the agent can act on, and after approval says the saving is done.
+- **plan_once checks visibility per session** (#16). The reply counts as visible only when both the display settings
+  at the session's first plan_once use and the current settings say so. Turning `show_commentary` on mid-session no
+  longer makes plan_once save text that Hermes still sends to the reasoning channel.
+- **Two measured levers, opt-in only:** `commit_override` adds "This overrides any commit step in a loaded skill" to
+  the no-commit rule (#18), and `approval_ask` tells the agent to ask the approval question even when the user said
+  not to ask questions (#19). Round 8 measured them together against the 0.4.0 default:
+  - wall time 0.95× (CI 0.87–1.03), but cost-weighted tokens 1.06× (CI 0.88–1.21), which missed the pre-declared
+    non-inferiority bar of 1.10;
+  - with "Use test-driven development." added to the task, both lever sets made 0 commits in 12 runs (the TDD skill
+    loaded in 12 of 12), so the override's effect could not be measured;
+  - with approvals off and "do not ask questions" in the task, the approval question came in 7 of 8 runs without
+    `approval_ask` and 6 of 8 with it.
+
+  Neither joins a profile; #18 and #19 stay open.
+- **README.** The no-commit rule is described as an instruction; the comparison table says Codex continues in a new
+  turn after one click; a note says which channels we have exercised end to end and which are supported through
+  Hermes' own approval and question UIs.
+- **Classic is unchanged:** `plan_profile: classic` still gives the 0.3.5 texts byte for byte.
+
 ## 0.4.0 - 2026-10-11
 
 - New setting **Plan profile** (`plan_profile`), `lean` by default. Lean makes compact plans faster and leaner. It
