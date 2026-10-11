@@ -322,6 +322,37 @@ def _plans_dir_is_still_safe(plans_dir: str) -> bool:
         return False
 
 
+def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
+    """Only a bound tui_gateway turn with readable, visible interim policy."""
+    server = sys.modules.get("tui_gateway.server")
+    reader = _session_reader()
+    if (server is None or reader is None or not _session_context_is_engaged()
+            or not reader("HERMES_UI_SESSION_ID", "")):
+        return False
+    try:
+        from hermes_cli.config import require_readable_config_before_write
+        from hermes_cli.config_effective import load_user_config_effective
+        from utils import is_truthy_value
+
+        path = server._active_config_path()
+        # This public guard only reads: unlike the behavioral loader it rejects
+        # unreadable/non-mapping YAML rather than recovering last-known-good policy.
+        require_readable_config_before_write(path)
+        config = load_user_config_effective(path, fail_closed=True)
+        display = config.get("display", {})
+        if not isinstance(display, dict):
+            return False
+        model = config.get("model")
+        provider = provider or (model.get("provider", "") if isinstance(model, dict) else "")
+        # pre_llm_call has no provider kwarg; unknown providers fail conservatively.
+        needs_commentary = codex or not provider or provider == "openai-codex"
+        return is_truthy_value(display.get("interim_assistant_messages", True)) and (
+            not needs_commentary or (bool(display.get("show_commentary", True))
+                                    and is_truthy_value(display.get("show_commentary", True))))
+    except Exception:
+        return False
+
+
 def _patch_targets(args: dict[str, Any]) -> list[str] | None:
     """Extract every replace/V4A patch target; ``None`` means not explicit/safe."""
     mode = str(args.get("mode") or "replace").strip().lower()
@@ -362,6 +393,7 @@ class PlanModePlugin:
         # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
+        self._reply_captures: dict[tuple[str, str], tuple[Any, str, bool, str]] = {}
         manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
         self._registration_profile = self._profile_name_for_home(manager_home)
 
@@ -399,6 +431,8 @@ class PlanModePlugin:
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
         self.ctx.register_hook("transform_llm_output", self.transform_llm_output)
+        if "plan_once" in self._levers():
+            self.ctx.register_hook("post_api_request", self.post_api_request)
         if "todo_batch" in self._levers():
             self.ctx.register_hook("post_llm_call", self.post_llm_call)
         if "approved_text" in self._levers() or "lean_craft" in self._note_levers():
@@ -1216,7 +1250,92 @@ class PlanModePlugin:
                 and os.path.isfile(previous)):
             previous = ""
         return planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
-                             commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform)
+                             commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform,
+                             reply_plan="plan_once" in self._levers() and _plan_once_visible())
+
+    def post_api_request(self, assistant_message: Any = None, **kwargs: Any) -> None:
+        """Capture only public reply text, paired with dispatch's effective call IDs."""
+        if "plan_once" not in self._levers():
+            return
+        try:
+            from agent.agent_runtime_helpers import strip_think_blocks
+            from agent.history_commentary import _commentary_items, visible_commentary
+            from agent.message_sanitization import coalesce_tool_call_id
+
+            def field(name):
+                return (assistant_message.get(name) if isinstance(assistant_message, dict)
+                        else getattr(assistant_message, name, None))
+
+            provider = str(kwargs.get("provider") or "")
+            codex = field("codex_message_items") is not None or provider == "openai-codex"
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if not identity.key or identity.unsupported or identity.non_cli_without_key:
+                return
+            with self._lock:
+                key, state = self._state_for_hook(identity)
+                if not key or not state.get("active"):
+                    return
+                # Clear reused IDs even when the new response is ineligible.
+                ids = [coalesce_tool_call_id(call) for call in field("tool_calls") or []]
+                for call_id in ids:
+                    self._reply_captures.pop((key, call_id), None)
+                if not _plan_once_visible(provider=provider, codex=codex):
+                    return
+                if codex:
+                    parts = _commentary_items({"codex_message_items": field("codex_message_items")})
+                    text = "\n\n".join(part for raw in parts if (part := visible_commentary(raw)))
+                else:
+                    content = field("content")
+                    text = strip_think_blocks(None, content).strip() if isinstance(content, str) else ""
+                # Keep oversized replies out of the bounded in-memory cache too.
+                if len(text) < 80 or len(text.encode("utf-8")) > 65536:
+                    return
+                for call_id in ids:
+                    if call_id:
+                        self._reply_captures[(key, call_id)] = (state.get("activation_id"), text, codex, provider)
+                while len(self._reply_captures) > 256:
+                    self._reply_captures.pop(next(iter(self._reply_captures)))
+        except Exception:
+            return  # No trustworthy host stripping/correlation helper: no capture.
+
+    def _save_reply_plan(self, key: str, state: dict, call_id: str) -> dict:
+        """Materialize the correlated reply, then reuse the existing digest-bound gate."""
+        capture = self._reply_captures.get((key, call_id))
+        plans_dir = state["plans_dir"]
+        fallback = _block_message(PLAN_MODE_TOOL, (
+            f"No usable visible reply was captured. Write the complete plan to an absolute path under "
+            f"{plans_dir}, then call plan_mode(action=\"submit\", path=\"<absolute target path>\")."))
+        if not capture or capture[0] != state.get("activation_id"):
+            return fallback
+        _, text, codex, provider = capture
+        if not _plan_once_visible(provider=provider, codex=codex):
+            return fallback
+        submission = state.get("submission") or {}
+        if submission.get("status") == "pending" and self._ledger.is_inflight(submission.get("rule_key")):
+            return _block_message(PLAN_MODE_TOOL, "A plan approval prompt is already open; wait for the user's answer.")
+        heading = re.search(r"^#{1,6}\s+(.+)$", text, re.MULTILINE)
+        slug = re.sub(r"[^a-z0-9]+", "-", heading[1].lower()).strip("-")[:60] if heading else ""
+        slug = slug or hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        path = os.path.join(plans_dir, f"{plan_file_stamp()}-{slug}-{secrets.token_hex(6)}.md")
+        temporary = os.path.join(plans_dir, f".plan-once-{secrets.token_hex(12)}.tmp")
+        if not _plans_dir_is_still_safe(plans_dir) or not _path_is_inside(path, plans_dir):
+            return _block_message(PLAN_MODE_TOOL, "The plans directory changed or contains a symlink; restore the plan root.")
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+                    stream.write(text)
+                if (not _plans_dir_is_still_safe(plans_dir) or not _path_is_inside(path, plans_dir)
+                        or os.path.lexists(path)):
+                    return _block_message(PLAN_MODE_TOOL, "The plan target changed; restore the plan root and retry.")
+                os.replace(temporary, path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+        except OSError:
+            return _block_message(PLAN_MODE_TOOL, "Saving the visible reply failed; write the plan and submit with its path.")
+        self._remember_plan_targets(key, state, [path])
+        return {"path": path}
 
     def _approved_excerpt(self, submission: dict) -> str:
         if "approved_text" not in self._levers():
@@ -1389,6 +1508,14 @@ class PlanModePlugin:
                 self._active_keys.add(state_key)
                 self._remember_session_id(state_key, state, kwargs.get("session_id"))
                 if is_submit:
+                    capture = self._reply_captures.get((state_key, str(kwargs.get("tool_call_id") or "")))
+                    if ("plan_once" in self._levers() and not call_args.get("path")
+                            and _plan_once_visible(provider=capture[3] if capture else "",
+                                                   codex=capture[2] if capture else False)):
+                        saved = self._save_reply_plan(state_key, state, str(kwargs.get("tool_call_id") or ""))
+                        if saved.get("action") == "block":
+                            return saved
+                        call_args = {**call_args, **saved}
                     return self._prepare_submission(
                         state_key, state, call_args, str(kwargs.get("tool_call_id") or ""), identity)
 

@@ -1164,12 +1164,49 @@ def test_plan_once_real_tracked_file_fallback(real_submit_host):
     plugin.ctx.set_config("levers", "plan_once")
     assert plugin.ctx.get_config("levers") == "plan_once"
     assert plugin._levers() == {"plan_once"}
-    assert not host.plugins.has_hook("post_api_request")
+    assert host.plugins.has_hook("post_api_request")
     host.callback(lambda *args, **kw: "once")
     result = json.loads(host.submit())
     assert result["approved"] is True
     assert Path(result["path"]).name == "plan.md"
     assert Path(result["path"]).read_text() == "# Plan\n\n## Implement\n## Verify"
+
+
+@pytest.mark.usefixtures("plan_once_enabled")
+def test_plan_once_real_capture_dispatch(real_submit_host, monkeypatch, tmp_path):
+    host = real_submit_host
+    from gateway.session_context import clear_session_vars, set_session_vars
+    if "post_api_request" not in host.plugins.VALID_HOOKS:
+        pytest.skip("Hermes lacks post_api_request")
+    # Loaded server marker plus the actual turn-bound public ContextVar signal.
+    monkeypatch.setitem(sys.modules, "tui_gateway.server", SimpleNamespace(
+        _active_config_path=lambda: tmp_path / "home/config.yaml"))
+    tokens = set_session_vars(source="cli", session_key="submit-session", ui_session_id="ui-proof",
+                              session_id="submit-session", cwd=str(tmp_path / "ws"))
+    text = "# Captured plan\n\nChange parser.py and cli.py. Add a behaviour test. Run pytest tests/test_parser.py."
+    response = SimpleNamespace(content="", codex_message_items=[{
+        "type": "message", "role": "assistant", "phase": "commentary",
+        "content": [{"type": "output_text", "text": text}]}],
+        tool_calls=[SimpleNamespace(id="response-item", call_id="submit-1")])
+    try:
+        assert host.plugins.has_hook("post_api_request")
+        host.plugins.invoke_hook("post_api_request", assistant_message=response,
+                                 provider="openai-codex", session_id="submit-session")
+        directive, description = host.plugins.get_pre_tool_call_directive(
+            "plan_mode", {"action": "submit"}, session_id="submit-session", tool_call_id="submit-1")
+        assert directive == "approve" and "Plan rev 1" in description
+        plugin = host.command.__self__
+        state = plugin._load_state("ui:ui-proof")
+        path = Path(state["submission"]["path"])
+        assert path.read_bytes() in (text.encode(), (text + "\n").encode())
+        assert str(path) in state["plan_files"]
+        # Complete the prepared directive through real human-decision hook dispatch.
+        host.plugins.invoke_hook("post_approval_response", pattern_key="plugin_rule:" + state["submission"]["rule_key"],
+                                 choice="once", tool_call_id="submit-1")
+        result = json.loads(plugin.tool({"action": "submit"}))
+        assert result["approved"] is True and result["path"] == str(path)
+    finally:
+        clear_session_vars(tokens)
 
 
 @pytest.fixture

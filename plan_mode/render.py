@@ -49,7 +49,7 @@ def plan_file_stamp(now=None) -> str:
 
 
 def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=True,
-                  levers=frozenset(), previous_plan="", platform="") -> str:
+                  levers=frozenset(), previous_plan="", platform="", reply_plan=False) -> str:
     stamp = plan_file_stamp(now)
     target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
     compact = CODEX_COMPACT_PLAN if "codex_compact" in levers else COMPACT_PLAN
@@ -88,8 +88,18 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
             '3. If the plan is at most 3,000 characters, show only a 3–5 line summary plus the path in your reply; '
             'the approval prompt contains the full plan. For a longer plan, show the complete plan in your reply. Then call',
         )
+    if "plan_once" in levers and reply_plan:
+        note = note.replace(f"as Markdown to {target}", "as Markdown in your reply text")
+        note = note.replace("2. Write the plan as Markdown in your reply text", "2. Write the complete plan as your reply text, in Markdown")
+        start, end = note.index("3. "), note.index("\n4. ")
+        note = note[:start] + (
+            '3. In that same response, call plan_mode(action="submit") with no path, on its own '
+            '(if plan_mode is not loaded, find it with tool_search "plan_mode"). '
+            'The plugin saves your reply as the plan file; do not write the plan file yourself. '
+            'Approval starts implementation in this same turn.'
+        ) + note[end:]
     if "lean_craft" in levers and style == "compact" and not plan_skill:
-        note += "\n" + LEAN_CRAFT
+        note += "\n" + (LEAN_CRAFT.split(" Write the plan file ")[0] if reply_plan else LEAN_CRAFT)
     if "sticky" in levers:
         note += '\nWhile plan mode is on, a request to implement or "just do it" means plan the implementation and submit; do not call blocked tools.'
     if "reentry" in levers and previous_plan:
