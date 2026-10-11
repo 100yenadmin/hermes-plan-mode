@@ -1413,8 +1413,8 @@ class PlanModePlugin:
 
     def transform_tool_result(self, tool_name: str = "", args: Any = None, **kwargs: Any) -> str | None:
         """Deliver the correlated clarify approval in the same turn, after post_tool_call."""
-        if tool_name != "clarify":
-            return None
+        if tool_name != "clarify" or not self._clarify_notes:
+            return None  # no note to deliver: touch no session state (classic never stores one)
         try:
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
             if not identity.key or identity.unsupported or identity.non_cli_without_key:

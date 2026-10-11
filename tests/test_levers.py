@@ -170,6 +170,14 @@ def test_todo_batch_clear_at_turn_end(make_plugin):
     assert plugin.pre_llm_call() is None
 
 
+def test_transform_without_note_touches_no_state(make_plugin, monkeypatch):
+    plugin = make_plugin("", plan_profile="classic")
+    plugin.command("on")
+    monkeypatch.setattr(plugin, "_state_for_hook", lambda *a, **k: pytest.fail("state accessed"))
+    result = json.dumps({"question": "q", "user_response": "a"})
+    assert plugin.ctx.hooks["transform_tool_result"]("clarify", {}, result=result, tool_call_id="c") is None
+
+
 def test_profile_switch_needs_no_restart(make_plugin):
     plugin = make_plugin("", plan_profile="classic")
     approve_gate(plugin, write_plan(plugin))
