@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.4.0 - 2026-10-11
+
+- New setting **Plan profile** (`plan_profile`), `lean` by default. Lean makes compact plans faster and leaner. It
+  applies with Plan style `compact` and no Plan skill; `plan_style: core` and a Plan skill keep the 0.3.5 behaviour.
+  Set `plan_profile: classic` to get the 0.3.5 behaviour back everywhere. Lean changes the following:
+  - **The planning note.** It supersedes core `/plan`'s craft: no 2–5-minute task slicing, no copy-paste code, no
+    red/green ceremony unless you ask for TDD, and the plan file goes only at the absolute path given.
+  - **The plan format.** It is Codex-style: Summary; Key changes grouped by behaviour, still naming every touched file
+    and every consumer of a changed interface; Test plan with exact commands; Assumptions. It is concise by default.
+  - **Questions.** The agent still asks with `clarify` before it writes the plan about choices only you can make,
+    and it asks only what reading the repo cannot settle. It prefers 1 question and asks at most 3, each with 2–3
+    choices written as label — consequence, recommended first.
+  - **Fewer bookkeeping calls.**
+    - `todo_list` is used only for plans with 4 or more steps, and status updates ride along with real work.
+    - The full planning note is sent on the first planning turn and after a denial; later planning turns get a short
+      reminder.
+    - The executing pointer clears when the approving turn ends without a todo list.
+  - **Smaller behaviours.**
+    - The approval result carries the approved plan text (bounded).
+    - Re-entering plan mode points at the previous plan.
+    - "Just do it" while planning means: plan it and submit.
+- **Why lean is the default.** Benchmark rounds with bars written before the runs, blind adjudication, the same model
+  (gpt-6.1-sol, medium) and the same Hermes (v0.21.6), on eight coding tasks:
+  - Lean finished 42% faster than 0.3.5 (wall time 0.58×, 95% CI 0.55–0.62; faster on 8 of 8 tasks).
+  - It used 28% fewer cost-weighted tokens (0.72×, CI 0.63–0.80).
+  - Test results were the same, and there were no approval leaks.
+  - On two tasks where the user had a preference the prompt did not state, it asked and matched it in 10 of 10 runs
+    (0.3.5: 10 of 10). On the eight tasks without one, it asked 15 questions (0.3.5: 22). These figures come from
+    round 5, two runs per task.
+  - Two blind judges from different model families scored plan and code quality the same as or better than 0.3.5
+    (round 3, three runs per task).
+  - An earlier wording of the question limits made the agent stop asking (0 of 5 hidden preferences found). It was
+    caught by its own bar and replaced before release.
+- **Experimental, not part of any profile:** `plan_budget` gives compact plans a length budget: what changes and who consumes
+  it, not how to write it. In a pre-registered round it halved plan length and finished 24% faster, with the same test
+  results. One of the two blind judges scored plan fit and clarity lower, so it stays opt-in.
+- **Experimental, not part of any profile:** `plan_once` writes the plan only once on TUI, Desktop and `hermes serve`. The
+  agent writes the plan as its reply, and the plugin saves exactly that visible text as the plan file. It was 19%
+  faster in a pre-registered round, but it did not hold the plan-quality bar, so it stays opt-in until a revised
+  version passes.
+- The classic CLI approval prompt no longer claims the plan is shown above. It now says the plan is in the reply
+  above, and if it is not, to deny and run `/planmode show`. With `display.streaming: false` the reply may not be
+  printed before the modal prompt.
+- The note shown when Hermes approves a submit automatically now names every cause. Besides yolo and
+  `approvals.mode: off`, that includes unattended surfaces such as the API server or a webhook, which auto-resolve
+  approvals on recent Hermes. Plan mode still stays on until a human approves.
+- The approve directive asks Hermes not to offer "Always" for a plan (`allow_permanent: false`). Current Hermes
+  releases ignore the key and still show "Always", which behaves like once for plans; the prompt drops it once Hermes
+  supports the key.
+- Approval titles and plan-file names skip generic section labels such as Summary, Goal or Context.
+  - They use the first heading that names the plan; if every heading is a label, the first line of text under them.
+  - A `# comment` inside a fenced code block is no longer mistaken for a heading.
+  - Plans without headings keep the file name as their title.
+- `/planmode status` shows the Plan profile.
+
 ## 0.3.5 - 2026-10-07
 
 - New setting **Plan style** (`plan_style`). `compact` is the default: it asks for a short, decision-complete plan
