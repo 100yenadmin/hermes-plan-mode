@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-- CI now tests Hermes 0.21.6 and a current `main` (both on Python 3.14) and the 0.21.2 floor (`v2026.9.11`); the old
-  `main` pin is dropped. 0.3.5 passes unchanged on 0.21.6 and `main`.
-- Docs: compatibility is stated in Hermes versions (0.21.2 for the classic CLI, 0.21.5 for gateway, TUI and Desktop),
+- CI now tests Hermes 0.21.6 and a current `main` (both on Python 3.14); the old `main` pin is dropped. 0.3.5 passes
+  unchanged on 0.21.6 and `main`.
+- The minimum Hermes is now 0.21.3 (`requires_hermes: ">=0.21.3"`), the oldest version CI tests. 0.21.2 was never
+  tested, and its approval gate still prompts the user when `approvals.mode` is `off`, which the approvals-off path's
+  tests do not expect.
+- Docs: compatibility is stated in Hermes versions (0.21.3 for the classic CLI, 0.21.5 for gateway, TUI and Desktop),
   and 0.21.6 is recommended because enabling a tool plugin from Desktop, the TUI or the dashboard on 0.21.5 can
   replace the CLI tool set.
 
