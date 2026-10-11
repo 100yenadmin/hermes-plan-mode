@@ -499,3 +499,48 @@ def test_po2_note_puts_tags_in_step_two_with_blank_lines(once):
 def test_po2_tag_lines_tolerate_trailing_spaces():
     text, error = pm.PlanModePlugin._reply_plan("Intro\n<proposed_plan>  \n\n" + "x" * 90 + "\n\n</proposed_plan>\t\nBye")
     assert error == "" and text == "x" * 90 + "\n"
+
+
+@pytest.fixture
+def tui_default(session_env, tmp_path, monkeypatch):
+    """A lean-default plugin (no levers setting) with the tui_gateway seams present."""
+    monkeypatch.delenv("PLAN_MODE_LEVERS", raising=False)
+    monkeypatch.setattr(pm, "_session_context_is_engaged", lambda: True)
+    monkeypatch.setitem(sys.modules, "tui_gateway.server", SimpleNamespace(
+        _active_config_path=lambda: tmp_path / "home/config.yaml"))
+    session_env.update(TERMINAL_CWD=str(tmp_path), HERMES_UI_SESSION_ID="ui-1", HERMES_SESSION_PLATFORM="cli")
+    return session_env
+
+
+@pytest.mark.parametrize("seam", ["none", "no_module", "no_ui_id", "not_engaged"])
+def test_default_lean_adds_plan_once_only_on_tui_sessions(tui_default, monkeypatch, seam):
+    if seam == "no_module":
+        monkeypatch.delitem(sys.modules, "tui_gateway.server")
+    elif seam == "no_ui_id":
+        tui_default["HERMES_UI_SESSION_ID"] = ""
+    elif seam == "not_engaged":
+        monkeypatch.setattr(pm, "_session_context_is_engaged", lambda: False)
+    levers = pm.PlanModePlugin(FakeContext())._levers()
+    assert levers == set(pm.LEAN_LEVERS) | ({"plan_once"} if seam == "none" else set())
+
+
+@pytest.mark.parametrize("settings", [{"plan_profile": "classic"}, {"plan_style": "core"},
+                                      {"plan_skill": "my-plan"}, {"levers": "lean_craft,todo_batch"}])
+def test_default_plan_once_needs_the_lean_default(tui_default, settings):
+    ctx = FakeContext()
+    ctx.settings.update(settings)
+    assert "plan_once" not in pm.PlanModePlugin(ctx)._levers()
+
+
+def test_default_lean_on_tui_asks_for_the_reply_plan(tui_default, monkeypatch, tmp_path):
+    pytest.importorskip("hermes_cli.config_effective")
+    pytest.importorskip("agent.history_commentary", reason="Hermes build lacks the commentary helpers plan_once needs")
+    from hermes_cli import config_effective
+    monkeypatch.setattr(config_effective, "load_user_config_effective", lambda *a, **k: {
+        "display": {"interim_assistant_messages": True, "show_commentary": True}, "model": {"provider": "openai-codex"}})
+    plugin = pm.PlanModePlugin(FakeContext())
+    plans = tmp_path / ".hermes" / "plans"
+    plans.mkdir(parents=True)
+    assert "<proposed_plan>" in plugin._planning_note({"plans_dir": str(plans)})
+    tui_default["HERMES_UI_SESSION_ID"] = ""
+    assert "<proposed_plan>" not in plugin._planning_note({"plans_dir": str(plans)})

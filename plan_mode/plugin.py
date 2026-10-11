@@ -330,6 +330,17 @@ def _plans_dir_is_still_safe(plans_dir: str) -> bool:
         return False
 
 
+def _tui_ui_session_id() -> str:
+    """The UI session id of a tui_gateway session (TUI, Desktop, `hermes serve`); empty anywhere else."""
+    try:
+        reader = _session_reader()
+        if sys.modules.get("tui_gateway.server") is None or reader is None or not _session_context_is_engaged():
+            return ""
+        return str(reader("HERMES_UI_SESSION_ID", "") or "")
+    except Exception:
+        return ""
+
+
 _PLAN_ONCE_DISPLAY_SNAPSHOTS: dict[str, tuple[bool, bool]] = {}
 _PLAN_ONCE_DISPLAY_LOCK = threading.Lock()
 
@@ -343,13 +354,10 @@ def _reset_plan_once_visibility() -> None:
 def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
     """Require both the session's initial and current interim display policy."""
     try:
-        server = sys.modules.get("tui_gateway.server")
-        reader = _session_reader()
-        if server is None or reader is None or not _session_context_is_engaged():
-            return False
-        session_id = reader("HERMES_UI_SESSION_ID", "")
+        session_id = _tui_ui_session_id()
         if not session_id:
             return False
+        server = sys.modules["tui_gateway.server"]
         # Capture needs this (Hermes v2026.9.24+); without it the note must not promise a saved reply.
         from agent.history_commentary import visible_commentary  # noqa: F401
         from hermes_cli.config import require_readable_config_before_write
@@ -1280,7 +1288,10 @@ class PlanModePlugin:
         value = self._lever_override()
         if isinstance(value, str) and not value:
             lean = self._plan_profile() == "lean" and self._plan_style() == "compact" and not self._plan_skill()
-            return set(LEAN_LEVERS) if lean else set()
+            if not lean:
+                return set()
+            # plan_once was measured on tui_gateway sessions only (rounds 7 and 8), so it joins lean only there.
+            return set(LEAN_LEVERS) | ({"plan_once"} if _tui_ui_session_id() else set())
         names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
         return set(_LEVERS) if "all" in names else names & _LEVERS
 
