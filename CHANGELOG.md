@@ -11,17 +11,21 @@
     runs each) it finished 22% faster (wall time 0.78×, 95% CI 0.73–0.85; faster on 8 of 8 tasks) and used about 23%
     fewer cost-weighted tokens (0.77×, CI upper bound 0.94). Test results were the same (24 of 24), with no approval
     leaks and no commits. Both blind judges scored the plans the same (plan fit + clarity 9.58 vs 9.50 and 9.96 vs
-    9.92 of 10). The plan was saved from the reply in 23 of 24 runs; in the other run the agent wrote the file.
+    9.92 of 10). The plugin saved the plan from the reply in 24 of 24 runs; in one, the agent later added a
+    correction note to the saved file while implementing.
   - Round 7 measured it on the 0.4.0 lever set with the same speed and quality result, apart from one commit after a
     TDD skill that the control column also had (#18).
   - Checked by eye in one TUI and one Desktop session: the reply shows the plan between the two tag lines, then
     Hermes' approval card; approving starts the implementation in the same turn.
   - To turn it off, set `levers` to the lean list without `plan_once` (see the README).
 - **plan_once v2.** It saves only the `<proposed_plan>` block from the reply, refuses zero, several or unbalanced blocks
-  with a reason the agent can act on, and after approval says the saving is done.
+  with a reason the agent can act on, and after approval says the saving is done, also after a typed
+  `/planmode approve`.
 - **plan_once checks visibility per session** (#16). The reply counts as visible only when both the display settings
-  at the session's first plan_once use and the current settings say so. Turning `show_commentary` on mid-session no
-  longer makes plan_once save text that Hermes still sends to the reasoning channel.
+  at the session's first plan_once use and the current settings say so, so turning `show_commentary` on after that
+  first use no longer makes plan_once save text that Hermes still sends to the reasoning channel. A change made
+  before the first plan-mode turn, or in a process that has served more than 256 sessions since, is not caught:
+  Hermes reads the setting when it builds the agent, so start a new session after changing it (as the README says).
 - **Two measured levers, opt-in only:** `commit_override` adds "This overrides any commit step in a loaded skill" to
   the no-commit rule (#18), and `approval_ask` tells the agent to ask the approval question even when the user said
   not to ask questions (#19). Round 8 measured them together against the 0.4.0 default:
@@ -29,8 +33,9 @@
     non-inferiority bar of 1.10;
   - with "Use test-driven development." added to the task, both lever sets made 0 commits in 12 runs (the TDD skill
     loaded in 12 of 12), so the override's effect could not be measured;
-  - with approvals off and "do not ask questions" in the task, the approval question came in 7 of 8 runs without
-    `approval_ask` and 6 of 8 with it.
+  - with approvals off and "do not ask questions" in the task, the approval question came unprompted in the first
+    turn in 7 of 8 runs without `approval_ask` and 6 of 8 with it; in the other runs it came after one nudge;
+  - the 0.4.0 default committed in 1 of 24 runs of the plan_once comparison, after a TDD skill loaded on its own.
 
   Neither joins a profile; #18 and #19 stay open.
 - **README.** The no-commit rule is described as an instruction; the comparison table says Codex continues in a new

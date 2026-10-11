@@ -242,7 +242,8 @@ plugins:
   committed when the task asked for TDD (0 of 12 each), so its effect is unmeasured.
 - `approval_ask` tells the agent to ask the approval question even when you said not to ask questions, where Hermes
   approves plugin calls automatically ([#19](https://github.com/100yenadmin/hermes-plan-mode/issues/19)). In round 8
-  the question came in 6 of 8 runs with it and 7 of 8 without.
+  the question came unprompted in the first turn in 6 of 8 runs with it and 7 of 8 without; in the other runs it
+  came after one nudge.
 - `plan_once` (in lean on TUI, Desktop and `hermes serve`): Hermes reads `display.show_commentary` when it builds the
   agent, so after changing that setting start a new session before relying on `plan_once`. The approval card shows
   the saved plan up to 3,500 characters.
@@ -353,8 +354,9 @@ plugins:
   pointer can stay until the todos finish or 100 turns pass
   ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
 - **The no-commit rule is an instruction.** After approval plan mode is off, and terminal commands are not inspected.
-  In benchmark runs the agent committed in 2 of 108 lean runs, both after loading a TDD skill that commits per step,
-  and in 0 of 70 classic runs ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)).
+  In benchmark runs the agent committed in 3 lean runs (2 of 108 through round 7, 1 of 112 in round 8), each after
+  loading a TDD skill that commits per step, and in 0 of 70 classic runs
+  ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)).
 - **Plan once shows its tag lines.** On TUI, Desktop and `hermes serve` the reply shows the plan between a literal
   `<proposed_plan>` line and a `</proposed_plan>` line; Hermes does not style them as Codex does. Desktop's history view
   folds the planning reply away after the turn; the plan file stays in `.hermes/plans`.

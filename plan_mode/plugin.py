@@ -1429,7 +1429,9 @@ class PlanModePlugin:
         return {"path": path}
 
     def _saved_plan_note(self, submission: dict) -> str:
-        if "plan_once" in self._levers() and submission.get("plugin_saved"):
+        # plugin_saved is set at submit only while plan_once was on. Typed commands run without the UI
+        # session id, so re-deriving the default lever set here would drop the note.
+        if submission.get("plugin_saved"):
             return ("The plan was saved for you from your reply; saving it is done. Your task now is to "
                     "implement it in this turn. ")
         return ""

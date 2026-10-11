@@ -545,3 +545,55 @@ def test_default_lean_on_tui_asks_for_the_reply_plan(tui_default, monkeypatch, t
     assert "<proposed_plan>" in plugin._planning_note({"plans_dir": str(plans)})
     tui_default["HERMES_UI_SESSION_ID"] = ""
     assert "<proposed_plan>" not in plugin._planning_note({"plans_dir": str(plans)})
+
+
+@pytest.fixture
+def lean_tui(session_env, tmp_path, monkeypatch):
+    """The lean default on a tui_gateway session, plan mode on, with plan_once captured from the config."""
+    pytest.importorskip("hermes_cli.config_effective")
+    pytest.importorskip("agent.history_commentary", reason="Hermes build lacks the commentary helpers plan_once needs")
+    monkeypatch.delenv("PLAN_MODE_LEVERS", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    session_env.update(TERMINAL_CWD=str(tmp_path), HERMES_UI_SESSION_ID="", HERMES_SESSION_PLATFORM="cli")
+    monkeypatch.setattr(pm, "_session_context_is_engaged", lambda: True)
+    from hermes_cli import config_effective
+    monkeypatch.setattr(config_effective, "load_user_config_effective", lambda *a, **k: {
+        "display": {"interim_assistant_messages": True, "show_commentary": True}, "model": {"provider": "openai-codex"}})
+    monkeypatch.setitem(sys.modules, "tui_gateway.server", SimpleNamespace(
+        _active_config_path=lambda: tmp_path / "home/config.yaml"))
+    ctx = FakeContext()
+    ctx.settings.update(plan_style="compact")
+    plugin = pm.PlanModePlugin(ctx)
+    plugin.register()
+    assert "Plan mode is on" in plugin.command("on parser")
+    session_env["HERMES_UI_SESSION_ID"] = "ui-1"
+    return plugin
+
+
+@pytest.mark.parametrize("route", ["typed", "typed-open", "gate"])
+def test_default_saved_note_on_every_approval_route(lean_tui, session_env, route):
+    # Hermes runs typed plugin commands with HERMES_UI_SESSION_ID="" (tui_gateway methods_tools), so the
+    # approval must not re-derive the default lever set; the submission records what was saved.
+    plugin = lean_tui
+    assert "plan_once" in plugin._levers()
+    plugin.pre_llm_call()
+    capture(plugin)
+    gate = submit(plugin)
+    assert gate["action"] == "approve", gate
+    assert plugin._load_state("ui:ui-1")["submission"].get("plugin_saved") is True
+    if route == "gate":
+        plugin.ctx.hooks["post_approval_response"](
+            pattern_key="plugin_rule:" + gate["rule_key"], choice="once", tool_call_id="submit")
+        message = json.loads(plugin.tool({"action": "submit"}))["message"]
+    else:
+        if route == "typed":
+            plugin.tool({"action": "submit"})  # the card is no longer open
+        session_env["HERMES_UI_SESSION_ID"] = ""
+        assert "plan_once" not in plugin._levers()
+        plugin.command("approve")
+        session_env["HERMES_UI_SESSION_ID"] = "ui-1"
+        if route == "typed-open":
+            message = json.loads(plugin.tool({"action": "submit"}))["message"]
+        else:
+            message = plugin._load_state("ui:ui-1")["pending_note"]
+    assert message.startswith(SAVED_NOTE), (route, message)
