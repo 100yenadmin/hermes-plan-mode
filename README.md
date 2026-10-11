@@ -75,6 +75,9 @@ platform.
   before the approval prompt by default. On those, and everywhere without a budget, the approval text carries the
   full plan, capped at about 3500 chars (about 1000 on WhatsApp Cloud) with a pointer to the file.
 - `/planmode show` prints up to 3500 chars of the plan; the plan file holds the rest.
+- **Exercised vs supported.** We have run plan mode end to end on the CLI, TUI, Desktop, `hermes serve` and Telegram
+  (approved by text; the buttons were not clicked). The other platforms in the table are supported through Hermes'
+  own approval and question UIs, but we have not exercised them.
 
 ## Install
 
@@ -176,7 +179,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
-| Allow commits (`allow_commits`) | off | Off: the agent neither plans nor makes git commits unless you ask, so changes stay uncommitted for your review. On: it may commit as the plan style suggests |
+| Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask, so changes stay uncommitted for your review. This is an instruction, not enforced (see Known limitations). On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
 
 ### The lean profile (default since 0.4.0)
@@ -192,6 +195,11 @@ the rest.
 - **Fewer bookkeeping calls.**
   - `todo_list` is used only for plans with 4 or more steps, and status updates ride along with real work.
   - Later planning turns get a short reminder instead of the full note.
+- **Plan once (TUI, Desktop and `hermes serve`, since 0.4.1).** The agent writes the plan once, in its reply between a
+  `<proposed_plan>` line and a `</proposed_plan>` line, and the plugin saves that text as the plan file. This needs
+  Hermes 0.21.5 (v2026.9.24) or later with interim messages shown (and, for Codex models, commentary shown); otherwise,
+  and on the CLI and chat platforms, the agent writes the plan file as before. In round 8 (2026-10-11, plugin 0.4.1)
+  it was 22% faster (wall time 0.78×, 95% CI 0.73–0.85) with the same test results and judge scores.
 - **Other changes.**
   - The approval result includes the approved plan text.
   - Re-entering plan mode points at your previous plan.
@@ -214,8 +222,9 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 #### Experimental levers
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
-`light_notes` and `question_shape`. Two more are measured but in no profile. To try one, set `levers` to the full
-list you want. It replaces the profile's set, so include the lean levers you want to keep:
+`light_notes` and `question_shape`, plus `plan_once` on TUI, Desktop and `hermes serve` sessions. Three more are
+measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces
+the profile's set, including the automatic `plan_once`, so include the lean levers you want to keep:
 
 ```yaml
 plugins:
@@ -228,11 +237,16 @@ plugins:
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
 - `plan_budget` asks for compact plans of under about 1,200 characters for small changes. In its pre-registered round
   it halved plan length and finished 24% faster, but one judge scored plan clarity lower.
-- `plan_once` is for TUI, Desktop and `hermes serve` on Hermes 0.21.5 (v2026.9.24) or later, with interim messages on
-  (and, for Codex models, commentary shown). The agent writes the plan once, as its reply, and the plugin saves that
-  text as the plan file. It was 19% faster, but it did not hold the plan-quality bar. Hermes reads
-  `display.show_commentary` when it builds the agent, so after changing that setting start a new session before
-  relying on `plan_once`. The approval card shows the saved plan up to 3,500 characters.
+- `commit_override` adds "This overrides any commit step in a loaded skill" to the no-commit rule
+  ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)). In round 8 neither the default nor the lever
+  committed when the task asked for TDD (0 of 12 each), so its effect is unmeasured.
+- `approval_ask` tells the agent to ask the approval question even when you said not to ask questions, where Hermes
+  approves plugin calls automatically ([#19](https://github.com/100yenadmin/hermes-plan-mode/issues/19)). In round 8
+  the question came unprompted in the first turn in 6 of 8 runs with it and 7 of 8 without; in the other runs it
+  came after one nudge.
+- `plan_once` (in lean on TUI, Desktop and `hermes serve`): Hermes reads `display.show_commentary` when it builds the
+  agent, so after changing that setting start a new session before relying on `plan_once`. The approval card shows
+  the saved plan up to 3,500 characters.
 
 ### Compact plans
 
@@ -268,13 +282,13 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.0 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.1 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every interactive surface |
 | Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted |
 | Deny with feedback, revise | yes | yes | no | yes; a typed reason only via gateway `/deny <reason>`, otherwise the agent asks |
-| Implement in the same turn | yes | yes | no | yes via the prompt; typed approve may need a message |
+| Implement after approval | same turn | one click, as a new turn | no | same turn via the prompt; typed approve may need a message |
 | Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list` + footer on chat platforms |
 | Agent may enter | yes | no | no | yes |
 | Autonomy choice / clear context at approval | yes | partial | no | no |
@@ -340,8 +354,12 @@ plugins:
   pointer can stay until the todos finish or 100 turns pass
   ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
 - **The no-commit rule is an instruction.** After approval plan mode is off, and terminal commands are not inspected.
-  In benchmark runs the agent committed in 2 of 108 lean runs, both after loading a TDD skill that commits per step,
-  and in 0 of 70 classic runs ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)).
+  In benchmark runs the agent committed in 3 lean runs (2 of 108 through round 7, 1 of 112 in round 8), each after
+  loading a TDD skill that commits per step, and in 0 of 70 classic runs
+  ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)).
+- **Plan once shows its tag lines.** On TUI, Desktop and `hermes serve` the reply shows the plan between a literal
+  `<proposed_plan>` line and a `</proposed_plan>` line; Hermes does not style them as Codex does. Desktop's history view
+  folds the planning reply away after the turn; the plan file stays in `.hermes/plans`.
 - **No autonomy choice at approval** (Hermes has no per-mode edit-accept setting) and **no
   clear-context-and-implement** (not reachable from a plugin).
 - **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs
@@ -395,10 +413,12 @@ Manual walkthrough in a disposable workspace (full surface-by-surface list in
 
 Disclosure — plan-mode blocks mutating Hermes tools dispatched through `pre_tool_call` (not Codex app-server
 `exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan through Hermes' own
-approval prompt or `/planmode approve`. It reads seven internal Hermes seams for session identity, workspace,
+approval prompt or `/planmode approve`. It reads eight groups of internal Hermes seams for session identity, workspace,
 profile and `skills.inline_shell`, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
 files there, and keeps per-session state in plugin state. It adds a turn note while planning or executing, a
-≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. When the user picks
+≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. On TUI, Desktop and
+`hermes serve` sessions (lean profile, `plan_once`) it reads the agent's visible reply text while planning and saves
+the `<proposed_plan>` block from it as the plan file. When the user picks
 "Always" on a plan approval, Hermes core writes a `plugin_rule:plan-mode:…` entry to `command_allowlist` in
 `config.yaml`. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
 makes no network calls, launches no subprocesses and has no self-updater.
@@ -421,9 +441,16 @@ Each is reached through a lazy, guarded import or a guarded attribute read.
    `skill_view` blocked.
 7. `ctx._manager.home_path`: the Hermes home the plugin registered from. Missing → bound sessions refuse every
    state-changing command.
+8. `plan_once` only: `tui_gateway.server` (only if already imported) and its `_active_config_path`, read with
+   `hermes_cli.config.require_readable_config_before_write`, `hermes_cli.config_effective.load_user_config_effective`
+   and `utils.is_truthy_value`, to check that interim messages and commentary are shown; then
+   `agent.history_commentary`, `agent.agent_runtime_helpers.strip_think_blocks` and
+   `agent.message_sanitization.coalesce_tool_call_id` to take only the visible reply text. Any of them missing or
+   failing → the agent writes the plan file as without `plan_once`.
 
-Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `transform_llm_output`,
-`pre_approval_request`, `post_approval_response`, `on_session_reset`, `on_session_finalize`. Public context APIs:
+Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `post_api_request`,
+`transform_llm_output`, `transform_tool_result`, `pre_approval_request`, `post_approval_response`,
+`on_session_reset`, `on_session_finalize`. Public context APIs:
 `ctx.state`, `ctx.inject_message`, `ctx.register_system_prompt_section`.
 
 </details>

@@ -24,11 +24,11 @@ import uuid
 
 from .approval import (
     DecisionLedger, approval_text, clarify_answer, gate_bypassed,
-    is_human_approval, make_rule_key, plan_digest, _title,
+    is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
 from .render import (
-    AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, NO_COMMITS, executing_pointer,
-    plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
+    AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, executing_pointer,
+    no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
 READ_ONLY_TOOLS = frozenset(
@@ -98,7 +98,10 @@ _BATCH_TODO_HINT = (
     "as the next real tool call, never in a response by itself; batch independent read-only checks."
 )
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
-                     "sticky", "reentry", "approved_text", "light_notes", "plan_budget"})
+                     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
+                     "commit_override", "approval_ask"})
+_APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
+                 "the approval, not a clarifying question. ")
 # The lever set the pre-registered benchmark rounds validated (rounds 3 and 5; see CHANGELOG 0.4.0). Measured only with
 # plan_style compact and no plan skill, so it applies only there; classic, core and plan_skill keep 0.3.5 behaviour.
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
@@ -327,14 +330,34 @@ def _plans_dir_is_still_safe(plans_dir: str) -> bool:
         return False
 
 
-def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
-    """Only a bound tui_gateway turn with readable, visible interim policy."""
-    server = sys.modules.get("tui_gateway.server")
-    reader = _session_reader()
-    if (server is None or reader is None or not _session_context_is_engaged()
-            or not reader("HERMES_UI_SESSION_ID", "")):
-        return False
+def _tui_ui_session_id() -> str:
+    """The UI session id of a tui_gateway session (TUI, Desktop, `hermes serve`); empty anywhere else."""
     try:
+        reader = _session_reader()
+        if sys.modules.get("tui_gateway.server") is None or reader is None or not _session_context_is_engaged():
+            return ""
+        return str(reader("HERMES_UI_SESSION_ID", "") or "")
+    except Exception:
+        return ""
+
+
+_PLAN_ONCE_DISPLAY_SNAPSHOTS: dict[str, tuple[bool, bool]] = {}
+_PLAN_ONCE_DISPLAY_LOCK = threading.Lock()
+
+
+def _reset_plan_once_visibility() -> None:
+    """Clear the in-process session snapshots (for isolated tests)."""
+    with _PLAN_ONCE_DISPLAY_LOCK:
+        _PLAN_ONCE_DISPLAY_SNAPSHOTS.clear()
+
+
+def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
+    """Require both the session's initial and current interim display policy."""
+    try:
+        session_id = _tui_ui_session_id()
+        if not session_id:
+            return False
+        server = sys.modules["tui_gateway.server"]
         # Capture needs this (Hermes v2026.9.24+); without it the note must not promise a saved reply.
         from agent.history_commentary import visible_commentary  # noqa: F401
         from hermes_cli.config import require_readable_config_before_write
@@ -353,9 +376,22 @@ def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
         provider = provider or (model.get("provider", "") if isinstance(model, dict) else "")
         # pre_llm_call has no provider kwarg; unknown providers fail conservatively.
         needs_commentary = codex or not provider or provider == "openai-codex"
-        return is_truthy_value(display.get("interim_assistant_messages", True)) and (
-            not needs_commentary or (bool(display.get("show_commentary", True))
-                                    and is_truthy_value(display.get("show_commentary", True))))
+        interim = bool(is_truthy_value(display.get("interim_assistant_messages", True)))
+        # Hermes reads this flag with bool() for the agent and is_truthy_value() for history; require both.
+        commentary = (bool(display.get("show_commentary", True))
+                      and bool(is_truthy_value(display.get("show_commentary", True))))
+        # Hermes retains its agent's display flags across turns. Never treat a
+        # newly enabled flag as visible on that existing session's agent.
+        with _PLAN_ONCE_DISPLAY_LOCK:
+            snapshot = _PLAN_ONCE_DISPLAY_SNAPSHOTS.get(session_id)
+            if snapshot is None:
+                snapshot = (interim, commentary)
+                _PLAN_ONCE_DISPLAY_SNAPSHOTS[session_id] = snapshot
+                if len(_PLAN_ONCE_DISPLAY_SNAPSHOTS) > 256:
+                    _PLAN_ONCE_DISPLAY_SNAPSHOTS.pop(next(iter(_PLAN_ONCE_DISPLAY_SNAPSHOTS)))
+        interim = snapshot[0] and interim
+        commentary = snapshot[1] and commentary
+        return interim and (not needs_commentary or commentary)
     except Exception:
         return False
 
@@ -400,7 +436,7 @@ class PlanModePlugin:
         # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
-        self._reply_captures: dict[tuple[str, str], tuple[Any, str, bool, str]] = {}
+        self._reply_captures: dict[tuple[str, str], tuple[Any, str, bool, str, str]] = {}
         manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
         self._registration_profile = self._profile_name_for_home(manager_home)
 
@@ -852,7 +888,7 @@ class PlanModePlugin:
                 and submission.get("status") == "approved" and not state.get("active")):
             state["pending_note"] = ""
             self._save_command_state(raw_key, storage_key, state)
-            return {"message": f"The user approved plan rev {submission['revision']} at {submission['path']} with "
+            return {"message": self._saved_plan_note(submission) + f"The user approved plan rev {submission['revision']} at {submission['path']} with "
                     f"/planmode approve. Plan mode is off. Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission),
                     "approved": True, "path": submission["path"], "revision": submission["revision"]}
         if opened:
@@ -869,7 +905,7 @@ class PlanModePlugin:
             if unchanged:
                 self._approve_submission(state, submission)
                 self._save_command_state(raw_key, storage_key, state)
-                return {"message": f"The user approved plan rev {revision} at {path}. Plan mode is off. "
+                return {"message": self._saved_plan_note(submission) + f"The user approved plan rev {revision} at {path}. Plan mode is off. "
                         f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission),
                         "approved": True, "path": path, "revision": revision}
             submission["status"] = "stale"
@@ -891,6 +927,7 @@ class PlanModePlugin:
                     "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: "
                     f"question={question} and choices={[approve, keep]} "
                     "(these exact strings, this order, not multi-select). "
+                    + (_APPROVAL_ASK if "approval_ask" in self._levers() else "") +
                     f"If the user picks {approve}, plan mode turns off automatically; implement the plan in this turn: {self._execute_hint()} "
                     f"If they pick {keep} or answer otherwise, ask what to change and revise. "
                     "If clarify is unavailable, ask the user to run /planmode approve."
@@ -1129,6 +1166,8 @@ class PlanModePlugin:
                                 state["approved_while_open"] = submission["rule_key"]
                     except (OSError, ValueError):
                         pass
+                if submission.get("path") == approved_path:
+                    state["pending_note"] = self._saved_plan_note(submission) + state["pending_note"]
                 self._forget_submission(state)
                 state["pending_note"] += self._approved_excerpt({"path": approved_path, "revision": state.get("approved_revision", 0)})
                 self._save_command_state(identity.key, command_storage_key, state)
@@ -1250,7 +1289,10 @@ class PlanModePlugin:
         value = self._lever_override()
         if isinstance(value, str) and not value:
             lean = self._plan_profile() == "lean" and self._plan_style() == "compact" and not self._plan_skill()
-            return set(LEAN_LEVERS) if lean else set()
+            if not lean:
+                return set()
+            # plan_once was measured on tui_gateway sessions only (rounds 7 and 8), so it joins lean only there.
+            return set(LEAN_LEVERS) | ({"plan_once"} if _tui_ui_session_id() else set())
         names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
         return set(_LEVERS) if "all" in names else names & _LEVERS
 
@@ -1269,6 +1311,36 @@ class PlanModePlugin:
         return planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
                              commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform,
                              reply_plan="plan_once" in self._levers() and _plan_once_visible())
+
+    @staticmethod
+    def _reply_plan(text: str) -> tuple[str, str]:
+        """Extract one public plan block, using approval's fence rules."""
+        lines = text.splitlines(keepends=True)
+        tags = [(index, match[1]) for index, line in enumerate(_unfenced(text))
+                if (match := re.fullmatch(r" {0,3}(<proposed_plan>|</proposed_plan>)[ \t]*", line))]
+        opening = [index for index, tag in tags if tag == "<proposed_plan>"]
+        closing = [index for index, tag in tags if tag == "</proposed_plan>"]
+        if not tags:
+            return "", "There are no proposed_plan tag lines."
+        if len(opening) > 1 or len(closing) > 1:
+            return "", "There is more than one proposed_plan opening or closing tag."
+        if len(opening) != 1 or len(closing) != 1:
+            return "", "The proposed_plan tags are unbalanced."
+        if opening[0] >= closing[0]:
+            return "", "The proposed_plan tags are in the wrong order."
+        inner = lines[opening[0] + 1:closing[0]]
+        while inner and not inner[0].strip():
+            inner.pop(0)
+        while inner and not inner[-1].strip():
+            inner.pop()
+        text = "".join(inner).rstrip("\r\n")
+        if not text:
+            return "", "The proposed_plan block is empty."
+        if len(text) < 80:
+            return "", "The proposed_plan inner text is under 80 characters."
+        if len(text.encode("utf-8")) > 65536:
+            return "", "The proposed_plan inner text exceeds 64 KiB."
+        return text + "\n", ""
 
     def post_api_request(self, assistant_message: Any = None, **kwargs: Any) -> None:
         """Capture only public reply text, paired with dispatch's effective call IDs."""
@@ -1304,12 +1376,11 @@ class PlanModePlugin:
                 else:
                     content = field("content")
                     text = strip_think_blocks(None, content).strip() if isinstance(content, str) else ""
-                # Keep oversized replies out of the bounded in-memory cache too.
-                if len(text) < 80 or len(text.encode("utf-8")) > 65536:
-                    return
+                # Cache only bounded inner text (or the reason it cannot be saved).
+                text, error = self._reply_plan(text)
                 for call_id in ids:
                     if call_id:
-                        self._reply_captures[(key, call_id)] = (state.get("activation_id"), text, codex, provider)
+                        self._reply_captures[(key, call_id)] = (state.get("activation_id"), text, codex, provider, error)
                 while len(self._reply_captures) > 256:
                     self._reply_captures.pop(next(iter(self._reply_captures)))
         except Exception:
@@ -1324,9 +1395,13 @@ class PlanModePlugin:
             f"{plans_dir}, then call plan_mode(action=\"submit\", path=\"<absolute target path>\")."))
         if not capture or capture[0] != state.get("activation_id"):
             return fallback
-        _, text, codex, provider = capture
+        _, text, codex, provider, error = capture
         if not _plan_once_visible(provider=provider, codex=codex):
             return fallback
+        if error:
+            return _block_message(PLAN_MODE_TOOL, error +
+                " Please wrap the plan in one <proposed_plan> … </proposed_plan> block and submit again. " +
+                fallback["message"])
         submission = state.get("submission") or {}
         if submission.get("status") == "pending" and self._ledger.is_inflight(submission.get("rule_key")):
             return _block_message(PLAN_MODE_TOOL, "A plan approval prompt is already open; wait for the user's answer.")
@@ -1351,7 +1426,16 @@ class PlanModePlugin:
         except OSError:
             return _block_message(PLAN_MODE_TOOL, "Saving the visible reply failed; write the plan and submit with its path.")
         self._remember_plan_targets(key, state, [path])
+        state["plugin_saved_plans"] = (state.get("plugin_saved_plans") or [])[-255:] + [path]
         return {"path": path}
+
+    def _saved_plan_note(self, submission: dict) -> str:
+        # plugin_saved is set at submit only while plan_once was on. Typed commands run without the UI
+        # session id, so re-deriving the default lever set here would drop the note.
+        if submission.get("plugin_saved"):
+            return ("The plan was saved for you from your reply; saving it is done. Your task now is to "
+                    "implement it in this turn. ")
+        return ""
 
     def _approved_excerpt(self, submission: dict) -> str:
         if "approved_text" not in self._levers():
@@ -1387,7 +1471,7 @@ class PlanModePlugin:
         return _DEFAULT_ALLOW_COMMITS
 
     def _commit_rule(self) -> str:
-        return "" if self._allow_commits() else f" {NO_COMMITS}"
+        return "" if self._allow_commits() else f" {no_commits(self._levers())}"
 
     def _execute_hint(self) -> str:
         levers = self._note_levers()
@@ -1472,6 +1556,8 @@ class PlanModePlugin:
             "revision": revision, "digest": digest, "path": path, "rule_key": rule_key,
             "tool_call_id": tool_call_id or None, "status": "pending", "submitted_at": _utc_now(),
         }
+        if "plan_once" in self._levers() and path in state.get("plugin_saved_plans", []):
+            state["submission"]["plugin_saved"] = True
         # Submitting asks the user, so from here only the user's approve, reject or off ends plan mode.
         state["entered_by"] = "user"
         state.pop("agent_activation_id", None)
@@ -1641,8 +1727,9 @@ class PlanModePlugin:
                             state["pending_note"] = self._stale_note(submission["revision"])
                         else:
                             self._approve_submission(state, submission, via="clarify")
-                            if "approved_text" in self._levers() or "lean_craft" in self._note_levers():
-                                note = (f"The user approved plan rev {submission['revision']}. "
+                            if ("approved_text" in self._levers() or "lean_craft" in self._note_levers()
+                                    or self._saved_plan_note(submission)):
+                                note = (self._saved_plan_note(submission) + f"The user approved plan rev {submission['revision']}. "
                                         f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission))
                                 self._clarify_notes[(state_key, call_id)] = (kwargs.get("result"), note)
                                 while len(self._clarify_notes) > 256:
