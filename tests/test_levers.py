@@ -502,8 +502,6 @@ def test_042_approval_paths(make_plugin, enabled, route):
     elif route == "typed":
         plugin.command("approve")
         message = plugin._load_state("sk:unit-session")["pending_note"]
-        assert (render.SKILL_EXECUTION in message) is enabled
-        return
     elif route == "typed_open":
         plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
         plugin.command("approve")

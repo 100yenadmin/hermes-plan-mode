@@ -1150,7 +1150,8 @@ class PlanModePlugin:
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
                 state["pending_note"] = (
-                    f"The user approved the plan at {approved_path}. Implement it now." + self._commit_rule()
+                    f"The user approved the plan at {approved_path}. Implement it now."
+                    + (BRIDGE_TODO if "bridge_calls" in self._note_levers() else "") + self._commit_rule()
                 )
                 if "lean_craft" in self._note_levers():
                     state["pending_note"] += " " + LEAN_EXECUTION
