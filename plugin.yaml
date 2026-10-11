@@ -15,6 +15,9 @@ provides_hooks:
   - post_approval_response
   - on_session_finalize
   - on_session_reset
+  - post_llm_call
+  - transform_tool_result
+  - post_api_request
 config_schema:
   enforce_builtin_plan:
     type: bool

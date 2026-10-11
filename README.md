@@ -208,6 +208,32 @@ tasks with the same model (gpt-6.1-sol, medium effort) and Hermes v0.21.6.
 
 Set `plan_profile: classic` to get the 0.3.5 behaviour back.
 
+For a plan without a todo list, the executing reminder ends with the turn that implements it. If that turn stops
+early, for example on the iteration limit, say "continue": the plan is still in the conversation and on disk.
+
+#### Experimental levers
+
+Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
+`light_notes` and `question_shape`. Two more are measured but in no profile. To try one, set `levers` to the full
+list you want. It replaces the profile's set, so include the lean levers you want to keep:
+
+```yaml
+plugins:
+  entries:
+    plan-mode:
+      settings:
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,plan_budget"
+```
+
+`levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
+- `plan_budget` asks for compact plans of under about 1,200 characters for small changes. In its pre-registered round
+  it halved plan length and finished 24% faster, but one judge scored plan clarity lower.
+- `plan_once` is for TUI, Desktop and `hermes serve` only, with interim messages on (and, for Codex models, commentary
+  shown). The agent writes the plan once, as its reply, and the plugin saves that text as the plan file. It was 19%
+  faster, but it did not hold the plan-quality bar. Hermes reads `display.show_commentary` when it builds the agent,
+  so after changing that setting start a new session before relying on `plan_once`. The approval card shows the saved
+  plan up to 3,500 characters.
+
 ### Compact plans
 
 Compact plans without commits are the default since 0.3.5. In an end-to-end comparison on eight coding tasks (same
