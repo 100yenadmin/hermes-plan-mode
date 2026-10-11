@@ -188,9 +188,11 @@ def test_question_shape(make_plugin):
     plugin = make_plugin("question_shape")
     plugin.command("on")
     note = plugin.pre_llm_call()["context"]
-    for text in ["materially change", "reading the repo", "at most 3", "2–3 choices", "label — one-line consequence", "recommended first", "record an assumption"]:
+    for text in ["ask with the clarify tool", "reading the repo cannot settle", "prefer 1 question", "at most 3",
+                 "2–3 short choices", "label — consequence", "recommended first", "Do not guess these"]:
         assert text in note
     assert "up to 4 short choices" not in note
+    assert "Otherwise record an assumption" not in note  # v1 wording suppressed asking (round 3, N4)
 
 
 def test_sticky(make_plugin):

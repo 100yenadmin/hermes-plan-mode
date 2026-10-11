@@ -76,12 +76,12 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         "In group chats, keep secrets and private details out of the plan."
     )
     if "question_shape" in levers:
-        start, end = note.index("Then, before writing the plan,"), note.index("\n2.")
-        note = note[:start] + (
-            "Ask only about choices that materially change the plan and cannot be settled by reading the repo. "
-            "Prefer 1 question, at most 3; offer 2–3 choices, each written label — one-line consequence, "
-            "recommended first. Otherwise record an assumption."
-        ) + note[end:]
+        # v2: keep the ask-before-writing directive; only bound the number and shape of questions.
+        note = note.replace(
+            "such as behaviour, policy, format or scope): up to 4 short choices, recommended first.",
+            "such as behaviour, policy, format or scope) and that reading the repo cannot settle: prefer 1 question, "
+            "at most 3, each with 2–3 short choices written as label — consequence, recommended first.",
+        )
     if "plan_once" in levers and str(platform).strip().lower() == "mattermost":
         note = note.replace(
             '3. Show the complete plan in your reply, then call',
