@@ -27,7 +27,7 @@ from .approval import (
     is_human_approval, make_rule_key, plan_digest,
 )
 from .render import (
-    AGENT_HINT, BUILTIN_OVERRIDE, LOCAL_PLATFORMS, NO_COMMITS, executing_pointer,
+    AGENT_HINT, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS, NO_COMMITS, executing_pointer,
     plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -93,6 +93,12 @@ _TODO_HINT = (
     "mirror the plan's steps into todo_list, called as todo_list(todos=[{\"id\": \"1\", \"content\": \"...\", "
     "\"status\": \"in_progress\"}, ...]), and update the statuses with merge=true as you work."
 )
+_BATCH_TODO_HINT = (
+    "mirror steps into todo_list only when the plan has 4 or more steps; update statuses in the same response "
+    "as the next real tool call, never in a response by itself; batch independent read-only checks."
+)
+_LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
+                     "sticky", "reentry", "approved_text", "light_notes"})
 
 _PLAN_STYLES = frozenset({"compact", "core"})
 _DEFAULT_PLAN_STYLE = "compact"
@@ -355,6 +361,7 @@ class PlanModePlugin:
         self._active_keys: set[str] = set()
         # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
+        self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
         manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
         self._registration_profile = self._profile_name_for_home(manager_home)
 
@@ -392,6 +399,10 @@ class PlanModePlugin:
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
         self.ctx.register_hook("transform_llm_output", self.transform_llm_output)
+        if "todo_batch" in self._levers():
+            self.ctx.register_hook("post_llm_call", self.post_llm_call)
+        if "approved_text" in self._levers() or "lean_craft" in self._note_levers():
+            self.ctx.register_hook("transform_tool_result", self.transform_tool_result)
         self.ctx.register_hook("pre_approval_request", self._ledger.record_presented)
         self.ctx.register_hook("post_approval_response", self._ledger.record_response)
         self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
@@ -802,7 +813,7 @@ class PlanModePlugin:
             state["pending_note"] = ""
             self._save_command_state(raw_key, storage_key, state)
             return {"message": f"The user approved plan rev {submission['revision']} at {submission['path']} with "
-                    f"/planmode approve. Plan mode is off. Implement it now: {self._execute_hint()}",
+                    f"/planmode approve. Plan mode is off. Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission),
                     "approved": True, "path": submission["path"], "revision": submission["revision"]}
         if opened:
             self._save_command_state(raw_key, storage_key, state)
@@ -819,7 +830,7 @@ class PlanModePlugin:
                 self._approve_submission(state, submission)
                 self._save_command_state(raw_key, storage_key, state)
                 return {"message": f"The user approved plan rev {revision} at {path}. Plan mode is off. "
-                        f"Implement it now: {self._execute_hint()}",
+                        f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission),
                         "approved": True, "path": path, "revision": revision}
             submission["status"] = "stale"
             message = self._stale_note(revision)
@@ -940,6 +951,11 @@ class PlanModePlugin:
                     )
                     if key in state
                 }
+                if "reentry" in self._levers():
+                    previous = state.get("approved_path") or (state.get("submission") or {}).get("path") or state.get("previous_plan")
+                    if (isinstance(previous, str) and _plans_dir_is_still_safe(plans_dir)
+                            and _path_is_inside(previous, plans_dir) and os.path.isfile(previous)):
+                        preserved["previous_plan"] = previous
                 state = {
                     "active": True,
                     "entered_at": _utc_now(),
@@ -970,8 +986,10 @@ class PlanModePlugin:
                 )
                 if entered_by == "agent":
                     # The turn's pre_llm_call note has already run, so the plan format and commit rule come with the result.
-                    message += "\n" + planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
-                                                     commits=self._allow_commits()) + f" {_AGENT_NOTE}"
+                    message += "\n" + self._planning_note(state, identity.surface) + f" {_AGENT_NOTE}"
+                    if "light_notes" in self._levers():
+                        state["light_note_seen"] = True
+                        self._save_command_state(identity.key, command_storage_key, state)
                 return message
 
             if action == "status":
@@ -1057,6 +1075,8 @@ class PlanModePlugin:
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now." + self._commit_rule()
                 )
+                if "lean_craft" in self._note_levers():
+                    state["pending_note"] += " " + LEAN_EXECUTION
                 state.update(phase="executing", approved_path=approved_path, approved_at=_utc_now())
                 state.pop("approved_revision", None)
                 if submission.get("path") == approved_path:
@@ -1070,6 +1090,7 @@ class PlanModePlugin:
                     except (OSError, ValueError):
                         pass
                 self._forget_submission(state)
+                state["pending_note"] += self._approved_excerpt({"path": approved_path, "revision": state.get("approved_revision", 0)})
                 self._save_command_state(identity.key, command_storage_key, state)
                 if card_open and "approved_while_open" in state:
                     # Approving the open prompt resumes this turn; a deny or timeout starts the work from post_tool_call.
@@ -1085,6 +1106,8 @@ class PlanModePlugin:
                     return "Plan mode is not on for this session."
                 feedback = remainder or "No additional feedback was provided."
                 state["pending_note"] = f"The user rejected the plan: {feedback}. Revise it."
+                if "light_notes" in self._levers():
+                    state.pop("light_note_seen", None)
                 submission = state.get("submission") or {}
                 submission.pop("clarify", None)
                 if submission.get("status") in {"pending", "awaiting"}:
@@ -1173,6 +1196,38 @@ class PlanModePlugin:
         style = str(self._config("plan_style", _DEFAULT_PLAN_STYLE)).strip().lower()
         return style if style in _PLAN_STYLES else _DEFAULT_PLAN_STYLE
 
+    def _levers(self) -> set[str]:
+        value = self._config("levers", "")
+        if value is None or (isinstance(value, str) and not value.strip()):
+            value = os.environ.get("PLAN_MODE_LEVERS", "")
+        names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
+        return set(_LEVERS) if "all" in names else names & _LEVERS
+
+    def _note_levers(self) -> set[str]:
+        levers = self._levers()
+        if "lean_craft" in levers and (self._plan_style() != "compact" or self._plan_skill()):
+            levers.remove("lean_craft")
+        return levers
+
+    def _planning_note(self, state: dict, platform: str = "") -> str:
+        previous, plans_dir = state.get("previous_plan"), state.get("plans_dir")
+        if not (isinstance(previous, str) and isinstance(plans_dir, str)
+                and _plans_dir_is_still_safe(plans_dir) and _path_is_inside(previous, plans_dir)
+                and os.path.isfile(previous)):
+            previous = ""
+        return planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
+                             commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform)
+
+    def _approved_excerpt(self, submission: dict) -> str:
+        if "approved_text" not in self._levers():
+            return ""
+        try:
+            with open(submission["path"], encoding="utf-8", errors="replace") as stream:
+                text = stream.read(3501)
+            return "\n\n" + plan_text(submission["path"], text, submission.get("revision", 0), "approved")
+        except OSError:
+            return ""  # Keep the already-approved path when the file can no longer be read.
+
     def _plan_skill(self) -> str:
         # A skill name only; anything else (paths with spaces, prose, oversized values) is ignored.
         name = self._config("plan_skill", "")
@@ -1200,7 +1255,47 @@ class PlanModePlugin:
         return "" if self._allow_commits() else f" {NO_COMMITS}"
 
     def _execute_hint(self) -> str:
-        return _TODO_HINT + self._commit_rule()
+        levers = self._note_levers()
+        return (_BATCH_TODO_HINT if "todo_batch" in levers else _TODO_HINT) + self._commit_rule() + (
+            " " + LEAN_EXECUTION if "lean_craft" in levers else "")
+
+    def post_llm_call(self, **kwargs: Any) -> None:
+        """Turn-end hook (after the tool loop), including local surfaces without footers."""
+        if "todo_batch" not in self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
+            return
+        try:
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if not identity.key or identity.unsupported or identity.non_cli_without_key:
+                return
+            with self._lock:
+                key, state = self._state_for_hook(identity)
+                if key and state.get("phase") == "executing" and not (state.get("progress") or {}).get("total"):
+                    self._clear_execution(state)
+                    self._save_state(key, state)
+                    self._sync_execution_family(_state_storage_key(key), state)
+        except Exception:
+            return
+
+    def transform_tool_result(self, tool_name: str = "", args: Any = None, **kwargs: Any) -> str | None:
+        """Deliver the correlated clarify approval in the same turn, after post_tool_call."""
+        if tool_name != "clarify":
+            return None
+        try:
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if not identity.key or identity.unsupported or identity.non_cli_without_key:
+                return None
+            with self._lock:
+                key, _ = self._state_for_hook(identity)
+                note = self._clarify_notes.pop((key, str(kwargs.get("tool_call_id") or "")), None)
+                if not note or note[0] != kwargs.get("result"):
+                    return None
+                value = json.loads(kwargs["result"])
+                if not isinstance(value, dict):
+                    return None
+                value["plan_mode_approval"] = note[1]
+                return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return None
 
     def _footer_off(self) -> bool:
         # Hermes reads config.yaml as YAML 1.1, where a bare `footer: off` is the boolean False.
@@ -1403,8 +1498,16 @@ class PlanModePlugin:
                             state["pending_note"] = self._stale_note(submission["revision"])
                         else:
                             self._approve_submission(state, submission, via="clarify")
+                            if "approved_text" in self._levers() or "lean_craft" in self._note_levers():
+                                note = (f"The user approved plan rev {submission['revision']}. "
+                                        f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission))
+                                self._clarify_notes[(state_key, call_id)] = (kwargs.get("result"), note)
+                                while len(self._clarify_notes) > 256:
+                                    self._clarify_notes.pop(next(iter(self._clarify_notes)))
                     else:
                         submission["status"] = "rejected"
+                        if "light_notes" in self._levers():
+                            state.pop("light_note_seen", None)
                         state["pending_note"] = self._rejection_note(submission["revision"])
                         if answer != clarify["choices"][1]:
                             state["pending_note"] += f' Feedback: "{answer[:280]}"'
@@ -1453,6 +1556,8 @@ class PlanModePlugin:
                         revision = submission["revision"]
                         if entry and entry.get("choice") == "deny":
                             submission["status"] = "rejected"
+                            if "light_notes" in self._levers():
+                                state.pop("light_note_seen", None)
                             state["pending_note"] = (
                                 f"The user did not approve plan rev {revision}. A plan denial is review feedback, not a safety refusal: "
                                 "if no reason was given, ask what to change; then revise the plan file and submit a complete new revision.")
@@ -1533,11 +1638,15 @@ class PlanModePlugin:
                     assert state_key is not None
                     self._active_keys.add(state_key)
                     self._remember_session_id(state_key, state, kwargs.get("session_id"))
-                    note = planning_note(state.get("plans_dir"), style=self._plan_style(),
-                                         plan_skill=self._plan_skill(), commits=self._allow_commits())
-                    if self._agent_owned(state):
+                    short = "light_notes" in self._levers() and state.get("light_note_seen")
+                    note = (f"Plan mode is ON. Plans directory: {state.get('plans_dir')}. Submit with plan_mode; "
+                            'do not ask "should I proceed?" in prose.')[:400] if short else self._planning_note(state, identity.surface)
+                    if "light_notes" in self._levers():
+                        state["light_note_seen"] = True
+                        self._save_state(state_key, state)
+                    if self._agent_owned(state) and not short:
                         note += f" {_AGENT_NOTE}"
-                    if builtin:
+                    if builtin and not short:
                         note += f" {BUILTIN_OVERRIDE}"
                     submission = state.get("submission") or {}
                     clarify = submission.get("clarify")
@@ -1545,14 +1654,17 @@ class PlanModePlugin:
                         awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
                                     f"question={clarify['question']}, choices={clarify['choices']}, "
                                     "or the user can run /planmode approve.")
-                        note += "\n" + awaiting[:399]
+                        if short:
+                            parts.append(awaiting[:399])
+                        else:
+                            note += "\n" + awaiting[:399]
                     parts.append(note)
                 elif state.get("phase") == "executing":
                     state["executing_turns"] = int(state.get("executing_turns") or 0) + 1
                     if state["executing_turns"] > 100:
                         self._clear_execution(state)
                     else:
-                        parts.append(executing_pointer(state, commits=self._allow_commits()))
+                        parts.append(executing_pointer(state, commits=self._allow_commits(), levers=self._note_levers()))
                     digest = self._session_id_hash(kwargs.get("session_id"))
                     if digest:
                         state["session_id_hash"] = digest  # lets an unbound gateway reset find this state

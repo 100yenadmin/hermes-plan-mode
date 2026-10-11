@@ -1149,3 +1149,38 @@ def test_v034_real_mismatched_tagged_question_blocked(real_clarify_host, monkeyp
     state = host.command.__self__._load_state("sk:submit-session")
     assert state["active"] and state["submission"]["status"] == "awaiting"
     assert state["submission"]["clarify"]["tool_call_id"] == ""
+
+
+@pytest.fixture
+def plan_once_enabled(monkeypatch):
+    monkeypatch.setenv("PLAN_MODE_LEVERS", "plan_once")
+
+
+@pytest.mark.usefixtures("plan_once_enabled")
+def test_plan_once_real_tracked_file_fallback(real_submit_host):
+    host = real_submit_host
+    plugin = host.command.__self__
+    # Real PluginContext accepts an undeclared flat settings key on all three hosts.
+    plugin.ctx.set_config("levers", "plan_once")
+    assert plugin.ctx.get_config("levers") == "plan_once"
+    assert plugin._levers() == {"plan_once"}
+    assert not host.plugins.has_hook("post_api_request")
+    host.callback(lambda *args, **kw: "once")
+    result = json.loads(host.submit())
+    assert result["approved"] is True
+    assert Path(result["path"]).name == "plan.md"
+    assert Path(result["path"]).read_text() == "# Plan\n\n## Implement\n## Verify"
+
+
+@pytest.fixture
+def approved_text_enabled(monkeypatch):
+    monkeypatch.setenv("PLAN_MODE_LEVERS", "approved_text")
+
+
+@pytest.mark.usefixtures("approved_text_enabled")
+def test_approved_text_real_clarify_result(real_clarify_host, monkeypatch):
+    host = real_clarify_host
+    _inject_real_clarify_callback(host, monkeypatch, host.question["choices"][0], [])
+    result = json.loads(host.call_clarify({"questions": [{**host.question, "multi_select": False}]}))
+    assert "## Implement" in result["plan_mode_approval"]
+    assert "Plan: " in result["plan_mode_approval"]
