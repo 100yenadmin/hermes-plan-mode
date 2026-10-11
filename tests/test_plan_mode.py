@@ -64,19 +64,25 @@ def session_env(monkeypatch):
     return values
 
 
+@pytest.fixture(params=["classic", "lean"])
+def plan_profile(request):
+    return request.param
+
+
 @pytest.fixture
-def plugin(session_env):
+def plugin(session_env, plan_profile):
     ctx = FakeContext()
+    ctx.settings["plan_profile"] = plan_profile
     instance = PlanModePlugin(ctx)
     instance.register()
     return instance
 
 
-def test_registers_exact_surface(plugin):
+def test_registers_exact_surface(plugin, plan_profile):
     assert set(plugin.ctx.commands) == {"planmode"}
     assert set(plugin.ctx.tools) == {"plan_mode"}
     assert plugin.ctx.tools["plan_mode"]["toolset"] == "plan-mode"
-    assert set(plugin.ctx.hooks) == {
+    expected_hooks = {
         "pre_tool_call",
         "post_tool_call",
         "pre_llm_call",
@@ -85,9 +91,14 @@ def test_registers_exact_surface(plugin):
         "post_approval_response",
         "on_session_finalize",
         "on_session_reset",
+        "post_llm_call",
+        "transform_tool_result",
+        "post_api_request",
     }
+    assert set(plugin.ctx.hooks) == expected_hooks
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_command_state_machine_and_one_shot_notes(plugin, session_env, tmp_path, monkeypatch):
     plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     session_env["TERMINAL_CWD"] = str(tmp_path)
@@ -1286,6 +1297,7 @@ def test_t6_agent_tool_refuses_without_session_identity(
     assert plugin.ctx.state.values == {}
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_t7_turn_note_differs_by_provenance(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     agent_note = (
@@ -1453,13 +1465,20 @@ def test_u1_digest_cap_decode_and_rule_sanitization(tmp_path):
 
 
 @pytest.mark.parametrize("choice", ["once", "session", "always"])
-def test_u1_human_approval_turns_off_in_same_call(plugin, submitted_plan, choice):
+def test_u1_human_approval_turns_off_in_same_call(plugin, submitted_plan, choice, plan_profile):
+    from plan_mode.render import LEAN_EXECUTION, NO_COMMITS
     directive = _submit(plugin)
     plugin.ctx.hooks["pre_approval_request"](pattern_key="plugin_rule:" + directive["rule_key"])
     _decision(plugin, directive, choice)
     result = _submit_result(plugin)
     assert result["approved"] is True and result["revision"] == 1
     assert result["path"] == str(submitted_plan) and "todo_list" in result["message"]
+    assert NO_COMMITS in result["message"]
+    if plan_profile == "lean":
+        assert LEAN_EXECUTION in result["message"]
+        assert f"Plan: {submitted_plan} (rev 1, approved)\n\n" + submitted_plan.read_text() in result["message"]
+    else:
+        assert LEAN_EXECUTION not in result["message"] and "Plan: " not in result["message"]
     state = plugin._load_state("sk:unit-session")
     assert state["active"] is False and state["phase"] == "executing"
     assert state["approved_revision"] == 1 and state["approved_at"]
@@ -1490,7 +1509,7 @@ def test_u1_only_correlated_human_decision_approves(plugin, submitted_plan, deci
 
 
 def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submitted_plan):
-    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
+    plugin.ctx.settings.update(allow_commits=True)
     _submit(plugin)
     assert "no human has approved" in _submit_result(plugin)["message"]
     newer = submitted_plan.with_name("newer.md")
@@ -1505,7 +1524,7 @@ def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submi
 
 @pytest.mark.parametrize("inject_kind", ["false", "missing", "raises", "cli"])
 def test_u1_typed_approval_injection_fallback(plugin, session_env, submitted_plan, inject_kind):
-    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
+    plugin.ctx.settings.update(allow_commits=True)
     if inject_kind == "false":
         plugin.ctx.inject_result = False
     elif inject_kind == "missing":
@@ -1691,10 +1710,12 @@ def test_u2_builtin_can_be_disabled(plugin, key):
     assert not plugin._load_state("sk:unit-session").get("active")
 
 
-def test_u2_builtin_keeps_existing_activation_and_submission(plugin, submitted_plan):
+def test_u2_builtin_keeps_existing_activation_and_submission(plugin, submitted_plan, plan_profile):
     _submit(plugin)
     before = plugin._load_state("sk:unit-session")
     note = plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)["context"]
+    if plan_profile == "lean":
+        before["light_note_seen"] = True  # the first planning note records only its display bookkeeping
     assert plugin._load_state("sk:unit-session") == before
     assert note.endswith(_OVERRIDE)
 
@@ -1722,6 +1743,7 @@ def test_u2_builtin_refusal_injects_nothing(plugin, session_env, tmp_path, monke
     assert plugin.ctx.state.values == {}
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_u2_exact_planning_note_and_pending_first(plugin, session_env, tmp_path, monkeypatch):
     plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     from plan_mode import render as render_mod
@@ -1754,6 +1776,7 @@ def executing_plan(plugin, submitted_plan):
     return submitted_plan
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_u2_executing_pointer_and_turn_expiry(plugin, executing_plan):
     plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
     expected = f"Executing the approved plan {executing_plan} (rev 1). Keep todo_list statuses current; re-read the plan if your context was compacted."
@@ -1768,10 +1791,17 @@ def test_u2_executing_pointer_and_turn_expiry(plugin, executing_plan):
     assert not _EXECUTION_FIELDS & plugin._load_state("sk:unit-session").keys()
 
 
-def test_u2_executing_pointer_without_revision(plugin, submitted_plan):
+def test_u2_executing_pointer_without_revision(plugin, submitted_plan, plan_profile):
     plugin.command("approve")
     note = plugin.pre_llm_call()["context"]
-    assert f"Executing the approved plan {submitted_plan}." in note and "(rev" not in note
+    pointer = note.split("\n\nExecuting the approved plan ")[-1]
+    assert f"Executing the approved plan {submitted_plan}." in note and "(rev" not in pointer
+    if plan_profile == "lean":
+        from plan_mode.render import LEAN_EXECUTION
+        assert LEAN_EXECUTION in pointer
+        assert f"Plan: {submitted_plan} (rev 0, approved)\n\n" + submitted_plan.read_text() in note
+    else:
+        assert "(rev" not in note
 
 
 @pytest.mark.parametrize("tool", ["todo_list", "todo"])
@@ -1920,7 +1950,11 @@ def test_v033_config_schema_declares_the_flat_settings():
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
     assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools",
-                           "plan_style", "allow_commits", "plan_skill"}
+                           "plan_style", "allow_commits", "plan_skill", "plan_profile"}
+    assert schema["plan_profile"]["type"] == schema["plan_style"]["type"] == "str"
+    assert schema["plan_profile"]["choices"] == ["lean", "classic"]
+    assert schema["plan_profile"]["default"] == plugin_mod.PROFILE_DEFAULT == "lean"
+    assert schema["plan_profile"]["label"] == "Plan profile"
     # The form's defaults and the code's defaults must agree, or an untouched setting behaves differently.
     assert schema["plan_style"]["default"] == plugin_mod._DEFAULT_PLAN_STYLE
     assert sorted(schema["plan_style"]["choices"]) == sorted(plugin_mod._PLAN_STYLES)
@@ -1977,7 +2011,7 @@ def test_plan_file_stamp_format():
 # U1 review fixes: submission ownership, legacy state, typed approval while the card is open.
 def _agent_plan(plugin, session_env, tmp_path, name="plan.md"):
     session_env["TERMINAL_CWD"] = str(tmp_path)
-    _tool(plugin, action="on")
+    assert "plan_mode(action='off')" in _tool(plugin, action="on")
     path = tmp_path / ".hermes" / "plans" / name
     args = {"path": str(path), "content": "# Plan\n\n1. Do it\n"}
     ids = {"session_id": "s1", "tool_call_id": "write-" + name}
@@ -1988,9 +2022,14 @@ def _agent_plan(plugin, session_env, tmp_path, name="plan.md"):
 
 
 @pytest.mark.parametrize("outcome", ["deny", "timeout", "yolo"])
-def test_u1_submit_hands_agent_entered_plan_mode_to_the_user(plugin, session_env, tmp_path, outcome):
+def test_u1_submit_hands_agent_entered_plan_mode_to_the_user(plugin, session_env, tmp_path, outcome, plan_profile):
     _agent_plan(plugin, session_env, tmp_path)
-    assert "plan_mode(action='off')" in plugin.pre_llm_call()["context"]
+    note = plugin.pre_llm_call()["context"]
+    if plan_profile == "lean":
+        assert note == (f"Plan mode is ON. Plans directory: {tmp_path / '.hermes' / 'plans'}. Submit with plan_mode; "
+                        'do not ask "should I proceed?" in prose.')[:400]
+    else:
+        assert "plan_mode(action='off')" in note
     directive = _submit(plugin)
     if outcome == "yolo":
         assert "no human has approved" in _submit_result(plugin)["message"]
@@ -2078,7 +2117,7 @@ def test_pr7_typed_approve_while_card_open_does_not_inject(plugin, submitted_pla
 # CodeRabbit on PR #7: a deny or timeout blocks the submit call, so the typed approval starts the work from there.
 @pytest.mark.parametrize("card", ["deny", "timeout"])
 def test_pr7_typed_approve_then_card_blocked_starts_the_work_once(plugin, submitted_plan, card):
-    plugin.ctx.settings.update(plan_style="core", allow_commits=True)  # pins the core-style text from 0.3.4
+    plugin.ctx.settings.update(allow_commits=True)
     directive = _submit(plugin)
     plugin.command("approve")
     if card == "deny":
@@ -2113,7 +2152,7 @@ def test_u1_cli_approval_text_is_one_line(tmp_path):
     text = "# Add divide\n\n## Goal\nDo it.\n\n1. Tests\n2. Code\n"
     result = approval_text(text, str(tmp_path / "p.md"), 2, "cli")
     assert "\n" not in result and len(result) < 300
-    assert result.startswith("Plan rev 2 (p.md): Add divide.") and "shown above" in result
+    assert result.startswith("Plan rev 2 (p.md): Add divide.") and "deny and run /planmode show" in result
 
 
 def test_u1_classic_cli_submit_uses_one_line_prompt(plugin, session_env, tmp_path):
@@ -2795,6 +2834,7 @@ def _note(plugin, tmp_path, monkeypatch, session_env, **settings):
     return plugin.pre_llm_call()["context"]
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_compact_style_replaces_the_plan_craft(plugin, session_env, tmp_path, monkeypatch):
     from plan_mode.render import COMPACT_PLAN, NO_COMMITS
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", allow_commits=True)
@@ -2804,6 +2844,7 @@ def test_035_compact_style_replaces_the_plan_craft(plugin, session_env, tmp_path
     assert "with numbered steps" not in note and NO_COMMITS not in note
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_plan_skill_wins_over_style(plugin, session_env, tmp_path, monkeypatch):
     _fake_skill_loader(monkeypatch, lambda: {})
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="compact", plan_skill="durable-plan-contract")
@@ -2811,6 +2852,7 @@ def test_035_plan_skill_wins_over_style(plugin, session_env, tmp_path, monkeypat
     assert note.count("Make it compact") == 1 and "If the skill cannot be loaded, use this format instead: Make it compact" in note
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_plan_skill_names_the_core_fallback(plugin, session_env, tmp_path, monkeypatch):
     _fake_skill_loader(monkeypatch, lambda: {})
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style="core", plan_skill="durable-plan-contract")
@@ -2819,6 +2861,7 @@ def test_035_plan_skill_names_the_core_fallback(plugin, session_env, tmp_path, m
 
 
 @pytest.mark.parametrize("loader", [lambda: {"inline_shell": True}, None, lambda: 1 / 0])
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_plan_skill_falls_back_to_style_when_skill_view_is_blocked(plugin, session_env, tmp_path, monkeypatch, loader):
     from plan_mode.render import COMPACT_PLAN
     _fake_skill_loader(monkeypatch, loader)
@@ -2828,6 +2871,7 @@ def test_035_plan_skill_falls_back_to_style_when_skill_view_is_blocked(plugin, s
 
 
 @pytest.mark.parametrize("bad", ["", "  ", "two words", "x" * 101, "../etc/passwd;rm", 42])
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_invalid_plan_skill_is_ignored(plugin, session_env, tmp_path, monkeypatch, bad):
     from plan_mode.render import COMPACT_PLAN
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_skill=bad)
@@ -2835,12 +2879,14 @@ def test_035_invalid_plan_skill_is_ignored(plugin, session_env, tmp_path, monkey
 
 
 @pytest.mark.parametrize("value", ["fancy", None, 3])
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_unknown_style_falls_back_to_the_default(plugin, session_env, tmp_path, monkeypatch, value):
     from plan_mode.render import COMPACT_PLAN
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style=value)
     assert COMPACT_PLAN in note and "with numbered steps" not in note
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_core_style_keeps_the_numbered_steps_note(plugin, session_env, tmp_path, monkeypatch):
     from plan_mode.render import COMPACT_PLAN
     note = _note(plugin, tmp_path, monkeypatch, session_env, plan_style=" Core ")
@@ -2848,6 +2894,7 @@ def test_035_core_style_keeps_the_numbered_steps_note(plugin, session_env, tmp_p
 
 
 # Round-2 campaign (TEST-PLAN-2): compact plans without commits met every pre-declared bar, so they are the default.
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_defaults_are_compact_plans_without_commits(plugin, session_env, tmp_path, monkeypatch):
     from plan_mode.render import COMPACT_PLAN, NO_COMMITS
     note = _note(plugin, tmp_path, monkeypatch, session_env)
@@ -2856,6 +2903,7 @@ def test_035_defaults_are_compact_plans_without_commits(plugin, session_env, tmp
 
 
 @pytest.mark.parametrize("value", ["maybe", 3, 0, [], {"x": 1}])
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_unrecognised_allow_commits_keeps_commits_off(plugin, session_env, tmp_path, monkeypatch, value):
     from plan_mode.render import NO_COMMITS
     note = _note(plugin, tmp_path, monkeypatch, session_env, allow_commits=value)
@@ -2863,6 +2911,7 @@ def test_035_unrecognised_allow_commits_keeps_commits_off(plugin, session_env, t
 
 
 @pytest.mark.parametrize("value", [False, "false", "off", "no", "0", " Off "])
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_commits_off_reaches_every_execution_message(plugin, session_env, tmp_path, monkeypatch, submitted_plan, value):
     from plan_mode.render import NO_COMMITS
     plugin.ctx.settings["allow_commits"] = value
@@ -2875,6 +2924,7 @@ def test_035_commits_off_reaches_every_execution_message(plugin, session_env, tm
 
 
 @pytest.mark.parametrize("value", [True, "true", "yes", "on", "1", " True "])
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_commits_allowed_keeps_the_043_text(plugin, session_env, submitted_plan, value):
     from plan_mode.render import NO_COMMITS
     plugin.ctx.settings["allow_commits"] = value
@@ -2884,6 +2934,7 @@ def test_035_commits_allowed_keeps_the_043_text(plugin, session_env, submitted_p
     assert NO_COMMITS not in _submit_result(plugin)["message"]
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_commits_off_on_typed_approve_and_inject(plugin, submitted_plan):
     from plan_mode.render import NO_COMMITS
     plugin.ctx.settings["allow_commits"] = False
@@ -2893,6 +2944,7 @@ def test_035_commits_off_on_typed_approve_and_inject(plugin, submitted_plan):
     assert plugin.ctx.injected and all(content.endswith(NO_COMMITS) for content, _ in plugin.ctx.injected)
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_commits_off_on_the_clarify_fallback(plugin, submitted_plan):
     from plan_mode.render import NO_COMMITS
     plugin.ctx.settings["allow_commits"] = False
@@ -2902,6 +2954,7 @@ def test_035_commits_off_on_the_clarify_fallback(plugin, submitted_plan):
 
 
 # Codex review of 0.3.5 (probe 6): every approval-to-implementation path carries NO_COMMITS when commits are off.
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_commits_off_open_card_typed_approve_result(plugin, submitted_plan):
     from plan_mode.render import NO_COMMITS
     plugin.ctx.settings["allow_commits"] = False
@@ -2913,6 +2966,7 @@ def test_035_commits_off_open_card_typed_approve_result(plugin, submitted_plan):
 
 
 @pytest.mark.parametrize("card", ["deny", "timeout"])
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_commits_off_open_card_blocked_continuation(plugin, submitted_plan, card):
     from plan_mode.render import NO_COMMITS
     plugin.ctx.settings["allow_commits"] = False
@@ -2925,6 +2979,7 @@ def test_035_commits_off_open_card_blocked_continuation(plugin, submitted_plan, 
     assert plugin._load_state("sk:unit-session")["pending_note"].endswith(NO_COMMITS)
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_commits_off_clarify_approval_then_pointer(plugin, submitted_plan):
     from plan_mode.render import NO_COMMITS
     plugin.ctx.settings["allow_commits"] = False
@@ -2986,6 +3041,7 @@ def test_035_compact_plan_summary_lists_steps_not_changes():
     assert "1. notify/channels.py: new channel classes." in approval_text(only_changes, "/p/plan.md", 1, "telegram")
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])
 def test_035_agent_activation_result_carries_the_planning_note(plugin, session_env, tmp_path):
     from plan_mode.render import COMPACT_PLAN, NO_COMMITS
     session_env["TERMINAL_CWD"] = str(tmp_path)

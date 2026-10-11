@@ -66,8 +66,21 @@ def _plain(text: str) -> str:
 
 
 def _title(text, summary, name) -> str:
-    heading = re.search(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$", text, re.MULTILINE)
-    title = _plain(summary) if str(summary).strip() else _plain(heading[1]) if heading else name
+    title = _plain(summary) if str(summary).strip() else ""
+    if not title:
+        lines = _unfenced(text)
+        headings = [_plain(match[2]) for match in map(_HEADING.match, lines) if match]
+        title = next((heading for heading in headings
+                      if heading.lower() != "plan" and not _META_SECTION.match(heading)
+                          and not _FORMAT_LABEL.match(heading)), "")
+        if not title and headings:
+            # Only section labels ("## Summary"): the first line of text under them names the plan. A plan without
+            # headings keeps the file name, as in 0.3.5.
+            for line in lines:
+                if line.strip() and not _HEADING.match(line):
+                    item = _LIST_ITEM.match(line.strip())
+                    title = _plain(item[1] if item else line)[:80]
+                    break
     return re.sub(r"(?i)^plan(?:\s*\([^)]*\))?(?:\s*:\s*|\s+[—–-]\s+)", "", title) or name
 
 
@@ -95,6 +108,8 @@ _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_ME
 _META_TAIL = re.compile(r"(?i)^(?:steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes|approach|"
                         r"plan)\s+(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
                         r"open questions|non-goals|out of scope)\s*:?$")
+# Section names of the compact and lean plan formats. Titles skip them too; step selection keeps _META_SECTION.
+_FORMAT_LABEL = re.compile(r"(?i)^(?:key changes|changes(?: per file)?|decisions(?: and assumptions)?|steps)\s*:?$")
 _STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+(?:\.\d+)*[a-z]?(?![a-z0-9])\s*[:.)—–-]*\s*")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")  # 4+ spaces is indented code
 _LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.+)$")
@@ -196,11 +211,11 @@ def _steps(text: str) -> list[str]:
 def approval_text(text, path, revision, platform, summary="") -> str:
     name = Path(path).name
     if str(platform).lower() in {"cli", "terminal"}:
-        # The classic CLI streams the full plan just above its approval panel, and the panel
-        # does not wrap embedded newlines, so it gets one line.
+        # The modal classic CLI panel does not wrap embedded newlines. Non-streaming
+        # replies may not be printed, so include a way to view the plan before approval.
         title = _title(text, summary, name)[:160]
-        return (f"Plan rev {revision} ({name}): {title}. The full plan is shown above; "
-                "approve to start implementing, deny to keep planning.")
+        return (f"Plan rev {revision} ({name}): {title}. Approve to start implementing, deny to keep planning "
+                "(the plan is in the reply above; if it is not, deny and run /planmode show).")
     if str(platform).lower() in {"telegram", "slack", "discord"}:
         title = _title(text, summary, name)
         steps = _steps(text)

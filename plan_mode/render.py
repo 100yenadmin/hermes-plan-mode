@@ -22,6 +22,25 @@ COMPACT_PLAN = (
 NO_COMMITS = (
     "Do not commit, and do not plan commit steps, unless the user asked for commits; leave the changes for the user to review."
 )
+CODEX_COMPACT_PLAN = (
+    "Summary; Key changes, grouped by behaviour or subsystem, naming every touched file and every consumer of a "
+    "changed interface; Test plan (exact commands); Assumptions. Concise by default; a straightforward change fits "
+    "in about 5 bullets; expand only when asked. Do not include time estimates, RED/GREEN steps, unchanged-file "
+    "lists, or repeating repo facts. This format replaces any other plan template or plan-writing guidance for this plan."
+)
+PLAN_BUDGET = (
+    "Keep it short: for a change to a few files, aim for under about 1,200 characters. Key changes get one bullet per "
+    "file or behaviour, one or two sentences each, saying what changes and who consumes it, not how to write it (no "
+    "code and no test-case lists; show a signature only where it changes). The test plan lists the commands only. "
+    "Assumptions list only choices the user might disagree with; leave the section out if there are none."
+)
+LEAN_CRAFT = (
+    "This supersedes the core /plan craft: no 2–5-minute task slicing, no copy-pasteable full code, and no per-task "
+    "red/green TDD cycle or deliberately failing test runs unless the user asked for TDD. Do not load a TDD skill "
+    "unless asked. Add or update tests for changed behaviour and run them after implementing. Write the plan file "
+    "only at the absolute path given above, never the relative .hermes/plans path from the /plan instructions."
+)
+LEAN_EXECUTION = "Implement directly, with no red-first ceremony unless the user asked for TDD."
 LOCAL_PLATFORMS = frozenset({
     "cli", "terminal", "tui", "desktop", "dashboard", "api_server", "webhook",
     "acp", "local", "batch", "cron", "subagent", "curator",
@@ -35,21 +54,25 @@ def plan_file_stamp(now=None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
 
 
-def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=True) -> str:
+def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=True,
+                  levers=frozenset(), previous_plan="", platform="", reply_plan=False) -> str:
     stamp = plan_file_stamp(now)
     target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
+    compact = CODEX_COMPACT_PLAN if "codex_compact" in levers else COMPACT_PLAN
+    if "plan_budget" in levers:
+        compact = f"{compact} {PLAN_BUDGET}"
     if plan_skill:
-        fallback = COMPACT_PLAN if style == "compact" else "Write it with numbered steps."
+        fallback = compact if style == "compact" else "Write it with numbered steps."
         write = (f"2. Load the {plan_skill} skill with skill_view and write the plan in its format, as Markdown to {target}. "
                  "Its format replaces any other plan template or plan-writing guidance for this plan. "
                  f"If the skill cannot be loaded, use this format instead: {fallback}")
     elif style == "compact":
-        write = f"2. Write the plan as Markdown to {target}. {COMPACT_PLAN}"
+        write = f"2. Write the plan as Markdown to {target}. {compact}"
     else:
         write = f"2. Write the plan as Markdown to {target}, with numbered steps."
     if not commits:
         write += f" {NO_COMMITS}"
-    return (
+    note = (
         f"Plan mode is ON: only read-only tools work, and files may be written only under {plans_dir}.\n"
         "1. Explore with read-only tools first and settle every fact the files can answer yourself. Then, before writing the plan, "
         "ask with the clarify tool about each open choice only the user can make (a preference or tradeoff that changes what "
@@ -60,15 +83,50 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'
         "In group chats, keep secrets and private details out of the plan."
     )
+    if "question_shape" in levers:
+        # v2: keep the ask-before-writing directive; only bound the number and shape of questions.
+        note = note.replace(
+            "such as behaviour, policy, format or scope): up to 4 short choices, recommended first.",
+            "such as behaviour, policy, format or scope) and that reading the repo cannot settle: prefer 1 question, "
+            "at most 3, each with 2–3 short choices written as label — consequence, recommended first.",
+        )
+    if "plan_once" in levers and str(platform).strip().lower() == "mattermost":
+        note = note.replace(
+            '3. Show the complete plan in your reply, then call',
+            '3. If the plan is at most 3,000 characters, show only a 3–5 line summary plus the path in your reply; '
+            'the approval prompt contains the full plan. For a longer plan, show the complete plan in your reply. Then call',
+        )
+    if "plan_once" in levers and reply_plan:
+        note = note.replace(f"as Markdown to {target}", "as Markdown in your reply text")
+        note = note.replace("2. Write the plan as Markdown in your reply text", "2. Write the complete plan as your reply text, in Markdown")
+        start, end = note.index("3. "), note.index("\n4. ")
+        note = note[:start] + (
+            '3. In that same response, call plan_mode(action="submit") with no path, on its own '
+            '(if plan_mode is not loaded, find it with tool_search "plan_mode"). '
+            'The plugin saves your reply as the plan file; do not write the plan file yourself. '
+            'Approval starts implementation in this same turn.'
+        ) + note[end:]
+    if "lean_craft" in levers and style == "compact" and not plan_skill:
+        note += "\n" + (LEAN_CRAFT.split(" Write the plan file ")[0] if reply_plan else LEAN_CRAFT)
+    if "sticky" in levers:
+        note += '\nWhile plan mode is on, a request to implement or "just do it" means plan the implementation and submit; do not call blocked tools.'
+    if "reentry" in levers and previous_plan:
+        note += f"\nPrevious plan: {previous_plan}. Read it; refine it for the same task or start a new file for a different task."
+    return note
 
 
-def executing_pointer(state: dict, *, commits=True) -> str:
+def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
     revision = state.get("approved_revision")
     rev = f" (rev {revision})" if revision is not None else ""
-    return (
+    result = (
         f"Executing the approved plan {state.get('approved_path')}{rev}. "
         "Keep todo_list statuses current; re-read the plan if your context was compacted."
     ) + ("" if commits else f" {NO_COMMITS}")
+    if "todo_batch" in levers:
+        result = result.replace("Keep todo_list statuses current;", "If using todo_list, batch status updates with the next real tool call;")
+    if "lean_craft" in levers:
+        result += " " + LEAN_EXECUTION
+    return result
 
 
 def plan_text(path: str, text: str, revision, status: str) -> str:

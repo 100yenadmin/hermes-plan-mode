@@ -13,6 +13,8 @@ from types import ModuleType
 
 import pytest
 
+from test_plan_mode import plan_profile
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -900,7 +902,7 @@ def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatc
 
 
 @pytest.fixture
-def real_submit_host(tmp_path, monkeypatch):
+def real_submit_host(tmp_path, monkeypatch, plan_profile):
     pytest.importorskip("hermes_cli.plugins")
     approval = pytest.importorskip("tools.approval")
     if not callable(getattr(approval, "request_tool_approval", None)):
@@ -917,7 +919,9 @@ def real_submit_host(tmp_path, monkeypatch):
     bundled.mkdir()
     _copy_plugin(home / "plugins" / "plan-mode")
     (home / "config.yaml").write_text(
-        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\napprovals:\n  mode: manual\n",
+        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n"
+        f"  entries:\n    plan-mode:\n      settings:\n        plan_profile: {plan_profile}\n"
+        "approvals:\n  mode: manual\n",
         encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
@@ -1018,7 +1022,8 @@ def real_u2_host(tmp_path, monkeypatch):
     bundled.mkdir()
     _copy_plugin(home / "plugins" / "plan-mode")
     (home / "config.yaml").write_text(
-        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n", encoding="utf-8")
+        "plugins:\n  enabled: [plan-mode]\n  load_timeout_seconds: 0\n"
+        "  entries:\n    plan-mode:\n      settings:\n        plan_profile: classic\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
     monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
@@ -1149,3 +1154,119 @@ def test_v034_real_mismatched_tagged_question_blocked(real_clarify_host, monkeyp
     state = host.command.__self__._load_state("sk:submit-session")
     assert state["active"] and state["submission"]["status"] == "awaiting"
     assert state["submission"]["clarify"]["tool_call_id"] == ""
+
+
+@pytest.fixture
+def plan_once_enabled(monkeypatch):
+    monkeypatch.setenv("PLAN_MODE_LEVERS", "plan_once")
+
+
+@pytest.mark.usefixtures("plan_once_enabled")
+def test_plan_once_real_tracked_file_fallback(real_submit_host):
+    host = real_submit_host
+    plugin = host.command.__self__
+    # Real PluginContext accepts an undeclared flat settings key on all three hosts.
+    plugin.ctx.set_config("levers", "plan_once")
+    assert plugin.ctx.get_config("levers") == "plan_once"
+    assert plugin._levers() == {"plan_once"}
+    assert host.plugins.has_hook("post_api_request")
+    host.callback(lambda *args, **kw: "once")
+    result = json.loads(host.submit())
+    assert result["approved"] is True
+    assert Path(result["path"]).name == "plan.md"
+    assert Path(result["path"]).read_text() == "# Plan\n\n## Implement\n## Verify"
+
+
+@pytest.mark.usefixtures("plan_once_enabled")
+def test_plan_once_real_capture_dispatch(real_submit_host, monkeypatch, tmp_path):
+    host = real_submit_host
+    from gateway.session_context import clear_session_vars, set_session_vars
+    if "post_api_request" not in host.plugins.VALID_HOOKS:
+        pytest.skip("Hermes lacks post_api_request")
+    pytest.importorskip("agent.history_commentary", reason="Hermes build lacks the commentary helpers plan_once needs")
+    # Loaded server marker plus the actual turn-bound public ContextVar signal.
+    monkeypatch.setitem(sys.modules, "tui_gateway.server", SimpleNamespace(
+        _active_config_path=lambda: tmp_path / "home/config.yaml"))
+    tokens = set_session_vars(source="cli", session_key="submit-session", ui_session_id="ui-proof",
+                              session_id="submit-session", cwd=str(tmp_path / "ws"))
+    text = "# Captured plan\n\nChange parser.py and cli.py. Add a behaviour test. Run pytest tests/test_parser.py."
+    response = SimpleNamespace(content="", codex_message_items=[{
+        "type": "message", "role": "assistant", "phase": "commentary",
+        "content": [{"type": "output_text", "text": text}]}],
+        tool_calls=[SimpleNamespace(id="response-item", call_id="submit-1")])
+    try:
+        assert host.plugins.has_hook("post_api_request")
+        host.plugins.invoke_hook("post_api_request", assistant_message=response,
+                                 provider="openai-codex", session_id="submit-session")
+        directive, description = host.plugins.get_pre_tool_call_directive(
+            "plan_mode", {"action": "submit"}, session_id="submit-session", tool_call_id="submit-1")
+        assert directive == "approve" and "Plan rev 1" in description
+        plugin = host.command.__self__
+        state = plugin._load_state("ui:ui-proof")
+        path = Path(state["submission"]["path"])
+        assert path.read_bytes() in (text.encode(), (text + "\n").encode())
+        assert str(path) in state["plan_files"]
+        # Complete the prepared directive through real human-decision hook dispatch.
+        host.plugins.invoke_hook("post_approval_response", pattern_key="plugin_rule:" + state["submission"]["rule_key"],
+                                 choice="once", tool_call_id="submit-1")
+        result = json.loads(plugin.tool({"action": "submit"}))
+        assert result["approved"] is True and result["path"] == str(path)
+    finally:
+        clear_session_vars(tokens)
+
+
+@pytest.fixture
+def approved_text_enabled(monkeypatch):
+    monkeypatch.setenv("PLAN_MODE_LEVERS", "approved_text")
+
+
+@pytest.mark.usefixtures("approved_text_enabled")
+def test_approved_text_real_clarify_result(real_clarify_host, monkeypatch):
+    host = real_clarify_host
+    _inject_real_clarify_callback(host, monkeypatch, host.question["choices"][0], [])
+    result = json.loads(host.call_clarify({"questions": [{**host.question, "multi_select": False}]}))
+    assert "## Implement" in result["plan_mode_approval"]
+    assert "Plan: " in result["plan_mode_approval"]
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({}, "lean"),
+    ({"plan_profile": "classic"}, "classic"),
+    ({"plan_profile": "lean"}, "lean"),
+    ({"plan_mode": {"plan_profile": "lean"}}, "lean"),
+    ({"plan_profile": "classic", "plan_mode": {"plan_profile": "lean"}}, "classic"),
+    ({"plan_profile": "lean", "levers": "sticky"}, "lean (custom levers)"),
+])
+def test_real_plugin_manager_plan_profile(tmp_path, monkeypatch, settings, expected):
+    pytest.importorskip("hermes_cli.plugins")
+    from hermes_cli import plugins
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from gateway.session_context import clear_session_vars, set_session_vars
+
+    home, workspace, bundled = tmp_path / "home", tmp_path / "workspace", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    # JSON is valid YAML on all three hosts; nested settings exercise real ctx.get_config.
+    (home / "config.yaml").write_text(json.dumps({"plugins": {
+        "enabled": ["plan-mode"], "load_timeout_seconds": 0,
+        "entries": {"plan-mode": {"settings": settings}}}}), encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.delenv("PLAN_MODE_LEVERS", raising=False)
+    home_token = set_hermes_home_override(str(home))
+    tokens = set_session_vars(source="cli", session_key="profile-test", session_id="profile-test", cwd=str(workspace))
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        manager = plugins.get_plugin_manager()
+        manager.discover_and_load()
+        assert manager._plugins["plan-mode"].enabled
+        command = plugins.get_plugin_command_handler("planmode")
+        assert f"Plan profile: {expected}" in command("status").splitlines()
+        assert "Plan mode is on" in command("on profile test")
+        assert f"Plan profile: {expected}" in command("status").splitlines()
+    finally:
+        clear_session_vars(tokens)
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
