@@ -82,8 +82,9 @@ def test_default_off_golden(make_plugin, monkeypatch):
     plugin._ledger.record_response(pattern_key="plugin_rule:plan-mode:fixed", choice="once", tool_call_id="submit")
     assert plugin._complete_submission("raw", "storage", state()) == golden["approved"]
     assert plugin._complete_submission("raw", "storage", state()) == golden["bypass"]
-    assert "post_api_request" not in plugin.ctx.hooks
-    assert "post_llm_call" not in plugin.ctx.hooks
+    # The lever hooks are registered for every profile but do nothing without their levers.
+    assert plugin.post_api_request(assistant_message={"content": "x" * 200, "tool_calls": []}) is None
+    assert plugin._reply_captures == {}
 
 
 @pytest.mark.parametrize("value,expected", [("all", LEVER_NAMES), ("sticky, reentry unknown", {"sticky", "reentry"}), ("", set())])
@@ -169,6 +170,17 @@ def test_todo_batch_clear_at_turn_end(make_plugin):
     assert plugin.pre_llm_call() is None
 
 
+def test_profile_switch_needs_no_restart(make_plugin):
+    plugin = make_plugin("", plan_profile="classic")
+    approve_gate(plugin, write_plan(plugin))
+    turn_end = plugin.ctx.hooks["post_llm_call"]  # registered at startup, under classic
+    turn_end(**IDS)
+    assert "Executing the approved plan" in plugin.pre_llm_call()["context"]  # classic keeps the pointer
+    plugin.ctx.settings["plan_profile"] = "lean"
+    turn_end(**IDS)
+    assert plugin.pre_llm_call() is None
+
+
 def test_todo_batch_keeps_current_execution_items(make_plugin):
     plugin = make_plugin("todo_batch")
     path = write_plan(plugin)
@@ -241,7 +253,7 @@ def test_reentry(make_plugin, approved):
     assert str(path) not in plugin.pre_llm_call()["context"]
 
 
-@pytest.mark.parametrize("route", ["gate", "typed", "clarify"])
+@pytest.mark.parametrize("route", ["gate", "typed", "clarify", "clarify_list"])
 @pytest.mark.parametrize("profile", ["classic", "lean"])
 def test_approved_text(make_plugin, route, profile):
     plugin = make_plugin("approved_text", plan_profile=profile)
@@ -258,9 +270,13 @@ def test_approved_text(make_plugin, route, profile):
         args = {"questions": [clarify]}
         assert plugin.pre_tool_call("clarify", args, tool_call_id="clarify") is None
         payload = {"question": clarify["question"], "user_response": clarify["choices"][0]}
+        if route == "clarify_list":
+            payload = [payload]  # legacy hosts return a bare list of answers
         plugin.post_tool_call("clarify", args, tool_call_id="clarify", status="ok", result=json.dumps(payload))
         transformed = plugin.transform_tool_result("clarify", args, result=json.dumps(payload), tool_call_id="clarify")
-        message = json.loads(transformed)["plan_mode_approval"]
+        decoded = json.loads(transformed)
+        assert decoded.get("result", payload) == payload
+        message = decoded["plan_mode_approval"]
     assert TEXT in message
     excerpt = message[message.index("Plan: "):]
     assert len(excerpt) <= 3500

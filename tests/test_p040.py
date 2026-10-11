@@ -72,6 +72,11 @@ TITLE_CASES = [
     ("# Summary\n```bash\n# run tests\n```\nAdd slugify.", "Add slugify."),
     ("## Summary\n- **Add** slugify to textutil\n", "Add slugify to textutil"),
     ("```python\n# not a heading\n```\n# Real title\n", "Real title"),
+    ("## Summary\nAdd slugify to parser.\n## Key changes\n- parser.py\n## Test plan\n- pytest\n## Assumptions\n- none",
+     "Add slugify to parser."),
+    ("## Goal\nAdd slugify.\n## Decisions and assumptions\n- ascii\n## Changes\n- parser.py\n## Steps\n1. Edit\n"
+     "## Validation\n- pytest", "Add slugify."),
+    ("## Key changes\n## Real title", "Real title"),
 ]
 
 

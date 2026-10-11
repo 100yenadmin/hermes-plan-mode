@@ -91,9 +91,10 @@ def test_registers_exact_surface(plugin, plan_profile):
         "post_approval_response",
         "on_session_finalize",
         "on_session_reset",
+        "post_llm_call",
+        "transform_tool_result",
+        "post_api_request",
     }
-    if plan_profile == "lean":
-        expected_hooks |= {"post_llm_call", "transform_tool_result"}
     assert set(plugin.ctx.hooks) == expected_hooks
 
 

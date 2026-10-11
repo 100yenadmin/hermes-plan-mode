@@ -71,7 +71,8 @@ def _title(text, summary, name) -> str:
         lines = _unfenced(text)
         headings = [_plain(match[2]) for match in map(_HEADING.match, lines) if match]
         title = next((heading for heading in headings
-                      if heading.lower() != "plan" and not _META_SECTION.match(heading)), "")
+                      if heading.lower() != "plan" and not _META_SECTION.match(heading)
+                          and not _FORMAT_LABEL.match(heading)), "")
         if not title and headings:
             # Only section labels ("## Summary"): the first line of text under them names the plan. A plan without
             # headings keeps the file name, as in 0.3.5.
@@ -107,6 +108,8 @@ _META_SECTION = re.compile(rf"(?i)^{_META_WORD}(?:\s*(?:[/,&]|\band\b)\s*(?:{_ME
 _META_TAIL = re.compile(r"(?i)^(?:steps?|tasks?|implementation|to-?dos?|milestones?|phases?|execution|changes|approach|"
                         r"plan)\s+(?:notes?|context|assumptions|background|overview|summary|risks?|tradeoffs|"
                         r"open questions|non-goals|out of scope)\s*:?$")
+# Section names of the compact and lean plan formats. Titles skip them too; step selection keeps _META_SECTION.
+_FORMAT_LABEL = re.compile(r"(?i)^(?:key changes|changes(?: per file)?|decisions(?: and assumptions)?|steps)\s*:?$")
 _STEP_PREFIX = re.compile(r"(?i)^(?:step|phase|task)\s*\d+(?:\.\d+)*[a-z]?(?![a-z0-9])\s*[:.)—–-]*\s*")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$")  # 4+ spaces is indented code
 _LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.+)$")

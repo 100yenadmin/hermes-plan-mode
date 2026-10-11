@@ -42,8 +42,8 @@
   faster in a pre-registered round, but it did not hold the plan-quality bar, so it stays opt-in until a revised
   version passes. It needs Hermes 0.21.5 (v2026.9.24) or later; on older Hermes it stays off and the plan file is
   written as usual.
-- `plugin.yaml` declares every hook the plugin can register, including the conditional `post_llm_call`,
-  `transform_tool_result` and `post_api_request`, so `hermes plugins validate` passes with the lean default.
+- `plugin.yaml` declares every hook the plugin registers, including `post_llm_call`, `transform_tool_result` and
+  `post_api_request`, which do nothing unless their lever is on.
 - The classic CLI approval prompt no longer claims the plan is shown above. It now says the plan is in the reply
   above, and if it is not, to deny and run `/planmode show`. With `display.streaming: false` the reply may not be
   printed before the modal prompt.
@@ -53,11 +53,13 @@
 - The approve directive asks Hermes not to offer "Always" for a plan (`allow_permanent: false`). Current Hermes
   releases ignore the key and still show "Always", which behaves like once for plans; the prompt drops it once Hermes
   supports the key.
-- Approval titles and plan-file names skip generic section labels such as Summary, Goal or Context.
+- Approval titles and plan-file names skip generic section labels such as Summary, Goal or Context, and the plan
+  formats' own section names (Key changes, Changes, Decisions and assumptions, Steps).
   - They use the first heading that names the plan; if every heading is a label, the first line of text under them.
   - A `# comment` inside a fenced code block is no longer mistaken for a heading.
   - Plans without headings keep the file name as their title.
-- `/planmode status` shows the Plan profile.
+- `/planmode status` shows the Plan profile. Changing the profile, Plan style or Plan skill takes effect on the next
+  turn, with no restart.
 - CI now tests Hermes 0.21.6 and a current `main` (both on Python 3.14); the old `main` pin is dropped.
 - The minimum Hermes is now 0.21.3 (`requires_hermes: ">=0.21.3"`), the oldest version CI tests. 0.21.2 was never
   tested, and its approval gate still prompts the user when `approvals.mode` is `off`, which the approvals-off path's

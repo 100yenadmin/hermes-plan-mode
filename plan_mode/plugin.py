@@ -438,12 +438,11 @@ class PlanModePlugin:
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
         self.ctx.register_hook("transform_llm_output", self.transform_llm_output)
-        if "plan_once" in self._levers():
-            self.ctx.register_hook("post_api_request", self.post_api_request)
-        if "todo_batch" in self._levers():
-            self.ctx.register_hook("post_llm_call", self.post_llm_call)
-        if "approved_text" in self._levers() or "lean_craft" in self._note_levers():
-            self.ctx.register_hook("transform_tool_result", self.transform_tool_result)
+        # Always registered: settings are read per call, so a profile switch needs no restart; each hook no-ops
+        # unless its lever is on.
+        self.ctx.register_hook("post_api_request", self.post_api_request)
+        self.ctx.register_hook("post_llm_call", self.post_llm_call)
+        self.ctx.register_hook("transform_tool_result", self.transform_tool_result)
         self.ctx.register_hook("pre_approval_request", self._ledger.record_presented)
         self.ctx.register_hook("post_approval_response", self._ledger.record_response)
         self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
@@ -1427,7 +1426,7 @@ class PlanModePlugin:
                     return None
                 value = json.loads(kwargs["result"])
                 if not isinstance(value, dict):
-                    return None
+                    value = {"result": value}  # legacy hosts return a bare list of answers
                 value["plan_mode_approval"] = note[1]
                 return json.dumps(value, ensure_ascii=False)
         except Exception:
