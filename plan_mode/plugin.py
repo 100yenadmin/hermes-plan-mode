@@ -330,14 +330,26 @@ def _plans_dir_is_still_safe(plans_dir: str) -> bool:
         return False
 
 
+_PLAN_ONCE_DISPLAY_SNAPSHOTS: dict[str, tuple[bool, bool]] = {}
+_PLAN_ONCE_DISPLAY_LOCK = threading.Lock()
+
+
+def _reset_plan_once_visibility() -> None:
+    """Clear the in-process session snapshots (for isolated tests)."""
+    with _PLAN_ONCE_DISPLAY_LOCK:
+        _PLAN_ONCE_DISPLAY_SNAPSHOTS.clear()
+
+
 def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
-    """Only a bound tui_gateway turn with readable, visible interim policy."""
-    server = sys.modules.get("tui_gateway.server")
-    reader = _session_reader()
-    if (server is None or reader is None or not _session_context_is_engaged()
-            or not reader("HERMES_UI_SESSION_ID", "")):
-        return False
+    """Require both the session's initial and current interim display policy."""
     try:
+        server = sys.modules.get("tui_gateway.server")
+        reader = _session_reader()
+        if server is None or reader is None or not _session_context_is_engaged():
+            return False
+        session_id = reader("HERMES_UI_SESSION_ID", "")
+        if not session_id:
+            return False
         # Capture needs this (Hermes v2026.9.24+); without it the note must not promise a saved reply.
         from agent.history_commentary import visible_commentary  # noqa: F401
         from hermes_cli.config import require_readable_config_before_write
@@ -356,9 +368,21 @@ def _plan_once_visible(*, provider: str = "", codex: bool = False) -> bool:
         provider = provider or (model.get("provider", "") if isinstance(model, dict) else "")
         # pre_llm_call has no provider kwarg; unknown providers fail conservatively.
         needs_commentary = codex or not provider or provider == "openai-codex"
-        return is_truthy_value(display.get("interim_assistant_messages", True)) and (
-            not needs_commentary or (bool(display.get("show_commentary", True))
-                                    and is_truthy_value(display.get("show_commentary", True))))
+        interim = bool(is_truthy_value(display.get("interim_assistant_messages", True)))
+        commentary = (bool(display.get("show_commentary", True))
+                      and bool(is_truthy_value(display.get("show_commentary", True))))
+        # Hermes retains its agent's display flags across turns. Never treat a
+        # newly enabled flag as visible on that existing session's agent.
+        with _PLAN_ONCE_DISPLAY_LOCK:
+            snapshot = _PLAN_ONCE_DISPLAY_SNAPSHOTS.get(session_id)
+            if snapshot is None:
+                snapshot = (interim, commentary)
+                _PLAN_ONCE_DISPLAY_SNAPSHOTS[session_id] = snapshot
+                if len(_PLAN_ONCE_DISPLAY_SNAPSHOTS) > 256:
+                    _PLAN_ONCE_DISPLAY_SNAPSHOTS.pop(next(iter(_PLAN_ONCE_DISPLAY_SNAPSHOTS)))
+        interim = snapshot[0] and interim
+        commentary = snapshot[1] and commentary
+        return interim and (not needs_commentary or commentary)
     except Exception:
         return False
 

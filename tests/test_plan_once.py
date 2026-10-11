@@ -67,6 +67,148 @@ def submit(plugin, call_id="submit", **args):
                                 session_id="s", tool_call_id=call_id)
 
 
+@pytest.fixture
+def once_config_file(once, monkeypatch):
+    plugin, config = once
+    from hermes_cli import config_effective
+    path = sys.modules["tui_gateway.server"]._active_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config))
+    monkeypatch.setattr(config_effective, "load_user_config_effective",
+                        lambda path, **kw: json.loads(Path(path).read_text()))
+    return plugin, config, path
+
+
+def test_once_commentary_enable_keeps_session_snapshot(once_config_file):
+    plugin, config, path = once_config_file
+    config["display"]["show_commentary"] = False
+    path.write_text(json.dumps(config))
+    assert "as Markdown to" in plugin.pre_llm_call()["context"]
+    config["display"]["show_commentary"] = True
+    path.write_text(json.dumps(config))
+    assert "as Markdown to" in plugin.pre_llm_call()["context"]
+    capture(plugin)
+    assert submit(plugin)["action"] == "block"
+    assert not plugin._load_state("ui:ui-1")["plan_files"]
+
+
+@pytest.mark.parametrize("flag", ["interim_assistant_messages", "show_commentary"])
+@pytest.mark.parametrize("initial,current", [(True, False), (True, True), (False, True), (False, False)])
+def test_once_visibility_requires_initial_and_current_flags(once_config_file, flag, initial, current):
+    _, config, path = once_config_file
+    config["display"][flag] = initial
+    path.write_text(json.dumps(config))
+    assert pm._plan_once_visible() is initial
+    config["display"][flag] = current
+    path.write_text(json.dumps(config))
+    assert pm._plan_once_visible() is (initial and current)
+
+
+def test_once_sessions_keep_independent_display_snapshots(once, session_env):
+    _, config = once
+    config["display"]["show_commentary"] = False
+    assert pm._plan_once_visible() is False
+    session_env["HERMES_UI_SESSION_ID"] = "ui-2"
+    config["display"]["show_commentary"] = True
+    assert pm._plan_once_visible() is True
+    session_env["HERMES_UI_SESSION_ID"] = "ui-1"
+    assert pm._plan_once_visible() is False
+    assert pm._PLAN_ONCE_DISPLAY_SNAPSHOTS == {"ui-1": (True, False), "ui-2": (True, True)}
+
+
+def test_once_display_snapshots_evict_oldest_after_256(once, session_env):
+    _, config = once
+    session_env["HERMES_UI_SESSION_ID"] = "ui-0"
+    config["display"]["show_commentary"] = False
+    assert pm._plan_once_visible() is False
+    config["display"]["show_commentary"] = True
+    for index in range(1, 256):
+        session_env["HERMES_UI_SESSION_ID"] = f"ui-{index}"
+        assert pm._plan_once_visible() is True
+    assert len(pm._PLAN_ONCE_DISPLAY_SNAPSHOTS) == 256
+    session_env["HERMES_UI_SESSION_ID"] = "ui-0"
+    assert pm._plan_once_visible() is False  # reads must not refresh insertion order
+    session_env["HERMES_UI_SESSION_ID"] = "ui-256"
+    assert pm._plan_once_visible() is True
+    assert list(pm._PLAN_ONCE_DISPLAY_SNAPSHOTS) == [f"ui-{index}" for index in range(1, 257)]
+    session_env["HERMES_UI_SESSION_ID"] = "ui-0"
+    assert pm._plan_once_visible() is True  # the evicted session takes a fresh snapshot
+    assert len(pm._PLAN_ONCE_DISPLAY_SNAPSHOTS) == 256
+    assert "ui-1" not in pm._PLAN_ONCE_DISPLAY_SNAPSHOTS
+
+
+@pytest.mark.parametrize("failure", ["guard", "loader", "display", "helpers", "server",
+                                     "context", "reader-missing", "reader-error", "session-id"])
+def test_once_failed_visibility_check_does_not_snapshot(once, monkeypatch, session_env, failure):
+    _, config = once
+    from hermes_cli import config as host_config, config_effective
+    config["display"]["show_commentary"] = False
+
+    def unreadable(*args, **kwargs):
+        raise OSError("unreadable test config or context")
+
+    with monkeypatch.context() as patch:
+        if failure == "guard":
+            patch.setattr(host_config, "require_readable_config_before_write", unreadable)
+        elif failure == "loader":
+            patch.setattr(config_effective, "load_user_config_effective", unreadable)
+        elif failure == "display":
+            patch.setitem(config, "display", [])
+        elif failure == "helpers":
+            patch.setitem(sys.modules, "agent.history_commentary", None)
+        elif failure == "server":
+            patch.delitem(sys.modules, "tui_gateway.server")
+        elif failure == "context":
+            patch.setattr(pm, "_session_context_is_engaged", lambda: False)
+        elif failure == "reader-missing":
+            patch.setattr(pm, "_session_reader", lambda: None)
+        elif failure == "reader-error":
+            patch.setattr(pm, "_session_reader", lambda: unreadable)
+        else:
+            patch.setitem(session_env, "HERMES_UI_SESSION_ID", "")
+        assert pm._plan_once_visible() is False
+        assert pm._PLAN_ONCE_DISPLAY_SNAPSHOTS == {}
+    config["display"]["show_commentary"] = True
+    assert pm._plan_once_visible() is True
+    assert pm._PLAN_ONCE_DISPLAY_SNAPSHOTS == {"ui-1": (True, True)}
+
+
+def test_once_snapshot_keeps_raw_flags_for_each_provider(once):
+    _, config = once
+    config["model"]["provider"] = "anthropic"
+    config["display"]["show_commentary"] = False
+    assert pm._plan_once_visible() is True
+    assert pm._PLAN_ONCE_DISPLAY_SNAPSHOTS == {"ui-1": (True, False)}
+    config["display"]["show_commentary"] = True
+    assert pm._plan_once_visible(provider="openai-codex") is False
+    assert pm._plan_once_visible(provider="anthropic", codex=True) is False
+    config["model"]["provider"] = ""
+    assert pm._plan_once_visible() is False
+    assert pm._plan_once_visible(provider="anthropic") is True
+
+
+@pytest.mark.parametrize("value,expected", [("false", False), ("on", True), (None, False), (0, False)])
+def test_once_snapshot_preserves_flag_coercion(once, value, expected):
+    _, config = once
+    config["display"] = {"interim_assistant_messages": value, "show_commentary": value}
+    assert pm._plan_once_visible() is expected
+    assert pm._PLAN_ONCE_DISPLAY_SNAPSHOTS == {"ui-1": (expected, expected)}
+
+
+def test_once_all_consumers_honor_current_visibility(once_config_file):
+    plugin, config, path = once_config_file
+    capture(plugin)
+    config["display"]["show_commentary"] = False
+    path.write_text(json.dumps(config))
+    assert "as Markdown to" in plugin.pre_llm_call()["context"]
+    state = plugin._load_state("ui:ui-1")
+    assert plugin._save_reply_plan("ui:ui-1", state, "submit")["action"] == "block"
+    capture(plugin, ids=("hidden",))
+    assert ("ui:ui-1", "hidden") not in plugin._reply_captures
+    assert submit(plugin)["action"] == "block"
+    assert not plugin._load_state("ui:ui-1")["plan_files"]
+
+
 @pytest.mark.parametrize("surface,ui", [("tui", True), ("desktop", True), ("cli", True),
                                         ("serve", True), ("cli", False),
                                         ("telegram", False), ("mattermost", False)])
