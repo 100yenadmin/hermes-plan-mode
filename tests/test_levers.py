@@ -15,7 +15,7 @@ from test_plan_mode import FakeContext, session_env
 
 LEVER_NAMES = {
     "plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
-    "sticky", "reentry", "approved_text", "light_notes",
+    "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
 }
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
 IDS = dict(session_id="s", turn_id="t", api_request_id="r", tool_call_id="submit")
@@ -182,6 +182,23 @@ def test_codex_compact(make_plugin):
     for text in ["Summary", "Key changes", "Test plan", "Assumptions", "every touched file", "every consumer", "about 5 bullets", "time estimates", "RED/GREEN", "replaces any other plan template"]:
         assert text in note
     assert "Steps (numbered" not in note
+
+
+def test_plan_budget(make_plugin):
+    budget = ["under about 1,200 characters", "one bullet per file or behaviour", "who consumes it",
+              "not how to write it", "no test-case lists", "commands only", "leave the section out"]
+    for levers in ("plan_budget", "plan_budget codex_compact"):
+        plugin = make_plugin(levers, plan_style="compact")
+        plugin.command("on")
+        note = plugin.pre_llm_call()["context"]
+        assert all(text in note for text in budget), levers
+        if "codex_compact" in levers:
+            assert note.index("about 5 bullets") < note.index("under about 1,200 characters")
+    # Core style keeps Hermes' own craft, so the budget does not apply; without the lever nothing changes.
+    for levers, style in (("plan_budget", "core"), ("codex_compact", "compact"), ("", "compact")):
+        plugin = make_plugin(levers, plan_style=style)
+        plugin.command("on")
+        assert "under about 1,200 characters" not in plugin.pre_llm_call()["context"], (levers, style)
 
 
 def test_question_shape(make_plugin):

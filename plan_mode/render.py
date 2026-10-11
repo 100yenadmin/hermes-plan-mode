@@ -28,6 +28,12 @@ CODEX_COMPACT_PLAN = (
     "in about 5 bullets; expand only when asked. Do not include time estimates, RED/GREEN steps, unchanged-file "
     "lists, or repeating repo facts. This format replaces any other plan template or plan-writing guidance for this plan."
 )
+PLAN_BUDGET = (
+    "Keep it short: for a change to a few files, aim for under about 1,200 characters. Key changes get one bullet per "
+    "file or behaviour, one or two sentences each, saying what changes and who consumes it, not how to write it (no "
+    "code and no test-case lists; show a signature only where it changes). The test plan lists the commands only. "
+    "Assumptions list only choices the user might disagree with; leave the section out if there are none."
+)
 LEAN_CRAFT = (
     "This supersedes the core /plan craft: no 2–5-minute task slicing, no copy-pasteable full code, and no per-task "
     "red/green TDD cycle or deliberately failing test runs unless the user asked for TDD. Do not load a TDD skill "
@@ -53,6 +59,8 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
     stamp = plan_file_stamp(now)
     target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
     compact = CODEX_COMPACT_PLAN if "codex_compact" in levers else COMPACT_PLAN
+    if "plan_budget" in levers:
+        compact = f"{compact} {PLAN_BUDGET}"
     if plan_skill:
         fallback = compact if style == "compact" else "Write it with numbered steps."
         write = (f"2. Load the {plan_skill} skill with skill_view and write the plan in its format, as Markdown to {target}. "

@@ -98,7 +98,7 @@ _BATCH_TODO_HINT = (
     "as the next real tool call, never in a response by itself; batch independent read-only checks."
 )
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
-                     "sticky", "reentry", "approved_text", "light_notes"})
+                     "sticky", "reentry", "approved_text", "light_notes", "plan_budget"})
 
 _PLAN_STYLES = frozenset({"compact", "core"})
 _DEFAULT_PLAN_STYLE = "compact"
