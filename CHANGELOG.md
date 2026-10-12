@@ -13,8 +13,13 @@
   four-step qualifier plus the `tool_call` form, rather than the bare form.
 - **`extra_allowed_tools`:** when it allows terminal, code execution, delegation or MCP tools, the lean planning note
   no longer calls them blocked.
-- Classic text, light reminders and tool decisions are unchanged. With the new levers off, every text is
-  byte-identical to 0.4.2.
+- Classic text, light reminders and tool decisions are unchanged. With the new levers off, the planning notes,
+  executing reminders and light notes are byte-identical to 0.4.2. The agent hint and the agent-entered note change
+  under `bridge_calls` (#22).
+- **`plan_mode on` result:** with `extra_allowed_tools` set, it names the tools the configuration allows instead of
+  calling them blocked.
+- **Cleanup:** a custom lever set with `todo_inline` but not `todo_batch` also clears the executing reminder when no
+  todo list was made.
 
 Measured (TEST-PLAN-S43, pre-registered; 0.4.2 lean levers vs 0.4.3, same build, run at the same time, 18 runs each):
 - **Bare `python` in plans:** 18 → 0. Runs that spent a round retrying a test command: 17 → 0.

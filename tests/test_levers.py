@@ -623,3 +623,18 @@ def test_043_blocked_tools_note_respects_extra_allowed_tools(make_plugin, allowe
     plugin.ctx.settings["extra_allowed_tools"] = allowed
     assert ("blocked_tools" not in plugin._note_levers()) is dropped
     assert "blocked_tools" in plugin._levers()  # the lever set itself is unchanged; only the note text adapts
+
+
+def test_043_on_result_names_extra_allowed_tools(make_plugin):
+    plugin = make_plugin()
+    plugin.ctx.settings["extra_allowed_tools"] = ["terminal", "web_search"]
+    assert "Exception: this configuration allows terminal, web_search." in plugin.tool({"action": "on"})
+    plain = make_plugin(plan_profile="classic")
+    assert "Exception:" not in plain.tool({"action": "on"})
+
+
+def test_043_todo_inline_alone_clears_at_turn_end(make_plugin):
+    plugin = make_plugin("todo_inline")
+    approve_gate(plugin, write_plan(plugin))
+    plugin.post_llm_call(**IDS)
+    assert plugin.pre_llm_call() is None

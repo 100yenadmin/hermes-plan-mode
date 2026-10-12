@@ -1074,6 +1074,9 @@ class PlanModePlugin:
                     "terminal, code execution, delegation, connectors/MCP, messaging, browser "
                     "mutations, and unknown tools are blocked until /planmode approve."
                 )
+                allowed = sorted(self._extra_allowed_tools())
+                if allowed:  # the operator's allowlist is the effective policy; say so instead of claiming a block
+                    message += f" Exception: this configuration allows {', '.join(allowed)}."
                 if entered_by == "agent":
                     # The turn's pre_llm_call note has already run, so the plan format and commit rule come with the result.
                     agent_note = _AGENT_NOTE_BRIDGE if "bridge_calls" in self._note_levers() else _AGENT_NOTE
@@ -1519,7 +1522,7 @@ class PlanModePlugin:
 
     def post_llm_call(self, **kwargs: Any) -> None:
         """Turn-end hook (after the tool loop), including local surfaces without footers."""
-        if "todo_batch" not in self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
+        if not {"todo_batch", "todo_inline"} & self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
             return
         try:
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
