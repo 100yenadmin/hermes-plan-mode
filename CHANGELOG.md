@@ -9,6 +9,10 @@
 - `refactor_scope` is opt-in only. It missed its bar: leftover searches were still narrowed.
 - `bridge_calls` also gives the agent hint and the agent-entered result the `tool_call` form, so entering or leaving
   plan mode needs no tool search (#22).
+- **Typed `/planmode approve` (lean):** it now carries the same todo guidance as approval through the prompt, the
+  four-step qualifier plus the `tool_call` form, rather than the bare form.
+- **`extra_allowed_tools`:** when it allows terminal, code execution, delegation or MCP tools, the lean planning note
+  no longer calls them blocked.
 - Classic text, light reminders and tool decisions are unchanged. With the new levers off, every text is
   byte-identical to 0.4.2.
 

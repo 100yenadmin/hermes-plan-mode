@@ -1165,7 +1165,7 @@ class PlanModePlugin:
                     state.pop(field, None)
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
-                    + (BRIDGE_TODO if "bridge_calls" in self._note_levers() else "") + self._commit_rule()
+                    + self._typed_todo_hint() + self._commit_rule()
                 )
                 if "lean_craft" in self._note_levers():
                     state["pending_note"] += " " + LEAN_EXECUTION
@@ -1319,6 +1319,9 @@ class PlanModePlugin:
             levers.remove("lean_craft")
         if self._plan_skill():
             levers.discard("skill_policy")
+        if any(name in {"terminal", "execute_code"} or name.startswith(("delegate", "mcp"))
+               for name in self._extra_allowed_tools()):
+            levers.discard("blocked_tools")  # the note must not call a tool the operator allowed blocked
         return levers
 
     def _planning_note(self, state: dict, platform: str = "") -> str:
@@ -1491,6 +1494,14 @@ class PlanModePlugin:
 
     def _commit_rule(self) -> str:
         return "" if self._allow_commits() else f" {no_commits(self._levers())}"
+
+    def _typed_todo_hint(self) -> str:
+        """The typed-approve note's todo guidance: lean carries the same qualifier as the gate path, then the bridge form."""
+        levers = self._note_levers()
+        if "bridge_calls" not in levers:
+            return ""
+        hint = _INLINE_TODO_HINT if "todo_inline" in levers else _BATCH_TODO_HINT if "todo_batch" in levers else ""
+        return (f" {hint[0].upper()}{hint[1:]}" if hint else "") + BRIDGE_TODO
 
     def _execute_hint(self) -> str:
         levers = self._note_levers()

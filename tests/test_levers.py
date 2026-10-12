@@ -602,3 +602,24 @@ def test_043_differential_notes():
         if case["kind"] == "planning_note":
             kwargs["now"] = datetime(2026, 10, 11, 12, 34, 56)
         assert getattr(render, case["kind"])(**kwargs) == case["text"], case
+
+
+def test_043_typed_approve_todo_hint_carries_the_lean_qualifier(make_plugin):
+    lean = make_plugin()
+    hint = lean._typed_todo_hint()
+    assert hint.startswith(" Mirror steps into todo_list only when the plan has 4 or more steps.")
+    assert hint.endswith(render.BRIDGE_TODO)
+    lean.ctx.settings["levers"] = "bridge_calls,todo_batch"
+    assert lean._typed_todo_hint() == " M" + pm._BATCH_TODO_HINT[1:] + render.BRIDGE_TODO
+    lean.ctx.settings["levers"] = "bridge_calls"
+    assert lean._typed_todo_hint() == render.BRIDGE_TODO
+    assert make_plugin(plan_profile="classic")._typed_todo_hint() == ""
+
+
+@pytest.mark.parametrize("allowed,dropped", [([], False), (["web_search"], False), (["terminal"], True),
+                                             (["execute_code"], True), (["delegate_task"], True), (["mcp_github_read"], True)])
+def test_043_blocked_tools_note_respects_extra_allowed_tools(make_plugin, allowed, dropped):
+    plugin = make_plugin()
+    plugin.ctx.settings["extra_allowed_tools"] = allowed
+    assert ("blocked_tools" not in plugin._note_levers()) is dropped
+    assert "blocked_tools" in plugin._levers()  # the lever set itself is unchanged; only the note text adapts
