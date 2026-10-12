@@ -222,7 +222,8 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 #### Experimental levers
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
-`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools` and `skill_policy`, plus `plan_once` on TUI, Desktop
+`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
+`refactor_scope` and `todo_inline`, plus `plan_once` on TUI, Desktop
 and `hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Three more are
 measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces
 the profile's set, including the automatic `plan_once`, so include the lean levers you want to keep:
@@ -232,10 +233,15 @@ plugins:
   entries:
     plan-mode:
       settings:
-        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,plan_budget"
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,refactor_scope,todo_inline,plan_budget"
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
+- `test_commands` tells the model to use the repo's test commands, falling back to `python3 -m pytest` for Python; measured in the 0.4.3 stress.
+- `choice_fidelity` tells the model to recommend choices that keep every stated requirement; measured in the 0.4.3 stress.
+- `refactor_scope` tells the model to preserve behaviour and assertions, and search the whole repo with plan files as expected matches; measured in the 0.4.3 stress.
+- `todo_inline` tells the model to create, update and complete todo lists alongside edits or tests; measured in the 0.4.3 stress.
+- `bridge_calls` now also covers the agent hint and the agent-entered plan-mode off instruction.
 - `plan_budget` asks for compact plans of under about 1,200 characters for small changes. In its pre-registered round
   it halved plan length and finished 24% faster, but one judge scored plan clarity lower.
 - `commit_override` adds "This overrides any commit step in a loaded skill" to the no-commit rule

@@ -9,6 +9,23 @@ AGENT_HINT = (
     'For multi-step or risky changes you can enter enforced plan mode with the plan_mode tool '
     '(action "on"; find it with tool_search) and submit a plan for the user\'s approval before building.'
 )
+AGENT_HINT_BRIDGE = (
+    'For multi-step or risky changes, enter enforced plan mode first: plan_mode(action="on"), or if it is not in '
+    'your tool list tool_call(calls=[{"name": "plan_mode", "arguments": {"action": "on"}}]).'
+)
+TEST_COMMANDS = (
+    "Write test-plan commands the way this repo runs its tests (README, Makefile, pyproject or CI config). For a "
+    "Python repo that documents none, use python3 -m pytest, not python, which many hosts do not have."
+)
+CHOICE_FIDELITY = (
+    "The recommended choice must keep every requirement the user stated; offer a choice that relaxes one only as an "
+    "alternative, and do not ask about a case the stated requirements already settle."
+)
+REFACTOR_SCOPE = (
+    "For a rename or refactor, keep behaviour and existing test assertions unchanged apart from the rename itself, and "
+    "add no new test cases unless asked. Leftover checks search the whole repo; plan files under {plans_dir} will "
+    "match, so name them as expected matches instead of narrowing the search."
+)
 BUILTIN_OVERRIDE = (
     "This overrides the /plan instruction to offer execution: submit the plan with plan_mode instead."
 )
@@ -125,6 +142,8 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
             "such as behaviour, policy, format or scope) and that reading the repo cannot settle: prefer 1 question, "
             "at most 3, each with 2–3 short choices written as label — consequence, recommended first.",
         )
+    if "choice_fidelity" in levers:
+        note = note.replace("\n2. ", " " + CHOICE_FIDELITY + "\n2. ", 1)
     if "plan_once" in levers and str(platform).strip().lower() == "mattermost":
         note = note.replace(
             '3. Show the complete plan in your reply, then call',
@@ -149,6 +168,10 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         note = note.replace('(if plan_mode is not loaded, find it with tool_search "plan_mode")', BRIDGE_SUBMIT)
     if "lean_craft" in levers and style == "compact" and not plan_skill:
         note += "\n" + (LEAN_CRAFT.split(" Write the plan file ")[0] if reply_plan else LEAN_CRAFT)
+    if "test_commands" in levers:
+        note += "\n" + TEST_COMMANDS
+    if "refactor_scope" in levers:
+        note += "\n" + REFACTOR_SCOPE.format(plans_dir=plans_dir)
     if "sticky" in levers:
         note += '\nWhile plan mode is on, a request to implement or "just do it" means plan the implementation and submit; do not call blocked tools.'
     if "blocked_tools" in levers:
@@ -182,7 +205,10 @@ def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
         f"Executing the approved plan {state.get('approved_path')}{rev}. "
         "Keep todo_list statuses current; re-read the plan if your context was compacted."
     ) + ("" if commits else f" {no_commits(levers)}")
-    if "todo_batch" in levers:
+    if "todo_inline" in levers:
+        result = result.replace("Keep todo_list statuses current;",
+                                "If using todo_list, never call it in a response by itself: send updates with your next edit or test call;")
+    elif "todo_batch" in levers:
         result = result.replace("Keep todo_list statuses current;", "If using todo_list, batch status updates with the next real tool call;")
     if "lean_craft" in levers:
         result += " " + LEAN_EXECUTION

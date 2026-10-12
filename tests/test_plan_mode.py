@@ -1858,10 +1858,13 @@ def test_u2_done_has_no_approval_effect(plugin, submitted_plan):
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
 
 
-def test_u2_hint_and_command_hint_registered(plugin):
+def test_u2_hint_and_command_hint_registered(plugin, plan_profile):
     section = plugin.ctx.sections["plan-mode.hint"]
     assert section["position"] == "after_memory"
-    assert section["content"] == 'For multi-step or risky changes you can enter enforced plan mode with the plan_mode tool (action "on"; find it with tool_search) and submit a plan for the user\'s approval before building.'
+    if plan_profile == "lean":
+        assert section["content"] == plugin_mod.AGENT_HINT_BRIDGE
+    else:
+        assert section["content"] == 'For multi-step or risky changes you can enter enforced plan mode with the plan_mode tool (action "on"; find it with tool_search) and submit a plan for the user\'s approval before building.'
     assert len(section["content"]) <= 200
     assert plugin.ctx.command_hints["planmode"] == "[on|status|show|approve|reject|done|off] [task]"
 

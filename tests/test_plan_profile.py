@@ -35,13 +35,14 @@ def test_profile_constants_and_selection(make_plugin):
     assert pm.PROFILE_DEFAULT == "lean"
     assert pm.LEAN_LEVERS == frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky",
                                        "reentry", "approved_text", "light_notes", "question_shape",
-                                       "bridge_calls", "blocked_tools", "skill_policy"})
+                                       "bridge_calls", "blocked_tools", "skill_policy",
+                                       "test_commands", "choice_fidelity", "refactor_scope", "todo_inline"})
     lean = make_plugin()
     lean.ctx.settings.clear()  # genuinely untouched config, including the override key
     assert lean._plan_profile() == "lean" and lean._plan_style() == "compact"
     assert lean._plan_skill() == "" and lean._levers() == pm.LEAN_LEVERS
     lean._levers().clear()  # the selector returns a mutable copy, never the shared profile
-    assert len(pm.LEAN_LEVERS) == 11
+    assert len(pm.LEAN_LEVERS) == 15
     assert make_plugin(plan_profile="classic")._levers() == set()
 
 
@@ -92,7 +93,7 @@ def test_lean_model_text_equals_explicit_levers(make_plugin, monkeypatch, style,
         pointer = plugin.pre_llm_call()["context"]
         strings.append((note, result["message"], pointer, plugin._execute_hint()))
         assert ("same response" in result["message"]) == bool(selected)
-        assert ("batch status updates with the next real tool call" in pointer) == bool(selected)
+        assert ("send updates with your next edit or test call" in pointer) == bool(selected)
         if style == "compact" and not skill:
             assert "every consumer" in note
     assert strings[0] == strings[1]

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3 (unreleased)
+
+- Four new lean wording levers: `test_commands`, `choice_fidelity`, `refactor_scope` and `todo_inline`.
+- `bridge_calls` also gives the agent hint a direct tool_call example and explains how to turn off agent-entered plan mode (#22).
+- Classic text, light reminders and tool decisions are unchanged.
+Measured: TBD
+
 ## 0.4.2 - 2026-10-12
 
 - Three new lean levers remove unnecessary planning rounds.
