@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.3 (unreleased)
+## 0.4.3 - 2026-10-12
 
 - Three new lean levers, each aimed at a cause PARITY-2 measured against Codex plan mode:
   - `test_commands`: test commands the way the repo runs them, falling back to `python3 -m pytest`;
