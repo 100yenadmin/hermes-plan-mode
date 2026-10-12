@@ -1,13 +1,28 @@
 # Changelog
 
-## 0.4.2 (unreleased)
+## 0.4.2 - 2026-10-12
 
 - Three new lean levers remove unnecessary planning rounds.
 - `bridge_calls` gives direct tool_call examples for plan_mode and todo_list, removing lookups.
 - `blocked_tools` names the blocked tools and tells the agent to put commands and tests in the plan instead of retrying.
 - `skill_policy` skips process skills while planning and follows the approved plan during execution.
 - Light reminders keep whole sentences within 400 characters. Classic text and tool decisions are unchanged.
-Measured: TBD
+
+Measured (PARITY-2, pre-registered and blind-adjudicated; plan-mode 0.4.2 vs Codex plan mode on gpt-6.1-sol medium,
+76 runs):
+- The rounds that bought nothing fell, 0.4.1 → 0.4.2 (out of 38 runs):
+  - `plan_mode` lookups 38 → 0;
+  - blocked terminal or code attempts while planning 36 → 0;
+  - process-skill loads while planning 30 → 1;
+  - `todo_list` describes 8 → 0.
+- **Plan-writing skills:** with them installed, loads fell from 7 of 7 runs to 2 of 7. That missed the ≤1 target and
+  passed only on the fallback (at most half the 0.4.1 baseline).
+- **Every threshold against Codex held:**
+  - 0 changes or commits before approval;
+  - tests 35 vs 35 of 35;
+  - hidden preferences 10 vs 10 of 10;
+  - judge preference 0.91 (Claude) and 0.88 (Codex).
+- **Speed:** 1.28× Codex's end-to-end time (95% CI 1.16–1.40), against 1.45× for 0.4.1.
 
 ## 0.4.1 - 2026-10-11
 
