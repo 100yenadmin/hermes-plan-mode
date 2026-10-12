@@ -2026,8 +2026,12 @@ def test_u1_submit_hands_agent_entered_plan_mode_to_the_user(plugin, session_env
     _agent_plan(plugin, session_env, tmp_path)
     note = plugin.pre_llm_call()["context"]
     if plan_profile == "lean":
-        assert note == (f"Plan mode is ON. Plans directory: {tmp_path / '.hermes' / 'plans'}. Submit with plan_mode; "
-                        'do not ask "should I proceed?" in prose.')[:400]
+        # 0.4.2 lean levers append whole sentences while they fit in 400 chars (test_042_light_sentence_budget).
+        base = (f"Plan mode is ON. Plans directory: {tmp_path / '.hermes' / 'plans'}. Submit with plan_mode; "
+                'do not ask "should I proceed?" in prose.')
+        assert note.startswith(base[:400]) and len(note) <= 400
+        from plan_mode.render import LIGHT_BRIDGE
+        assert len(base) + len(LIGHT_BRIDGE) > 400 or LIGHT_BRIDGE in note
     else:
         assert "plan_mode(action='off')" in note
     directive = _submit(plugin)

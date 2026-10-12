@@ -16,7 +16,7 @@ from test_plan_mode import FakeContext, session_env
 LEVER_NAMES = {
     "plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
-    "commit_override", "approval_ask",
+    "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
 }
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
 IDS = dict(session_id="s", turn_id="t", api_request_id="r", tool_call_id="submit")
@@ -337,3 +337,202 @@ def test_approval_ask_lever(make_plugin, monkeypatch, levers, asks):
         assert "not multi-select). " + pm._APPROVAL_ASK + "If the user picks" in result["message"]
     else:
         assert "not multi-select). If the user picks" in result["message"]
+
+
+@pytest.mark.parametrize("lever,text", [
+    ("bridge_calls", render.BRIDGE_SUBMIT),
+    ("blocked_tools", render.BLOCKED_TOOLS),
+    ("skill_policy", render.SKILL_POLICY),
+])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("variant", ["file", "reply_plan", "mattermost"])
+def test_042_planning_levers(lever, text, enabled, variant):
+    levers = {lever} if enabled else set()
+    if variant != "file":
+        levers.add("plan_once")
+    note = render.planning_note("/plans", style="compact", levers=levers,
+                                platform="mattermost" if variant == "mattermost" else "tui",
+                                reply_plan=variant == "reply_plan")
+    assert (text in note) is enabled
+    if lever == "bridge_calls":
+        assert ('tool_search "plan_mode"' in note) is not enabled
+        if enabled:
+            assert note.count(render.BRIDGE_SUBMIT) == 1
+    if variant == "reply_plan":
+        assert "In that same response" in note
+    elif variant == "mattermost":
+        assert "3–5 line summary plus the path" in note
+
+
+@pytest.mark.parametrize("reply_plan", [False, True])
+def test_042_lean_lookup_removed_and_classic_kept(make_plugin, reply_plan):
+    for profile in ("lean", "classic"):
+        plugin = make_plugin(plan_profile=profile)
+        levers = plugin._note_levers() | ({"plan_once"} if reply_plan else set())
+        note = render.planning_note("/plans", style="compact", levers=levers, reply_plan=reply_plan)
+        assert ('tool_search "plan_mode"' in note) == (profile == "classic")
+        assert (render.BRIDGE_SUBMIT in note) == (profile == "lean")
+
+
+@pytest.mark.parametrize("sticky", [False, True])
+def test_042_blocked_line_order(sticky):
+    levers = {"blocked_tools", "skill_policy"} | ({"sticky"} if sticky else set())
+    lines = render.planning_note("/plans", levers=levers).splitlines()
+    index = lines.index(render.BLOCKED_TOOLS)
+    assert lines[index - 1].startswith("While plan mode is on" if sticky else "In group chats")
+    assert lines[index + 1] == render.SKILL_POLICY
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("batch", [False, True])
+def test_042_execution_levers(make_plugin, enabled, batch):
+    levers = ({"bridge_calls", "skill_policy"} if enabled else set()) | ({"todo_batch"} if batch else set())
+    plugin = make_plugin(",".join(sorted(levers)), plan_profile="classic")
+    hint = plugin._execute_hint()
+    todo = pm._BATCH_TODO_HINT if batch else pm._TODO_HINT
+    assert hint.startswith(todo + (render.BRIDGE_TODO if enabled else ""))
+    assert (render.SKILL_EXECUTION in hint) is enabled
+    pointer = render.executing_pointer({"approved_path": "/plans/p.md"}, levers=plugin._note_levers())
+    assert (render.SKILL_EXECUTION in pointer) is enabled
+    assert render.LEAN_EXECUTION not in pointer and render.LEAN_EXECUTION not in hint
+
+
+@pytest.mark.parametrize("lever,text", [
+    ("bridge_calls", render.LIGHT_BRIDGE),
+    ("blocked_tools", render.LIGHT_BLOCKED),
+    ("skill_policy", render.LIGHT_SKILL),
+])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_042_light_levers(make_plugin, lever, text, enabled):
+    plugin = make_plugin("light_notes" + ("," + lever if enabled else ""), plan_profile="classic")
+    plugin.command("on")
+    assert "1. Explore" in plugin.pre_llm_call()["context"]
+    state = plugin._load_state("sk:unit-session")
+    # Use a short safe path so the sentence budget never masks an enabled lever.
+    state["plans_dir"] = "/plans"
+    plugin._save_state("sk:unit-session", state)
+    note = plugin.pre_llm_call()["context"]
+    assert note == render.light_note("/plans", levers=plugin._note_levers())
+    assert (text in note) is enabled
+
+
+def test_042_light_sentence_budget():
+    extras = [render.LIGHT_BRIDGE, render.LIGHT_BLOCKED, render.LIGHT_SKILL]
+    levers = pm.LEAN_LEVERS
+    base = render.light_note("/plans")
+    assert render.light_note("/plans", levers=levers) == base + "".join(extras)
+    plans = "/" + "p" * 199
+    base = render.light_note(plans)
+    note = render.light_note(plans, levers=levers)
+    assert len(note) <= 400
+    assert note in [base + "".join(extras[:count]) for count in range(4)]
+    assert note == base  # the bridge sentence cannot fit, so all later sentences are dropped
+    for plans in ("/plans", "/" + "p" * 500):
+        old = (f"Plan mode is ON. Plans directory: {plans}. Submit with plan_mode; "
+               'do not ask "should I proceed?" in prose.')[:400]
+        assert render.light_note(plans, levers={"light_notes"}) == old
+        if len(plans) > 400:
+            assert render.light_note(plans, levers=levers) == old
+
+
+def test_042_bridge_examples_parse_registered_schema(make_plugin):
+    plugin = make_plugin()
+    note = render.planning_note("/plans", levers=plugin._note_levers())
+    reply = render.planning_note("/plans", levers=plugin._note_levers() | {"plan_once"}, reply_plan=True)
+    light = render.light_note("/plans", levers=plugin._note_levers())
+    for text in (note, reply, light, plugin._execute_hint()):
+        assert "tool_call(calls=" in text
+        calls_json, rest = text.split("tool_call(calls=", 1)[1].split(")", 1)
+        calls = json.loads(calls_json)
+        assert len(calls) == 1
+        call = calls[0]
+        if call["name"] == "plan_mode":
+            assert call["arguments"]["action"] == "submit"
+            schema = plugin.ctx.tools["plan_mode"]["schema"]
+            assert call["arguments"]["action"] in schema["parameters"]["properties"]["action"]["enum"]
+        else:
+            assert call["name"] == "todo_list"
+            assert call["arguments"]["todos"][0] == {"id": "1", "content": "<step>", "status": "in_progress"}
+            assert 'add "merge": true' in rest
+
+
+@pytest.mark.parametrize("profile,levers,enabled", [
+    ("lean", "", True), ("classic", "", False),
+    ("classic", "blocked_tools", True), ("lean", "sticky", False),
+])
+@pytest.mark.parametrize("name", ["terminal", "execute_code", "delegate_task", "mcp_example", ""])
+def test_042_catch_all_message_and_decisions(make_plugin, tmp_path, profile, levers, enabled, name):
+    plugin = make_plugin(levers, plan_profile=profile)
+    plugin.command("on")
+    result = plugin.pre_tool_call(name, {})
+    tool = name or "unknown tool"
+    expected = (f"Plan mode is on: {tool} is blocked until the user approves the plan. Commands and tests run "
+                "only after approval: put them in the plan's test plan and do not retry blocked tools." if enabled else
+                f"Plan mode is on: {tool} is blocked until you approve the plan (/planmode approve). "
+                "You may write the plan under .hermes/plans/.")
+    assert result == {"action": "block", "message": expected}
+    for read_only in pm.READ_ONLY_TOOLS:
+        assert plugin.pre_tool_call(read_only, {}) is None
+    assert plugin.pre_tool_call("plan_mode", {"action": "status"}) is None
+    plans = plugin._load_state("sk:unit-session")["plans_dir"]
+    assert plugin.pre_tool_call("write_file", {"path": str(Path(plans) / "p.md")}) is None
+    refusal = plugin.pre_tool_call("write_file", {"path": str(tmp_path / "outside.md")})
+    assert refusal["action"] == "block" and "Use only absolute paths" in refusal["message"]
+    assert "do not retry" not in refusal["message"]
+
+
+def test_042_catch_all_lever_failure_is_closed(make_plugin, monkeypatch):
+    plugin = make_plugin()
+    plugin.command("on")
+    def broken():
+        raise ValueError("bad lever config")
+    monkeypatch.setattr(plugin, "_note_levers", broken)
+    result = plugin.pre_tool_call("terminal", {})
+    assert result["action"] == "block" and "failed closed (ValueError)" in result["message"]
+    assert plugin.pre_tool_call("read_file", {}) is None
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("route", ["gate", "typed", "typed_open", "bypass", "clarify"])
+def test_042_approval_paths(make_plugin, enabled, route):
+    plugin = make_plugin("bridge_calls,skill_policy" if enabled else "approved_text", plan_profile="classic")
+    path = write_plan(plugin)
+    if route == "gate":
+        message = approve_gate(plugin, path)["message"]
+    elif route == "typed":
+        plugin.command("approve")
+        message = plugin._load_state("sk:unit-session")["pending_note"]
+    elif route == "typed_open":
+        plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
+        plugin.command("approve")
+        message = json.loads(plugin.tool({"action": "submit"}))["message"]
+    else:
+        plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
+        result = json.loads(plugin.tool({"action": "submit"}))
+        if route == "bypass":
+            message = result["message"]
+        else:
+            clarify = result["clarify"]
+            args = {"questions": [clarify]}
+            assert plugin.pre_tool_call("clarify", args, tool_call_id="clarify") is None
+            payload = json.dumps({"question": clarify["question"], "user_response": clarify["choices"][0]})
+            plugin.post_tool_call("clarify", args, tool_call_id="clarify", status="ok", result=payload)
+            message = json.loads(plugin.transform_tool_result("clarify", args, result=payload,
+                                                             tool_call_id="clarify"))["plan_mode_approval"]
+    assert (render.BRIDGE_TODO in message) is enabled
+    assert (render.SKILL_EXECUTION in message) is enabled
+
+
+@pytest.mark.parametrize("levers", ["skill_policy", "all"])
+def test_042_plan_skill_suppresses_policy(make_plugin, monkeypatch, levers):
+    monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: None)
+    plugin = make_plugin(levers, plan_skill="project-plan")
+    assert "skill_policy" in plugin._levers() and "skill_policy" not in plugin._note_levers()
+    path = write_plan(plugin)
+    assert render.SKILL_POLICY not in plugin._planning_note({"plans_dir": str(path.parent)})
+    assert render.SKILL_POLICY not in render.planning_note("/plans", plan_skill="project-plan", levers={"skill_policy"})
+    assert render.SKILL_EXECUTION not in plugin._execute_hint()
+    assert render.LIGHT_SKILL not in render.light_note("/plans", levers=plugin._note_levers())
+    plugin.command("approve")
+    assert render.SKILL_EXECUTION not in plugin._load_state("sk:unit-session")["pending_note"]
+    assert render.SKILL_EXECUTION not in plugin.pre_llm_call()["context"]

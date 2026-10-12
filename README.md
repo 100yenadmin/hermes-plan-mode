@@ -222,7 +222,8 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 #### Experimental levers
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
-`light_notes` and `question_shape`, plus `plan_once` on TUI, Desktop and `hermes serve` sessions. Three more are
+`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools` and `skill_policy`, plus `plan_once` on TUI, Desktop
+and `hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Three more are
 measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces
 the profile's set, including the automatic `plan_once`, so include the lean levers you want to keep:
 
@@ -231,7 +232,7 @@ plugins:
   entries:
     plan-mode:
       settings:
-        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,plan_budget"
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,plan_budget"
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
@@ -282,7 +283,7 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.1 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.2 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every interactive surface |
@@ -292,6 +293,48 @@ plugins:
 | Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list` + footer on chat platforms |
 | Agent may enter | yes | no | no | yes |
 | Autonomy choice / clear context at approval | yes | partial | no | no |
+
+### Measured against Codex plan mode
+
+Two pre-registered benchmarks, PARITY-1 and PARITY-2, compared plan-mode with Codex's own plan mode.
+- **Freezing and judging:** the bars were written and hashed before any run, and a blind adjudicator applied them,
+  seeing only the bars and the measurements.
+- **Setup:** both products ran the same model (gpt-6.1-sol, medium) with the same scripted user, on a suite of Python
+  coding tasks. Two tasks hide a preference that only the user knows.
+
+**plan-mode 0.4.2 (PARITY-2, 2026-10-12).** It met every pre-declared threshold.
+- 0 changes and 0 commits before approval in 38 runs, and every approval went through the gate.
+- Tests passed in 35 of 35 runs, against 35 of 35 for Codex.
+- The hidden preference was found before the plan was submitted in 10 of 10 runs, against 10 of 10.
+- In blind plan-only comparisons, a Claude judge preferred plan-mode's plan in 91% of pairs (95% CI 82–100%) and a
+  Codex judge in 88% (82–94%).
+- It took 1.28× as long as Codex end to end (95% CI 1.16–1.40): 1.35× in planning and 1.26× in execution.
+- Compared with 0.4.1, the runs that spent rounds on things that buy nothing fell:
+  - `plan_mode` lookups: 38 of 38 → 0;
+  - blocked command attempts: 36 of 38 → 0;
+  - process-skill loads while planning: 30 of 38 → 1.
+
+**plan-mode 0.4.1 (PARITY-1, 2026-10-12).** It met the same thresholds:
+- tests 35 vs 35 of 35;
+- hidden preferences 9 vs 10 of 10;
+- judge preference 86% (Claude) and 89% (Codex).
+
+It took 1.45× as long (95% CI 1.31–1.63).
+
+Claude Code (Opus 5.5, a different model) is shown for context only:
+- It was fastest, with a median 27 s on the core tasks against 56 s for Codex and 80 s for plan-mode 0.4.1.
+- It asked no clarifying questions, so it found 0 of 6 hidden preferences.
+- The judges split on its plans: the Claude judge preferred Claude Code's plans in 14 of 14 pairs, and the Codex
+  judge preferred plan-mode's in 64%.
+
+**What these runs do not show.**
+- **The test environments differed.** Plan-mode's `python3` had pytest. Codex's sandboxed `python3` did not, so Codex
+  ran tests through `uv run --with pytest`, which asked for approval in most runs. That setup counts in Codex's
+  execution time, so the execution ratio probably flatters plan-mode. By how much was not measured.
+- **Codex runs read-only shell commands while planning;** plan-mode blocks the terminal until approval. Both are
+  measured as shipped.
+- **Not covered:** other models, chat platforms, long sessions, non-Python repos, and the time a person takes to
+  review a plan.
 
 ## Security model
 
