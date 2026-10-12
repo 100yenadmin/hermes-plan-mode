@@ -222,9 +222,9 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 #### Experimental levers
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
-`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
-`refactor_scope` and `todo_inline`, plus `plan_once` on TUI, Desktop
-and `hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Three more are
+`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`
+and `todo_inline`, plus `plan_once` on TUI, Desktop
+and `hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Four more are
 measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces
 the profile's set, including the automatic `plan_once`, so include the lean levers you want to keep:
 
@@ -233,15 +233,24 @@ plugins:
   entries:
     plan-mode:
       settings:
-        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,refactor_scope,todo_inline,plan_budget"
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,todo_inline,plan_budget"
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
-- `test_commands` tells the model to use the repo's test commands, falling back to `python3 -m pytest` for Python; measured in the 0.4.3 stress.
-- `choice_fidelity` tells the model to recommend choices that keep every stated requirement; measured in the 0.4.3 stress.
-- `refactor_scope` tells the model to preserve behaviour and assertions, and search the whole repo with plan files as expected matches; measured in the 0.4.3 stress.
-- `todo_inline` tells the model to create, update and complete todo lists alongside edits or tests; measured in the 0.4.3 stress.
-- `bridge_calls` now also covers the agent hint and the agent-entered plan-mode off instruction.
+- `test_commands` (lean) tells the model to write test commands the way the repo runs them, falling back to
+  `python3 -m pytest` for an undocumented Python repo. In the 0.4.3 stress, plans naming a bare `python` fell from 18
+  of 18 to 0, and so did runs that spent a round retrying the command (17 of 18 to 0).
+- `todo_inline` (lean) tells the model never to call `todo_list` in a response by itself: create the list with the
+  first edit, update it alongside the next edit or test, and close it with the final test run. Rounds spent only on
+  the todo list fell from 27 to 7.
+- `choice_fidelity` (lean) tells the model that a recommended clarify choice must keep every stated requirement. On
+  the CSV task, plans that exempted NaN and Infinity from the required round trip fell from 2 of 6 to 0.
+- `refactor_scope` (opt-in) tells the model to keep a rename's behaviour and assertions, and to search the whole repo
+  for leftovers. It removed the unrequested new assertions (3 of 4 rename plans to 0), but every plan still narrowed
+  the leftover search: it now excluded the plan folder where it used to limit the search to app and tests. So it
+  missed its bar and stays out of lean.
+- `bridge_calls` now also gives the agent hint and the agent-entered result the `tool_call` form, so the agent can
+  enter and leave plan mode without a tool search (#22).
 - `plan_budget` asks for compact plans of under about 1,200 characters for small changes. In its pre-registered round
   it halved plan length and finished 24% faster, but one judge scored plan clarity lower.
 - `commit_override` adds "This overrides any commit step in a loaded skill" to the no-commit rule

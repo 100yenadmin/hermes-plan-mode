@@ -558,8 +558,9 @@ def test_043_planning_levers(lever, text, enabled, skill, question, reply, craft
                 assert note.index("This supersedes the core") < note.index(text)
     if reply:
         assert "In that same response" in note
-    full = render.planning_note("/plans", levers=pm.LEAN_LEVERS)
+    full = render.planning_note("/plans", levers=set(pm.LEAN_LEVERS) | {"refactor_scope"})
     assert full.index(render.TEST_COMMANDS) < full.index(render.REFACTOR_SCOPE.format(plans_dir="/plans"))
+    assert render.REFACTOR_SCOPE.format(plans_dir="/plans") not in render.planning_note("/plans", levers=pm.LEAN_LEVERS)
 
 
 @pytest.mark.parametrize("inline,batch", list(itertools.product((False, True), repeat=2)))

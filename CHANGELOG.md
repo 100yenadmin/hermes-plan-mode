@@ -2,10 +2,27 @@
 
 ## 0.4.3 (unreleased)
 
-- Four new lean wording levers: `test_commands`, `choice_fidelity`, `refactor_scope` and `todo_inline`.
-- `bridge_calls` also gives the agent hint a direct tool_call example and explains how to turn off agent-entered plan mode (#22).
-- Classic text, light reminders and tool decisions are unchanged.
-Measured: TBD
+- Three new lean levers, each aimed at a cause PARITY-2 measured against Codex plan mode:
+  - `test_commands`: test commands the way the repo runs them, falling back to `python3 -m pytest`;
+  - `todo_inline`: no rounds spent only on `todo_list`;
+  - `choice_fidelity`: a recommended clarify choice keeps every stated requirement.
+- `refactor_scope` is opt-in only. It missed its bar: leftover searches were still narrowed.
+- `bridge_calls` also gives the agent hint and the agent-entered result the `tool_call` form, so entering or leaving
+  plan mode needs no tool search (#22).
+- Classic text, light reminders and tool decisions are unchanged. With the new levers off, every text is
+  byte-identical to 0.4.2.
+
+Measured (TEST-PLAN-S43, pre-registered; 0.4.2 lean levers vs 0.4.3, same build, run at the same time, 18 runs each):
+- **Bare `python` in plans:** 18 → 0. Runs that spent a round retrying a test command: 17 → 0.
+- **Rounds spent only on the todo list:** 27 → 7.
+- **CSV task, plans dropping the required round trip for NaN and Infinity:** 2 of 6 → 0.
+- **Execution time:** 0.88× (95% CI 0.75–0.97). End-to-end time unchanged at 0.99× (0.90–1.05). Median tokens 358k →
+  304k.
+- **Guards held:**
+  - no changes before approval and no commits;
+  - tests passed in 18 of 18 runs for both;
+  - hidden preferences found 4 of 4 for both;
+  - questions per run fell from 1.44 to 1.06.
 
 ## 0.4.2 - 2026-10-12
 
