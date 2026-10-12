@@ -27,7 +27,7 @@ from .approval import (
     is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
 from .render import (
-    AGENT_HINT, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
+    AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
     SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
@@ -83,6 +83,11 @@ _AGENT_NOTE = (
     "You entered plan mode yourself: if the task turns out not to need a plan, you may call "
     "plan_mode(action='off') before submitting. Once you submit a plan, only the user can end plan mode."
 )
+_AGENT_NOTE_BRIDGE = (
+    "You entered plan mode yourself: if the task turns out not to need a plan, you may call "
+    "plan_mode(action='off') (through tool_call if plan_mode is not in your tool list) before submitting. "
+    "Once you submit a plan, only the user can end plan mode."
+)
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress")
@@ -98,14 +103,21 @@ _BATCH_TODO_HINT = (
     "mirror steps into todo_list only when the plan has 4 or more steps; update statuses in the same response "
     "as the next real tool call, never in a response by itself; batch independent read-only checks."
 )
+_INLINE_TODO_HINT = (
+    "mirror steps into todo_list only when the plan has 4 or more steps. Never call todo_list in a response by itself: "
+    "create the list in the same response as your first edit, send status updates with your next edit or test call, "
+    "and mark the last items completed in the same response as the final test run; batch independent read-only checks."
+)
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
-                     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy"})
+                     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
+                     "test_commands", "choice_fidelity", "refactor_scope", "todo_inline"})
 _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
                  "the approval, not a clarifying question. ")
 # Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
-                         "light_notes", "question_shape", "bridge_calls", "blocked_tools", "skill_policy"})
+                         "light_notes", "question_shape", "bridge_calls", "blocked_tools", "skill_policy",
+                         "test_commands", "choice_fidelity", "todo_inline"})
 PROFILE_DEFAULT = "lean"
 
 _PLAN_STYLES = frozenset({"compact", "core"})
@@ -486,7 +498,8 @@ class PlanModePlugin:
         try:
             register_section = getattr(self.ctx, "register_system_prompt_section", None)
             if self._config("agent_hint", True) is not False and callable(register_section):
-                register_section("plan-mode.hint", AGENT_HINT, position="after_memory", max_chars=200)
+                hint = AGENT_HINT_BRIDGE if "bridge_calls" in self._levers() else AGENT_HINT
+                register_section("plan-mode.hint", hint, position="after_memory", max_chars=200)
         except Exception:
             pass  # A cosmetic discovery hint must not prevent enforcement registration.
 
@@ -1061,9 +1074,13 @@ class PlanModePlugin:
                     "terminal, code execution, delegation, connectors/MCP, messaging, browser "
                     "mutations, and unknown tools are blocked until /planmode approve."
                 )
+                allowed = sorted(self._extra_allowed_tools())
+                if allowed:  # the operator's allowlist is the effective policy; say so instead of claiming a block
+                    message += f" Exception: this configuration allows {', '.join(allowed)}."
                 if entered_by == "agent":
                     # The turn's pre_llm_call note has already run, so the plan format and commit rule come with the result.
-                    message += "\n" + self._planning_note(state, identity.surface) + f" {_AGENT_NOTE}"
+                    agent_note = _AGENT_NOTE_BRIDGE if "bridge_calls" in self._note_levers() else _AGENT_NOTE
+                    message += "\n" + self._planning_note(state, identity.surface) + f" {agent_note}"
                     if "light_notes" in self._levers():
                         state["light_note_seen"] = True
                         self._save_command_state(identity.key, command_storage_key, state)
@@ -1151,7 +1168,7 @@ class PlanModePlugin:
                     state.pop(field, None)
                 state["pending_note"] = (
                     f"The user approved the plan at {approved_path}. Implement it now."
-                    + (BRIDGE_TODO if "bridge_calls" in self._note_levers() else "") + self._commit_rule()
+                    + self._typed_todo_hint() + self._commit_rule()
                 )
                 if "lean_craft" in self._note_levers():
                     state["pending_note"] += " " + LEAN_EXECUTION
@@ -1305,6 +1322,9 @@ class PlanModePlugin:
             levers.remove("lean_craft")
         if self._plan_skill():
             levers.discard("skill_policy")
+        if any(name in {"terminal", "execute_code"} or name.startswith(("delegate", "mcp"))
+               for name in self._extra_allowed_tools()):
+            levers.discard("blocked_tools")  # the note must not call a tool the operator allowed blocked
         return levers
 
     def _planning_note(self, state: dict, platform: str = "") -> str:
@@ -1478,9 +1498,19 @@ class PlanModePlugin:
     def _commit_rule(self) -> str:
         return "" if self._allow_commits() else f" {no_commits(self._levers())}"
 
+    def _typed_todo_hint(self) -> str:
+        """The typed-approve note's todo guidance: lean carries the same qualifier as the gate path, then the bridge form."""
+        levers = self._note_levers()
+        if "bridge_calls" not in levers:
+            return ""
+        hint = _INLINE_TODO_HINT if "todo_inline" in levers else _BATCH_TODO_HINT if "todo_batch" in levers else ""
+        return (f" {hint[0].upper()}{hint[1:]}" if hint else "") + BRIDGE_TODO
+
     def _execute_hint(self) -> str:
         levers = self._note_levers()
         hint = _BATCH_TODO_HINT if "todo_batch" in levers else _TODO_HINT
+        if "todo_inline" in levers:
+            hint = _INLINE_TODO_HINT
         if "bridge_calls" in levers:
             hint += BRIDGE_TODO
         hint += self._commit_rule()
@@ -1492,7 +1522,7 @@ class PlanModePlugin:
 
     def post_llm_call(self, **kwargs: Any) -> None:
         """Turn-end hook (after the tool loop), including local surfaces without footers."""
-        if "todo_batch" not in self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
+        if not {"todo_batch", "todo_inline"} & self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
             return
         try:
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
@@ -1890,7 +1920,7 @@ class PlanModePlugin:
                         state["light_note_seen"] = True
                         self._save_state(state_key, state)
                     if self._agent_owned(state) and not short:
-                        note += f" {_AGENT_NOTE}"
+                        note += " " + (_AGENT_NOTE_BRIDGE if "bridge_calls" in self._note_levers() else _AGENT_NOTE)
                     if builtin and not short:
                         note += f" {BUILTIN_OVERRIDE}"
                     submission = state.get("submission") or {}

@@ -17,6 +17,7 @@ LEVER_NAMES = {
     "plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
+    "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
 }
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
 IDS = dict(session_id="s", turn_id="t", api_request_id="r", tool_call_id="submit")
@@ -536,3 +537,104 @@ def test_042_plan_skill_suppresses_policy(make_plugin, monkeypatch, levers):
     plugin.command("approve")
     assert render.SKILL_EXECUTION not in plugin._load_state("sk:unit-session")["pending_note"]
     assert render.SKILL_EXECUTION not in plugin.pre_llm_call()["context"]
+
+
+@pytest.mark.parametrize("lever,text", [("test_commands", render.TEST_COMMANDS),
+    ("choice_fidelity", render.CHOICE_FIDELITY), ("refactor_scope", render.REFACTOR_SCOPE.format(plans_dir="/plans"))])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("skill,question,reply,craft", list(itertools.product(("", "project-plan"), (False, True), (False, True), (False, True))))
+def test_043_planning_levers(lever, text, enabled, skill, question, reply, craft):
+    levers = (set(pm.LEAN_LEVERS) - {"test_commands", "choice_fidelity", "refactor_scope", "lean_craft", "question_shape"})
+    levers |= ({lever} if enabled else set()) | ({"question_shape"} if question else set())
+    levers |= ({"plan_once"} if reply else set()) | ({"lean_craft"} if craft else set())
+    note = render.planning_note("/plans", style="compact", plan_skill=skill, reply_plan=reply, levers=levers)
+    assert (text in note) is enabled
+    if enabled:
+        if lever == "choice_fidelity":
+            assert " " + text + "\n2. " in note
+        else:
+            assert note.index(text) < note.index("While plan mode is on")
+            if craft and not skill:
+                assert note.index("This supersedes the core") < note.index(text)
+    if reply:
+        assert "In that same response" in note
+    full = render.planning_note("/plans", levers=set(pm.LEAN_LEVERS) | {"refactor_scope"})
+    assert full.index(render.TEST_COMMANDS) < full.index(render.REFACTOR_SCOPE.format(plans_dir="/plans"))
+    assert render.REFACTOR_SCOPE.format(plans_dir="/plans") not in render.planning_note("/plans", levers=pm.LEAN_LEVERS)
+
+
+@pytest.mark.parametrize("inline,batch", list(itertools.product((False, True), repeat=2)))
+def test_043_todo_inline(make_plugin, inline, batch):
+    levers = ({"todo_inline"} if inline else set()) | ({"todo_batch"} if batch else set())
+    plugin = make_plugin(",".join(levers), plan_profile="classic", allow_commits=True)
+    expected = pm._INLINE_TODO_HINT if inline else pm._BATCH_TODO_HINT if batch else pm._TODO_HINT
+    assert plugin._execute_hint() == expected
+    pointer = render.executing_pointer({"approved_path": "/plans/p.md"}, levers=levers)
+    text = "If using todo_list, never call it in a response by itself: send updates with your next edit or test call;"
+    assert (text in pointer) is inline
+    assert ("batch status updates" in pointer) is (batch and not inline)
+    assert ("Keep todo_list statuses current;" in pointer) is (not inline and not batch)
+
+
+@pytest.mark.parametrize("profile,levers,bridge", [("lean", "", True), ("classic", "", False),
+    ("lean", "sticky", False), ("classic", "bridge_calls", True)])
+def test_043_agent_bridge(make_plugin, profile, levers, bridge):
+    plugin = make_plugin(levers, plan_profile=profile)
+    assert len(render.AGENT_HINT_BRIDGE) <= 200
+    assert plugin.ctx.sections["plan-mode.hint"]["content"] == (render.AGENT_HINT_BRIDGE if bridge else render.AGENT_HINT)
+    expected, absent = (pm._AGENT_NOTE_BRIDGE, pm._AGENT_NOTE) if bridge else (pm._AGENT_NOTE, pm._AGENT_NOTE_BRIDGE)
+    result = json.loads(plugin.tool({"action": "on"}))["message"]
+    assert expected in result and absent not in result
+    state = plugin._load_state("sk:unit-session")
+    state["light_note_seen"] = False
+    plugin._save_state("sk:unit-session", state)
+    note = plugin.pre_llm_call()["context"]
+    assert expected in note and absent not in note
+
+
+def test_043_differential_notes():
+    cases = json.loads((Path(__file__).parent / "fixtures/notes_042.json").read_text())
+    assert len(cases) == 67
+    for case in cases:
+        kwargs = case["kwargs"]
+        kwargs["levers"] = set(kwargs["levers"]) - {
+            "test_commands", "choice_fidelity", "refactor_scope", "todo_inline"}
+        if case["kind"] == "planning_note":
+            kwargs["now"] = datetime(2026, 10, 11, 12, 34, 56)
+        assert getattr(render, case["kind"])(**kwargs) == case["text"], case
+
+
+def test_043_typed_approve_todo_hint_carries_the_lean_qualifier(make_plugin):
+    lean = make_plugin()
+    hint = lean._typed_todo_hint()
+    assert hint.startswith(" Mirror steps into todo_list only when the plan has 4 or more steps.")
+    assert hint.endswith(render.BRIDGE_TODO)
+    lean.ctx.settings["levers"] = "bridge_calls,todo_batch"
+    assert lean._typed_todo_hint() == " M" + pm._BATCH_TODO_HINT[1:] + render.BRIDGE_TODO
+    lean.ctx.settings["levers"] = "bridge_calls"
+    assert lean._typed_todo_hint() == render.BRIDGE_TODO
+    assert make_plugin(plan_profile="classic")._typed_todo_hint() == ""
+
+
+@pytest.mark.parametrize("allowed,dropped", [([], False), (["web_search"], False), (["terminal"], True),
+                                             (["execute_code"], True), (["delegate_task"], True), (["mcp_github_read"], True)])
+def test_043_blocked_tools_note_respects_extra_allowed_tools(make_plugin, allowed, dropped):
+    plugin = make_plugin()
+    plugin.ctx.settings["extra_allowed_tools"] = allowed
+    assert ("blocked_tools" not in plugin._note_levers()) is dropped
+    assert "blocked_tools" in plugin._levers()  # the lever set itself is unchanged; only the note text adapts
+
+
+def test_043_on_result_names_extra_allowed_tools(make_plugin):
+    plugin = make_plugin()
+    plugin.ctx.settings["extra_allowed_tools"] = ["terminal", "web_search"]
+    assert "Exception: this configuration allows terminal, web_search." in plugin.tool({"action": "on"})
+    plain = make_plugin(plan_profile="classic")
+    assert "Exception:" not in plain.tool({"action": "on"})
+
+
+def test_043_todo_inline_alone_clears_at_turn_end(make_plugin):
+    plugin = make_plugin("todo_inline")
+    approve_gate(plugin, write_plan(plugin))
+    plugin.post_llm_call(**IDS)
+    assert plugin.pre_llm_call() is None
