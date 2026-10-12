@@ -1,4 +1,4 @@
-"""Generate immutable render fixtures from c284e3d, never from the working copy."""
+"""Generate immutable render fixtures from v0.4.2 (render.py identical to the measured RC c284e3d), never from the working copy."""
 from datetime import datetime
 from itertools import product
 import json
@@ -14,7 +14,7 @@ LEAN_042 = {"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "a
 
 def generate():
     old = ModuleType("render_042")
-    exec(subprocess.check_output(["git", "show", "c284e3d:plan_mode/render.py"], cwd=ROOT), old.__dict__)
+    exec(subprocess.check_output(["git", "show", "v0.4.2:plan_mode/render.py"], cwd=ROOT), old.__dict__)
     cases = []
     for style, skill, commits, reply, question, budget in product(
             ("compact", "core"), ("", "project-plan"), (True, False), (False, True), (False, True), (False, True)):
