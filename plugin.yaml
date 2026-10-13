@@ -28,7 +28,7 @@ config_schema:
     type: bool
     default: true
     label: Agent hint
-    description: Adds a short system-prompt hint naming the plan_mode tool. Applies when Hermes next loads plugins (a new CLI session, or a gateway or app restart).
+    description: Adds a short system-prompt hint naming the plan_mode tool. Applies when Hermes next loads plugins (a new CLI process, or a gateway or app restart).
   footer:
     type: str
     choices: [auto, "off"]

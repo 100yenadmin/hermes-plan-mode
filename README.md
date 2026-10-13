@@ -132,8 +132,9 @@ platforms:
 
 ## The agent tool
 
-The plugin registers one tool, `plan_mode` (toolset `plan-mode`). The profile must grant that toolset. It is on by default
-unless a saved `known_plugin_toolsets` entry leaves it out:
+The plugin registers one tool, `plan_mode` (toolset `plan-mode`). The profile must grant that toolset. It is on by default.
+It is off on a platform when that platform's `known_plugin_toolsets` lists `plan-mode` but `platform_toolsets.<platform>`
+does not, which happens when a tool selection was saved there without it. Add `plan-mode` to that list to turn it back on:
 
 - `on`: enters plan mode for the current session, with the same checks as `/planmode on`.
 - `status`: the same text as `/planmode status`.
@@ -175,7 +176,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Setting | Default | What it does |
 |---|---|---|
 | Enforce core /plan (`enforce_builtin_plan`) | on | Core `/plan` turns on enforced plan mode for the session |
-| Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`. It applies when Hermes next loads plugins: a new CLI session, or a restart of the gateway or app |
+| Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`. It applies when Hermes next loads plugins: a new CLI process, or a restart of the gateway or app |
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
