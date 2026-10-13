@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-10-13
+
+Docs only; no code changes. Behaviour is identical to 0.4.5.
+
 - README corrections:
   - PARITY-3's in-run environment check observed only Codex's command output, so for plan-mode only the before and
     after checks apply.
