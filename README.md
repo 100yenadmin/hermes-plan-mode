@@ -222,31 +222,41 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 #### Experimental levers
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
-`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
-`todo_inline`, `rename_scope`, `test_plan_only`, `choice_record`, `edit_batch` and `brief_final`, plus `plan_once` on TUI, Desktop
-and `hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Four more are
-measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces
-the profile's set, including the automatic `plan_once`, so include the lean levers you want to keep:
+`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`
+and `todo_inline`, plus `plan_once` on TUI, Desktop and `hermes serve` sessions. `plan_skill` still opts into a skill's
+plan format. Nine more are measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the
+full list you want. It replaces the profile's set, including the automatic `plan_once`, so include the lean levers you
+want to keep:
 
 ```yaml
 plugins:
   entries:
     plan-mode:
       settings:
-        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,todo_inline,rename_scope,test_plan_only,choice_record,edit_batch,brief_final,plan_budget"
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,todo_inline,rename_scope,test_plan_only"
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
-- `rename_scope` (lean) tells the model to keep rename behaviour and assertions unchanged and search the whole repo,
-  naming plan files as expected matches; to be measured in the 0.4.4 stress.
-- `test_plan_only` (lean) tells the model to list test and requested-behaviour checks without unrequested repo-hygiene
-  checks; to be measured in the 0.4.4 stress.
-- `choice_record` (lean) tells the model to record answered clarify choices in Assumptions as the user's decisions;
-  to be measured in the 0.4.4 stress.
-- `edit_batch` (lean) tells the model to edit each file once where possible and send different files' edits, including
-  tests, in the same response; to be measured in the 0.4.4 stress.
-- `brief_final` (lean) tells the model to finish in 2–4 lines with what changed and the test result;
-  to be measured in the 0.4.4 stress.
+- **The five 0.4.4 levers are opt-in.** In the 0.4.4 stress (S44: the 0.4.3 lean set without and with all five,
+  same build, gpt-6.1-sol) each did what it targets. But the set cut passing tests on the refactor task (T8) below
+  the pre-declared guard: 33.5 → 26.25 per run. A fresh replication confirmed it: 29.1 → 22.3 over 8 runs each. The
+  low runs planned new tests and then wrote fewer during execution, so the execution levers are the likely cause;
+  that is not yet isolated. None joined lean.
+- `rename_scope` (opt-in) tells the model to keep a rename's behaviour and assertions and to search the whole repo,
+  naming plan files as expected matches. Rename plans that narrowed the leftover search fell from 4 of 4 to 0, and
+  plans adding an unrequested assertion from 2 to 0.
+- `test_plan_only` (opt-in) tells the model to leave git status, git diff and other repo-hygiene checks out of the test
+  plan unless asked. Plans with them fell from 7 of 22 to 0.
+- `choice_record` (opt-in) tells the model to record answered clarify choices in Assumptions as the user's decision.
+  Its pre-registered probe scored 2 → 0 of 4 and it failed its bar. The probe missed the "User decision:" form the
+  lever produces: read directly, 4 of 4 plans attributed the choice to the user, against 2 of 4 without it. It will be
+  re-measured with a corrected probe.
+- `edit_batch` (opt-in) tells the model to edit each file in one call where the tool allows, and to send edits to
+  different files, including tests, in the same response. Execution rounds with edits fell from 48 to 20 on the two
+  edit-heavy tasks.
+- `brief_final` (opt-in) tells the model to finish in 2–4 lines with what changed and the test result. The median final
+  reply fell from 117.5 to 62.5 output tokens.
+- With all five on, wall time was 0.92× (95% CI 0.87–1.04), execution 0.85×, and tokens 19% lower.
 - `test_commands` (lean) tells the model to write test commands the way the repo runs them, falling back to
   `python3 -m pytest` for an undocumented Python repo. In the 0.4.3 stress, plans naming a bare `python` fell from 18
   of 18 to 0, and so did runs that spent a round retrying the command (17 of 18 to 0).

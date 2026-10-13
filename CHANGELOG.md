@@ -1,11 +1,19 @@
 # Changelog
 
-## 0.4.4 (unreleased)
+## 0.4.4 - 2026-10-13
 
-- Five new lean wording levers: `rename_scope` preserves rename behaviour and assertions with whole-repo leftover
-  checks; `test_plan_only` leaves unrequested repo-hygiene checks out of the test plan; `choice_record` records clarify
-  answers as the user's decisions; `edit_batch` batches file edits including tests; `brief_final` asks for a 2–4-line finish.
-- Measured: TBD
+- Five new opt-in wording levers. Each did what it targets in the pre-registered 0.4.4 stress (S44), but together they cut
+  passing tests on the refactor task below the guard, and a fresh replication confirmed it, so none joined lean:
+  - `rename_scope`: rename plans that narrowed the leftover search 4 → 0 of 4, unrequested assertions 2 → 0;
+  - `test_plan_only`: plans with git status/diff checks 7 → 0 of 22;
+  - `choice_record`: scored 2 → 0 of 4 and failed. Its probe missed the "User decision:" form the lever produces; read
+    directly, it was 2 → 4 of 4. To be re-measured;
+  - `edit_batch`: execution rounds with edits 48 → 20 (T7+T8);
+  - `brief_final`: median final reply 117.5 → 62.5 output tokens;
+  - guard: T8 passing tests per run 33.5 → 26.25 (S44, n=4) and 29.1 → 22.3 (replication, n=8).
+- With the five off (the default), every model-facing text is byte-identical to 0.4.3.
+- **Fix:** on hosts that approve by `clarify` (yolo, unattended), the same-turn approval note now also carries
+  `edit_batch` and `brief_final` when they are the only levers on.
 - **Correction:** 0.4.3's notes said refactor_scope missed its bar. That was a probe error; re-scored, rename plans
   narrowed 4→0 of 4 and added unrequested asserts 3→0 (#24).
 - **Correction:** the README's PARITY-2 caveat said the effect of the different test environments was not measured.

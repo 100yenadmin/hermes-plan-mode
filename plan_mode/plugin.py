@@ -116,10 +116,11 @@ _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "
 _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
                  "the approval, not a clarifying question. ")
 # Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
+# The five 0.4.4 levers (rename_scope, test_plan_only, choice_record, edit_batch, brief_final) are opt-in: S44 and its
+# replication S44F cut T8 passing tests below the guard, so none joined lean (README, Experimental levers).
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
                          "light_notes", "question_shape", "bridge_calls", "blocked_tools", "skill_policy",
-                         "test_commands", "choice_fidelity", "todo_inline",
-                         "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"})
+                         "test_commands", "choice_fidelity", "todo_inline"})
 PROFILE_DEFAULT = "lean"
 
 _PLAN_STYLES = frozenset({"compact", "core"})

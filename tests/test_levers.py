@@ -683,9 +683,21 @@ def test_044_execution_levers(make_plugin, lever, text, enabled):
 
 
 def test_044_execution_order(make_plugin):
-    plugin = make_plugin()
-    for output in (plugin._execute_hint(), render.executing_pointer({"approved_path": "/plans/p.md"}, levers=pm.LEAN_LEVERS)):
+    levers = pm.LEAN_LEVERS | NEW_044
+    plugin = make_plugin(",".join(sorted(levers)))
+    for output in (plugin._execute_hint(), render.executing_pointer({"approved_path": "/plans/p.md"}, levers=levers)):
         assert output.endswith(render.SKILL_EXECUTION + " " + render.EDIT_BATCH + " " + render.BRIEF_FINAL)
+
+
+@pytest.mark.parametrize("commits", [False, True])
+def test_044_default_lean_is_043(make_plugin, commits):
+    """The new levers are opt-in: the untouched default profile renders exactly what v0.4.3 rendered."""
+    cases = json.loads(NOTES_043.read_text())
+    plugin = make_plugin(allow_commits=commits)
+    plugin.ctx.settings.pop("levers", None)
+    assert plugin._levers() == pm.LEAN_LEVERS and not NEW_044 & plugin._levers()
+    hint = next(c for c in cases if c["kind"] == "execute_hint" and c["kwargs"]["commits"] is commits)
+    assert plugin._execute_hint() == hint["text"]
 
 
 NOTES_043 = Path(__file__).parent / "fixtures/notes_043.json"
