@@ -115,11 +115,11 @@ _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "
                      "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
                      "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard"})
 EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-code-review", "receiving-code-review",
-                                 "code-review", "writing-plans", "plan", "planning", "brainstorming"})
+                                 "code-review", "writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
 _USER_ASKED_PROCESS = re.compile(
     r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]reviews?)\b", re.I)
 # Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
-_EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming"})
+_EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
 _IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
 # Core /plan puts its plan-craft text right after the task (agent/plan_prompt.py, v0.21.6 and main); its first words
 # end the user's task. Without it, only the task's first paragraph is read.

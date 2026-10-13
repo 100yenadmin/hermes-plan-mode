@@ -308,3 +308,11 @@ def test_builtin_wrapper_reads_whole_task_not_craft(make_plugin, task, asked):
     plugin = make_plugin("exec_skill_guard")
     plugin.pre_llm_call(user_message=_REAL_WRAPPER.format(task=task))
     assert bool(plugin._load_state("sk:unit-session").get("user_asked_process")) is asked
+
+
+@pytest.mark.parametrize("name", ["executing-plans", "superpowers:executing-plans"])
+def test_executing_plans_blocked_even_after_tdd_request(executing, name):
+    assert executing.pre_tool_call("skill_view", {"name": name})["action"] == "block"
+    executing.pre_llm_call(user_message="use TDD please")
+    assert executing.pre_tool_call("skill_view", {"name": name})["action"] == "block"
+    assert executing.pre_tool_call("skill_view", {"name": "test-driven-development"}) is None

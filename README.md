@@ -226,7 +226,7 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
 `light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
 `todo_inline`, `rename_scope` and `test_plan_only`, plus `plan_once` on TUI, Desktop and `hermes serve` sessions.
-`plan_skill` still opts into a skill's plan format. Seven more are measured but in no profile. To try one, or to turn
+`plan_skill` still opts into a skill's plan format. Eight more are measured but in no profile. To try one, or to turn
 `plan_once` off, set `levers` to the full list you want. It replaces the profile's set, including the automatic
 `plan_once`, so include the lean levers you want to keep:
 
@@ -242,7 +242,7 @@ plugins:
 - **`exec_skill_guard` (opt-in).** While an approved plan is executing, it blocks `skill_view` of the planning, TDD
   and code-review process skills, so the agent follows the approved plan instead of a per-edit test loop. A user
   message that mentions TDD, test-first, red-green or code review while plan mode is on or the plan is executing
-  lifts the block for TDD and code-review skills; planning and brainstorming skills stay blocked.
+  lifts the block for TDD and code-review skills; planning, brainstorming and executing-plans skills stay blocked.
   A configured `plan_skill` turns the guard off.
   PROOF-050 (2026-10-13, HP with vs without the guard, two PARITY-4 tasks, 4 runs each per arm) is why it stays
   opt-in:
