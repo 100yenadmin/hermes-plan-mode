@@ -334,11 +334,12 @@ plugins:
 
 ### Measured against Codex plan mode
 
-Three pre-registered benchmarks, PARITY-1 to PARITY-3, compared plan-mode with Codex's own plan mode.
+Four pre-registered benchmarks, PARITY-1 to PARITY-4, compared plan-mode with Codex's own plan mode.
 - **Freezing and judging:** the bars were written and hashed before any run, and a blind adjudicator applied them,
   seeing only the bars and the measurements.
-- **Setup:** both products ran the same model (gpt-6.1-sol, medium) with the same scripted user, on a suite of Python
-  coding tasks. Two tasks hide a preference that only the user knows.
+- **Setup:** both products ran the same model (gpt-6.1-sol, medium) with the same scripted user. PARITY-1 to PARITY-3
+  used a suite of Python coding tasks, two of which hide a preference that only the user knows. PARITY-4 used four
+  larger tasks.
 
 **plan-mode 0.4.5 (PARITY-3, 2026-10-13).** Against Codex plan mode on the same model, suite and test environment,
 plan-mode 0.4.5 met every threshold (0 non-plan repository changes before approval in 38 runs; tests passed in 35 of 35
@@ -356,6 +357,30 @@ in planning and 1.65× in execution.
 - On the rename task, the Codex judge preferred Codex's plan in 3 of 3 pairs: plan-mode's plan names plan files as
   expected matches of the leftover search, which that judge read as permitting old names (#28). The Claude judge
   preferred plan-mode's plan in 2 of 3.
+
+**Larger tasks (PARITY-4, 2026-10-13).** On four larger tasks (a static site generator, a JSON API, a Node.js CLI and a
+refactor across a ~200-file repo), plan-mode 0.4.5 met every threshold against Codex plan mode on the same model
+(plan-mode verified 12 of 12 runs, Codex plan mode 12 of 12) and took 1.82× as long end to end (95% CI 1.52–2.18×),
+1.73× in planning and 1.96× in execution.
+- **Before approval:** 0 non-plan repository changes and 0 commits in 12 runs, and every approval went through the gate.
+- **Correctness:** both products finished every run, so these tasks do not separate them on correctness.
+- **Plan quality:** in blind plan-only comparisons, the Claude judge preferred plan-mode's plan in 92% of pairs (95% CI
+  75–100%) and the Codex judge in 83% (67–100%).
+- **The refactor** hides four code paths that use the changed events.
+  - plan-mode's plans named all four in 3 of 3 runs.
+  - Codex plan mode's plans named one in one run and none in the other two.
+  - Both products' finished code handled all four.
+- **Cost:** plan-mode made more model calls (a median of 14–34 per run, against 10–13) and used 1.2–5.3× the tokens.
+  Its calls were not slower: the median was 7.4 s per call (297 calls), against 12.3 s per Codex request (87 requests;
+  49 requests with no recorded end were left out).
+- **Test environment:** both products ran the same `node` (v26.7.0), `python3` and pytest, and command output was
+  recorded for both. No run showed a missing node or pytest.
+- **One rule changed after the smoke run and before the counted runs:**
+  - The original node check accepted only a literal `node --test` command with its own exit status, but both products
+    ran node through `npm test`.
+  - The amended rule also accepts `npm test` and a passing node:test summary. It was frozen and re-checked blind before
+    any counted run.
+  - Under the original rule, the campaign would have stopped before it started.
 
 **plan-mode 0.4.2 (PARITY-2, 2026-10-12).** It met every pre-declared threshold.
 - 0 changes and 0 commits before approval in 38 runs, and every approval went through the gate.
@@ -398,8 +423,8 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Codex runs read-only shell commands while planning;** plan-mode blocks the terminal until approval. In PARITY-3,
   Codex ran shell commands and tests before approval in 38 of 38 runs, and plan-mode in 0. Both are measured as
   shipped.
-- **Not covered:** other models, chat platforms, long sessions, non-Python repos, and the time a person takes to
-  review a plan.
+- **Not covered:** other models, chat platforms, long sessions, repos much larger than ~200 files, multi-hour tasks,
+  most non-Python work (PARITY-4 had one Node.js task), and the time a person takes to review a plan.
 
 ## Security model
 
