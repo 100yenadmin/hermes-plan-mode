@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- README: "Measured against Codex plan mode" leads with PARITY-3 (0.4.5, the same test environment for both
+  products): every threshold met, 1.61× end to end (95% CI 1.33–1.79). Follow-up on the rename task: #28.
+
 ## 0.4.5 - 2026-10-13
 
 - `rename_scope` and `test_plan_only` join the default lean set. In the pre-registered 0.4.5 stress (S45, 26 runs per
