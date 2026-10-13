@@ -1,5 +1,6 @@
 """Opt-in execution guard; exercise real planning/approval hooks with fake hosts."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -181,3 +182,91 @@ def test_lever_registration(make_plugin, monkeypatch):
 
 def test_message_short():
     assert len(render.EXEC_SKILL_GUARD_MESSAGE) < 300
+
+
+@pytest.mark.parametrize("levers,filename", [
+    ("exec_skill_guard,commit_override", "parser.md"),
+    ("exec_skill_guard", "add-tdd-coverage.md"),
+    ("exec_skill_guard", "code-review-parser.md"),
+])
+def test_fix1_injected_implementation_is_not_user_request(make_plugin, levers, filename):
+    plugin = make_plugin(levers)
+    plugin.command("on parser")
+    path = Path(plugin._load_state("sk:unit-session")["plans_dir"]) / filename
+    assert plugin.pre_tool_call("write_file", {"path": str(path)}) is None
+    path.write_text("# Plan\n\nChange parser.py; run pytest.", encoding="utf-8")
+    assert "Plan approved" in plugin.command("approve")
+    injected = plugin.ctx.injected[-1][0]
+    plugin.pre_llm_call(user_message=" \n" + injected)
+    assert not plugin._load_state("sk:unit-session").get("user_asked_process")
+    assert plugin.pre_tool_call("skill_view", {"name": "test-driven-development"})["action"] == "block"
+
+
+def test_fix2_flag_save_failure_preserves_planning_note(make_plugin, monkeypatch):
+    plugin = make_plugin("exec_skill_guard")
+    write_plan(plugin)
+    expected = plugin.pre_llm_call(user_message="add a --json flag")
+    assert "files may be written only under" in expected["context"]
+    save = plugin._save_state
+    attempts = []
+
+    def fail_flag_write(key, state):
+        if state.get("user_asked_process"):
+            attempts.append(key)
+            raise OSError("flag write fault")
+        return save(key, state)
+
+    monkeypatch.setattr(plugin, "_save_state", fail_flag_write)
+    assert plugin.pre_llm_call(user_message="please use TDD") == expected
+    assert attempts == ["sk:unit-session"]
+
+
+def test_fix2_idle_message_does_not_set_flag(make_plugin):
+    plugin = make_plugin("exec_skill_guard")
+    plugin._save_state("sk:unit-session", {"active": False})
+    assert plugin.pre_llm_call(user_message="please use TDD") is None
+    assert "user_asked_process" not in plugin._load_state("sk:unit-session")
+
+
+def test_fix3_message_describes_tdd_and_review_escape():
+    assert render.EXEC_SKILL_GUARD_MESSAGE == (
+        "Not loaded: {name}. The approved plan is the process for this task. Make each todo's edits together, "
+        "then run the tests once. If the user asks for TDD or a code review, those skills will be allowed."
+    )
+
+
+@pytest.mark.parametrize("name", ["writing-plans", "plan", "planning", "brainstorming"])
+def test_fix3_process_request_keeps_planning_skills_blocked(executing, name):
+    executing.pre_llm_call(user_message="please use TDD and code review")
+    assert executing.pre_tool_call("skill_view", {"name": "tdd"}) is None
+    assert executing.pre_tool_call("skill_view", {"name": "requesting-code-review"}) is None
+    assert executing.pre_tool_call("skill_view", {"name": name})["action"] == "block"
+
+
+@pytest.mark.parametrize("entered_by,asked", [("user", True), ("agent", False)])
+def test_fix4_on_task_process_request(make_plugin, entered_by, asked):
+    plugin = make_plugin("exec_skill_guard")
+    plugin._run_command("on", "add a --json flag using TDD", entered_by=entered_by)
+    state = plugin._load_state("sk:unit-session")
+    assert bool(state.get("user_asked_process")) is asked
+    path = Path(state["plans_dir"]) / "parser.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(path)}) is None
+    path.write_text("# Plan\n\nChange parser.py; run pytest.", encoding="utf-8")
+    approve_gate(plugin, path)
+    assert (plugin.pre_tool_call("skill_view", {"name": "tdd"}) is None) is asked
+
+
+@pytest.mark.parametrize("message", [
+    ["please use TDD"],
+    [{"type": "text", "text": "please use test-first"}],
+    ["please use ", {"text": "code review"}, {"type": "image", "text": None}, 7],
+])
+def test_fix4_multimodal_process_request(executing, message):
+    executing.pre_llm_call(user_message=message)
+    assert executing._load_state("sk:unit-session")["user_asked_process"] is True
+    assert executing.pre_tool_call("skill_view", {"name": "tdd"}) is None
+
+
+@pytest.mark.parametrize("name", ["superpowers: tdd", "software-development/test-driven-development/"])
+def test_fix5_normalized_names_blocked(executing, name):
+    assert executing.pre_tool_call("skill_view", {"name": name})["action"] == "block"

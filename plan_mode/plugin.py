@@ -118,6 +118,17 @@ EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-c
                                  "writing-plans", "plan", "planning", "brainstorming"})
 _USER_ASKED_PROCESS = re.compile(
     r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]review)\b", re.I)
+# Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
+_EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming"})
+_IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
+
+
+def _user_message_text(message: Any) -> str | None:
+    """The text of a turn's user message (multimodal parts joined), or None."""
+    if isinstance(message, list):
+        return "".join(part if isinstance(part, str) else part["text"] for part in message
+                       if isinstance(part, str) or (isinstance(part, dict) and isinstance(part.get("text"), str)))
+    return message if isinstance(message, str) else None
 _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
                  "the approval, not a clarifying question. ")
 # Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
@@ -1067,6 +1078,8 @@ class PlanModePlugin:
                     "revision": int(state.get("revision") or 0),
                     **preserved,
                 }
+                if entered_by == "user" and _USER_ASKED_PROCESS.search(remainder):
+                    state["user_asked_process"] = True
                 if entered_by == "agent":
                     state["agent_activation_id"] = state["activation_id"]
                 if identity.key.startswith("cli:"):
@@ -1264,7 +1277,7 @@ class PlanModePlugin:
                 return False
             reader = _session_reader()
             session_key = reader("HERMES_SESSION_KEY", "") if reader else None
-            content = f"Implement the approved plan at {approved_path}." + self._commit_rule()
+            content = f"{_IMPLEMENT_PREFIX}{approved_path}." + self._commit_rule()
             return bool(inject(content, session_key=session_key) if session_key else inject(content))
         except Exception:
             return False
@@ -1663,11 +1676,11 @@ class PlanModePlugin:
                     # This optional speed guard fails open, independently of planning's safety checks.
                     try:
                         if (tool_name == "skill_view" and state.get("phase") == "executing"
-                                and "exec_skill_guard" in self._note_levers()
-                                and not state.get("user_asked_process")):
+                                and "exec_skill_guard" in self._note_levers()):
                             name = str(call_args.get("name") or "")
-                            normalized = name.strip().lower().rsplit(":", 1)[-1].rsplit("/", 1)[-1]
-                            if normalized in EXEC_PROCESS_SKILLS:
+                            normalized = name.strip().lower().rstrip("/").rsplit(":", 1)[-1].rsplit("/", 1)[-1].strip()
+                            if normalized in EXEC_PROCESS_SKILLS and (not state.get("user_asked_process")
+                                                                      or normalized in _EXEC_PLANNING_SKILLS):
                                 return {"action": "block", "message": EXEC_SKILL_GUARD_MESSAGE.format(name=name)}
                     except Exception:
                         return None
@@ -1926,18 +1939,24 @@ class PlanModePlugin:
                     state_key, state = self._state_for_hook(identity)
                     if not state.get("active"):
                         return None  # Refusal text is never injected into a turn.
-                if state_key is not None and state and isinstance(message, str):
-                    user_text = message
-                    if ("[/plan — plan mode]" in user_text
-                            and "For this turn, you are in PLAN MODE — planning only." in user_text):
-                        user_text = re.split(r"\n\s*\n", user_text.partition("Task to plan:")[2].lstrip("\r\n"),
-                                             maxsplit=1)[0]
-                    pending_note = state.get("pending_note")
-                    if isinstance(pending_note, str) and pending_note.strip():
-                        user_text = user_text.replace(pending_note.strip(), "")
-                    if _USER_ASKED_PROCESS.search(user_text):
-                        state["user_asked_process"] = True
-                        self._save_state(state_key, state)
+                # exec_skill_guard's escape: record a user request for TDD or a code review. It can only relax a
+                # speed lever, so any failure here is ignored and never changes this hook's result.
+                try:
+                    if state_key is not None and (state.get("active") or state.get("phase") == "executing"):
+                        user_text = _user_message_text(message)
+                        if isinstance(user_text, str) and not user_text.strip().startswith(_IMPLEMENT_PREFIX):
+                            if ("[/plan — plan mode]" in user_text
+                                    and "For this turn, you are in PLAN MODE — planning only." in user_text):
+                                user_text = re.split(r"\n\s*\n", user_text.partition("Task to plan:")[2].lstrip("\r\n"),
+                                                     maxsplit=1)[0]
+                            pending_note = state.get("pending_note")
+                            if isinstance(pending_note, str) and pending_note.strip():
+                                user_text = user_text.replace(pending_note.strip(), "")
+                            if _USER_ASKED_PROCESS.search(user_text):
+                                state["user_asked_process"] = True
+                                self._save_state(state_key, state)
+                except Exception:
+                    pass
                 parts: list[str] = []
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():

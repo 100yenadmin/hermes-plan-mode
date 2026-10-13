@@ -3,7 +3,8 @@
 ## Unreleased
 
 - New opt-in lever `exec_skill_guard`: while an approved plan is executing, block loading the TDD, planning and
-  code-review process skills unless the user asked for that process.
+  code-review process skills. A user message mentioning TDD, test-first, red-green or code review lifts the guard for
+  TDD and code-review skills; planning and brainstorming skills stay blocked.
 
 ## 0.4.6 - 2026-10-13
 

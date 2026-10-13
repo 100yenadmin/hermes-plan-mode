@@ -100,7 +100,7 @@ SKILL_POLICY = (
 SKILL_EXECUTION = "The approved plan is the process: do not load planning, TDD or code-review skills unless the user asked."
 EXEC_SKILL_GUARD_MESSAGE = (
     "Not loaded: {name}. The approved plan is the process for this task. Make each todo's edits together, "
-    "then run the tests once. If the user asks for this process, it will be allowed."
+    "then run the tests once. If the user asks for TDD or a code review, those skills will be allowed."
 )
 LIGHT_BRIDGE = (
     ' If plan_mode is not in your tool list: tool_call(calls=[{"name": "plan_mode", '

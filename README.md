@@ -241,8 +241,9 @@ plugins:
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
 - **`exec_skill_guard` (opt-in).** While an approved plan is executing, it blocks `skill_view` of the planning, TDD
   and code-review process skills, so the agent follows the approved plan instead of a per-edit test loop. A user
-  message that asks for TDD, test-first, red-green or code review while plan mode is on or the plan is executing
-  lifts the block. A configured `plan_skill` turns the guard off.
+  message that mentions TDD, test-first, red-green or code review while plan mode is on or the plan is executing
+  lifts the block for TDD and code-review skills; planning and brainstorming skills stay blocked.
+  A configured `plan_skill` turns the guard off.
 - **How the 0.4.4 levers were decided.** With all five on (S44), the set cut passing tests on the refactor task (T8)
   below the pre-declared guard, 33.5 → 26.25 per run, and a fresh replication confirmed it (29.1 → 22.3), so 0.4.4
   kept them all opt-in. The 0.4.5 stress (S45, gpt-6.1-sol, 26 runs per arm) then tested the three planning levers
