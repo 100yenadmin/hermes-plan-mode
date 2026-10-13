@@ -21,8 +21,8 @@ hook, except writes to the plan file.
 3. It writes the plan as Markdown under `<cwd>/.hermes/plans`.
 4. It shows the complete plan in its reply, then calls `plan_mode(action="submit")`.
 5. Hermes shows its normal approval prompt for plan revision N: buttons, a card, the CLI panel, or `/approve` text.
-6. Approve: plan mode turns off and the agent implements the plan in the same turn, mirroring the steps into
-   `todo_list`.
+6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
+   `todo_list` (with the default `lean` profile, for plans of 4 or more steps).
 7. Deny: plan mode stays on. The plugin tells the agent that a denial is review feedback, so it asks what to change
    (when no reason came with the denial), revises the plan and submits a complete new revision.
 
@@ -132,7 +132,8 @@ platforms:
 
 ## The agent tool
 
-The plugin registers one tool, `plan_mode` (toolset `plan-mode`):
+The plugin registers one tool, `plan_mode` (toolset `plan-mode`). The profile must grant that toolset. It is on by default
+unless a saved `known_plugin_toolsets` entry leaves it out:
 
 - `on`: enters plan mode for the current session, with the same checks as `/planmode on`.
 - `status`: the same text as `/planmode status`.
@@ -174,7 +175,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Setting | Default | What it does |
 |---|---|---|
 | Enforce core /plan (`enforce_builtin_plan`) | on | Core `/plan` turns on enforced plan mode for the session |
-| Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`; applies to new sessions |
+| Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`. It applies when Hermes next loads plugins: a new CLI session, or a restart of the gateway or app |
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
@@ -344,8 +345,11 @@ runs for each product; hidden preferences found in 9 of 10 runs, against 10 of 1
 Claude, 82% Codex) and took 1.61× as long end to end on the core tasks of this Python suite (95% CI 1.33–1.79): 1.40×
 in planning and 1.65× in execution.
 - 0 commits before approval, and every approval went through the gate.
+- One of plan-mode's 9 hidden-preference hits came from a question that named no options. The scripted user's
+  default answer happened to match, so asking quality on that task is unproven.
 - The judges compared plans blind, plan text only: 95% CI 71–91% for the Claude judge and 76–86% for the Codex judge.
-- Both products ran the same `python3` (3.9.6) and pytest (8.4.2), checked before, during and after the campaign.
+- Both products ran the same `python3` (3.9.6) and pytest (8.4.2), checked for both before and after the campaign.
+  During the runs only Codex's command output was recorded, so for plan-mode the in-run check was not observed.
 - 0.4.5's two new lean levers held: 0 of 3 rename plans narrowed the leftover check or added an unrequested assertion,
   and 0 of 38 plans had git status or diff checks (the S44 probes).
 - On the rename task, the Codex judge preferred Codex's plan in 3 of 3 pairs: plan-mode's plan names plan files as
