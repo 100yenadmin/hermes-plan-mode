@@ -28,7 +28,7 @@ from .approval import (
 )
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
-    BRIEF_FINAL, EDIT_BATCH, SKILL_EXECUTION, executing_pointer, light_note,
+    BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -90,7 +90,8 @@ _AGENT_NOTE_BRIDGE = (
 )
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
-_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress")
+_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress",
+                     "user_asked_process")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open",)
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -112,7 +113,25 @@ _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
                      "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
                      "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
-                     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"})
+                     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard"})
+EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-code-review", "receiving-code-review",
+                                 "code-review", "writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
+_USER_ASKED_PROCESS = re.compile(
+    r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]reviews?)\b", re.I)
+# Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
+_EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
+_IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
+# Core /plan puts its plan-craft text right after the task (agent/plan_prompt.py, v0.21.6 and main); its first words
+# end the user's task. Without it, only the task's first paragraph is read.
+_PLAN_CRAFT_START = "\n\nWrite the plan for an implementer with zero context"
+
+
+def _user_message_text(message: Any) -> str | None:
+    """The text of a turn's user message (multimodal parts joined), or None."""
+    if isinstance(message, list):
+        return "".join(part if isinstance(part, str) else part["text"] for part in message
+                       if isinstance(part, str) or (isinstance(part, dict) and isinstance(part.get("text"), str)))
+    return message if isinstance(message, str) else None
 _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
                  "the approval, not a clarifying question. ")
 # Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
@@ -1062,6 +1081,8 @@ class PlanModePlugin:
                     "revision": int(state.get("revision") or 0),
                     **preserved,
                 }
+                if entered_by == "user" and _USER_ASKED_PROCESS.search(remainder):
+                    state["user_asked_process"] = True
                 if entered_by == "agent":
                     state["agent_activation_id"] = state["activation_id"]
                 if identity.key.startswith("cli:"):
@@ -1259,7 +1280,7 @@ class PlanModePlugin:
                 return False
             reader = _session_reader()
             session_key = reader("HERMES_SESSION_KEY", "") if reader else None
-            content = f"Implement the approved plan at {approved_path}." + self._commit_rule()
+            content = f"{_IMPLEMENT_PREFIX}{approved_path}." + self._commit_rule()
             return bool(inject(content, session_key=session_key) if session_key else inject(content))
         except Exception:
             return False
@@ -1325,6 +1346,8 @@ class PlanModePlugin:
             levers.remove("lean_craft")
         if self._plan_skill():
             levers.discard("skill_policy")
+        if self._configured_plan_skill():
+            levers.discard("exec_skill_guard")  # a configured plan skill opts into skill-driven process
         if any(name in {"terminal", "execute_code"} or name.startswith(("delegate", "mcp"))
                for name in self._extra_allowed_tools()):
             levers.discard("blocked_tools")  # the note must not call a tool the operator allowed blocked
@@ -1475,14 +1498,16 @@ class PlanModePlugin:
         except OSError:
             return ""  # Keep the already-approved path when the file can no longer be read.
 
-    def _plan_skill(self) -> str:
+    def _configured_plan_skill(self) -> str:
         # A skill name only; anything else (paths with spaces, prose, oversized values) is ignored.
         name = self._config("plan_skill", "")
         name = name.strip() if isinstance(name, str) else ""
-        if not _PLAN_SKILL_RE.fullmatch(name):
-            return ""
+        return name if _PLAN_SKILL_RE.fullmatch(name) else ""
+
+    def _plan_skill(self) -> str:
+        name = self._configured_plan_skill()
         # Plan mode blocks skill_view while inline shell may run; then the skill can't be loaded, so use Plan style.
-        return "" if _skill_view_block_reason() else name
+        return "" if not name or _skill_view_block_reason() else name
 
     def _allow_commits(self) -> bool:
         # YAML 1.1 reads a bare `off`/`no` as False; quoted strings are accepted as well.
@@ -1654,6 +1679,17 @@ class PlanModePlugin:
                 state_key, state = self._state_for_hook(identity)
                 if not state.get("active"):
                     self._active_keys.discard(identity.key)
+                    # This optional speed guard fails open, independently of planning's safety checks.
+                    try:
+                        if (tool_name == "skill_view" and state.get("phase") == "executing"
+                                and "exec_skill_guard" in self._note_levers()):
+                            name = str(call_args.get("name") or "")
+                            normalized = name.strip().lower().rstrip("/").rsplit(":", 1)[-1].rsplit("/", 1)[-1].strip()
+                            if normalized in EXEC_PROCESS_SKILLS and (not state.get("user_asked_process")
+                                                                      or normalized in _EXEC_PLANNING_SKILLS):
+                                return {"action": "block", "message": EXEC_SKILL_GUARD_MESSAGE.format(name=name)}
+                    except Exception:
+                        return None
                     return _block_message(PLAN_MODE_TOOL, "Cannot submit: plan mode is not active for this session.") if is_submit else None
                 assert state_key is not None
                 self._active_keys.add(state_key)
@@ -1909,6 +1945,25 @@ class PlanModePlugin:
                     state_key, state = self._state_for_hook(identity)
                     if not state.get("active"):
                         return None  # Refusal text is never injected into a turn.
+                # exec_skill_guard's escape: record a user request for TDD or a code review. It can only relax a
+                # speed lever, so any failure here is ignored and never changes this hook's result.
+                try:
+                    if state_key is not None and (state.get("active") or state.get("phase") == "executing"):
+                        user_text = _user_message_text(message)
+                        if isinstance(user_text, str) and not user_text.strip().startswith(_IMPLEMENT_PREFIX):
+                            if ("[/plan — plan mode]" in user_text
+                                    and "For this turn, you are in PLAN MODE — planning only." in user_text):
+                                task = user_text.partition("Task to plan:")[2].lstrip("\r\n")
+                                user_text = (task.partition(_PLAN_CRAFT_START)[0] if _PLAN_CRAFT_START in task
+                                             else re.split(r"\n\s*\n", task, maxsplit=1)[0])
+                            pending_note = state.get("pending_note")
+                            if isinstance(pending_note, str) and pending_note.strip():
+                                user_text = user_text.replace(pending_note.strip(), "")
+                            if _USER_ASKED_PROCESS.search(user_text):
+                                state["user_asked_process"] = True
+                                self._save_state(state_key, state)
+                except Exception:
+                    pass
                 parts: list[str] = []
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():
