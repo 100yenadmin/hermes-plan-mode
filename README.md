@@ -237,11 +237,12 @@ plugins:
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
-- **The five 0.4.4 levers are opt-in.** In the 0.4.4 stress (S44: the 0.4.3 lean set without and with all five,
-  same build, gpt-6.1-sol) each did what it targets. But the set cut passing tests on the refactor task (T8) below
-  the pre-declared guard: 33.5 → 26.25 per run. A fresh replication confirmed it: 29.1 → 22.3 over 8 runs each. The
-  low runs planned new tests and then wrote fewer during execution, so the execution levers are the likely cause;
-  that is not yet isolated. None joined lean.
+- **The five 0.4.4 levers are opt-in.** In the 0.4.4 stress (S44: the 0.4.3 lean set without and with all five, same
+  build, gpt-6.1-sol) four met their bars (`choice_record`'s probe misread it; below). But the set cut passing tests
+  on the refactor task (T8) below the pre-declared guard: 33.5 → 26.25 per run. A fresh replication confirmed it:
+  29.1 → 22.3 over 8 runs each. The low runs wrote fewer parametrized test cases during execution while their plans' test
+  sections did not differ, so the execution levers are the likely cause; that is not yet isolated (#26). None joined
+  lean.
 - `rename_scope` (opt-in) tells the model to keep a rename's behaviour and assertions and to search the whole repo,
   naming plan files as expected matches. Rename plans that narrowed the leftover search fell from 4 of 4 to 0, and
   plans adding an unrequested assertion from 2 to 0.

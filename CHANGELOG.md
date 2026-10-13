@@ -2,8 +2,8 @@
 
 ## 0.4.4 - 2026-10-13
 
-- Five new opt-in wording levers. Each did what it targets in the pre-registered 0.4.4 stress (S44), but together they cut
-  passing tests on the refactor task below the guard, and a fresh replication confirmed it, so none joined lean:
+- Five new opt-in wording levers. Four met their bars in the pre-registered 0.4.4 stress (S44), but together the five cut
+  passing tests on the refactor task below the guard, and a fresh replication confirmed it, so none joined lean (#26):
   - `rename_scope`: rename plans that narrowed the leftover search 4 → 0 of 4, unrequested assertions 2 → 0;
   - `test_plan_only`: plans with git status/diff checks 7 → 0 of 22;
   - `choice_record`: scored 2 → 0 of 4 and failed. Its probe missed the "User decision:" form the lever produces; read
