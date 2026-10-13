@@ -690,14 +690,17 @@ def test_044_execution_order(make_plugin):
 
 
 @pytest.mark.parametrize("commits", [False, True])
-def test_044_default_lean_is_043(make_plugin, commits):
-    """The new levers are opt-in: the untouched default profile renders exactly what v0.4.3 rendered."""
+def test_045_default_lean(make_plugin, commits):
+    """0.4.5 default: the two planning levers render; the execution levers stay off, so the execute hint is 0.4.3's."""
     cases = json.loads(NOTES_043.read_text())
     plugin = make_plugin(allow_commits=commits)
     plugin.ctx.settings.pop("levers", None)
-    assert plugin._levers() == pm.LEAN_LEVERS and not NEW_044 & plugin._levers()
+    assert plugin._levers() == pm.LEAN_LEVERS and NEW_044 & plugin._levers() == {"rename_scope", "test_plan_only"}
     hint = next(c for c in cases if c["kind"] == "execute_hint" and c["kwargs"]["commits"] is commits)
     assert plugin._execute_hint() == hint["text"]
+    note = render.planning_note("/plans", levers=plugin._levers())
+    assert render.RENAME_SCOPE.format(plans_dir="/plans") in note and render.TEST_PLAN_ONLY in note
+    assert render.CHOICE_RECORD not in note
 
 
 NOTES_043 = Path(__file__).parent / "fixtures/notes_043.json"

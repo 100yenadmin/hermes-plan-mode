@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.5 - 2026-10-13
+
+- `rename_scope` and `test_plan_only` join the default lean set. In the pre-registered 0.4.5 stress (S45, 26 runs per
+  arm), rename plans that narrowed the leftover search fell 4 → 0 of 4 and unrequested assertions 3 → 0; test plans with
+  git status/diff checks fell 10 → 0 of 26. Every guard held: no changes before approval, 26/26 verified in both arms,
+  the same hidden-preference hits, and T8 passing tests 24.9 vs 28.4 per run, above the 85% bar.
+- `choice_record`, `edit_batch` and `brief_final` stay opt-in. `choice_record`: 6 of 6 plans attributed the clarify
+  choice with it, but read directly 4 of 6 already did without it, so the deficit was not shown. A labelled arm ran
+  `edit_batch` and `brief_final` alone: edit rounds 49 → 27, final reply 128.5 → 64 tokens, and T8 tests rose
+  28.4 → 32.3 (mean per run, labelled). The earlier drop was observed with all five enabled (#26).
+- Labelled, not gated: the S45 arm with the three planning levers (the two above plus `choice_record`) took 1.11× the
+  baseline's wall time (95% CI 0.97–1.25).
+- The execute hint is unchanged from 0.4.3 and 0.4.4.
+
 ## 0.4.4 - 2026-10-13
 
 - Five new opt-in wording levers. Four met their bars in the pre-registered 0.4.4 stress (S44), but together the five cut
