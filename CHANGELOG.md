@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.4 (unreleased)
+
+- Five new lean wording levers: `rename_scope` preserves rename behaviour and assertions with whole-repo leftover
+  checks; `test_plan_only` leaves unrequested repo-hygiene checks out of the test plan; `choice_record` records clarify
+  answers as the user's decisions; `edit_batch` batches file edits including tests; `brief_final` asks for a 2–4-line finish.
+- Measured: TBD
+- **Correction:** 0.4.3's notes said refactor_scope missed its bar. That was a probe error; re-scored, rename plans
+  narrowed 4→0 of 4 and added unrequested asserts 3→0 (#24).
+- **Correction:** the README's PARITY-2 caveat said the effect of the different test environments was not measured.
+  A re-analysis estimates Codex's execution time without its pytest setup cost, putting the execution ratio at about
+  1.39–1.42× rather than 1.26×. The README now says so.
+
 ## 0.4.3 - 2026-10-12
 
 - Three new lean levers, each aimed at a cause PARITY-2 measured against Codex plan mode:

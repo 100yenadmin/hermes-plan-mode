@@ -36,13 +36,14 @@ def test_profile_constants_and_selection(make_plugin):
     assert pm.LEAN_LEVERS == frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky",
                                        "reentry", "approved_text", "light_notes", "question_shape",
                                        "bridge_calls", "blocked_tools", "skill_policy",
-                                       "test_commands", "choice_fidelity", "todo_inline"})
+                                       "test_commands", "choice_fidelity", "todo_inline",
+                                       "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"})
     lean = make_plugin()
     lean.ctx.settings.clear()  # genuinely untouched config, including the override key
     assert lean._plan_profile() == "lean" and lean._plan_style() == "compact"
     assert lean._plan_skill() == "" and lean._levers() == pm.LEAN_LEVERS
     lean._levers().clear()  # the selector returns a mutable copy, never the shared profile
-    assert len(pm.LEAN_LEVERS) == 14
+    assert len(pm.LEAN_LEVERS) == 19
     assert "refactor_scope" in pm._LEVERS and "refactor_scope" not in pm.LEAN_LEVERS  # S43: opt-in only
     assert make_plugin(plan_profile="classic")._levers() == set()
 

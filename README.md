@@ -222,8 +222,8 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 #### Experimental levers
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
-`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`
-and `todo_inline`, plus `plan_once` on TUI, Desktop
+`light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
+`todo_inline`, `rename_scope`, `test_plan_only`, `choice_record`, `edit_batch` and `brief_final`, plus `plan_once` on TUI, Desktop
 and `hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Four more are
 measured but in no profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces
 the profile's set, including the automatic `plan_once`, so include the lean levers you want to keep:
@@ -233,10 +233,20 @@ plugins:
   entries:
     plan-mode:
       settings:
-        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,todo_inline,plan_budget"
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,todo_inline,rename_scope,test_plan_only,choice_record,edit_batch,brief_final,plan_budget"
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
+- `rename_scope` (lean) tells the model to keep rename behaviour and assertions unchanged and search the whole repo,
+  naming plan files as expected matches; measured in the 0.4.4 stress.
+- `test_plan_only` (lean) tells the model to list test and requested-behaviour checks without unrequested repo-hygiene
+  checks; measured in the 0.4.4 stress.
+- `choice_record` (lean) tells the model to record answered clarify choices in Assumptions as the user's decisions;
+  measured in the 0.4.4 stress.
+- `edit_batch` (lean) tells the model to edit each file once where possible and send different files' edits, including
+  tests, in the same response; measured in the 0.4.4 stress.
+- `brief_final` (lean) tells the model to finish in 2–4 lines with what changed and the test result;
+  measured in the 0.4.4 stress.
 - `test_commands` (lean) tells the model to write test commands the way the repo runs them, falling back to
   `python3 -m pytest` for an undocumented Python repo. In the 0.4.3 stress, plans naming a bare `python` fell from 18
   of 18 to 0, and so did runs that spent a round retrying the command (17 of 18 to 0).
@@ -246,9 +256,9 @@ plugins:
 - `choice_fidelity` (lean) tells the model that a recommended clarify choice must keep every stated requirement. On
   the CSV task, plans that exempted NaN and Infinity from the required round trip fell from 2 of 6 to 0.
 - `refactor_scope` (opt-in) tells the model to keep a rename's behaviour and assertions, and to search the whole repo
-  for leftovers. It removed the unrequested new assertions (3 of 4 rename plans to 0), but every plan still narrowed
-  the leftover search: it now excluded the plan folder where it used to limit the search to app and tests. So it
-  missed its bar and stays out of lean.
+  for leftovers. S43 first scored it as missing its bar; that was a probe error (the probe matched the plan naming its own file).
+  Re-scored, narrowing went 4→0 of 4 and unrequested asserts 3→0 (#24). It stays opt-in because its "add no new test cases"
+  clause may cut tests on refactors that ask for them; `rename_scope` is the rename-only form.
 - `bridge_calls` now also gives the agent hint and the agent-entered result the `tool_call` form, so the agent can
   enter and leave plan mode without a tool search (#22).
 - `plan_budget` asks for compact plans of under about 1,200 characters for small changes. In its pre-registered round
@@ -343,9 +353,13 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   judge preferred plan-mode's in 64%.
 
 **What these runs do not show.**
-- **The test environments differed.** Plan-mode's `python3` had pytest. Codex's sandboxed `python3` did not, so Codex
-  ran tests through `uv run --with pytest`, which asked for approval in most runs. That setup counts in Codex's
-  execution time, so the execution ratio probably flatters plan-mode. By how much was not measured.
+- **The test environments differed.** Both products ran the same `python3`, but only plan-mode's could import pytest:
+  it saw the user's site-packages, and Codex ran with a clean home. In PARITY-2, every Codex run's `python3 -m pytest`
+  failed while planning, 36 of 38 then ran tests through `uv run --with pytest` with an approval, and 30 of 38 Codex
+  plans said pytest was missing. A re-analysis (2026-10-13) estimates that without that setup cost the execution ratio
+  would be about 1.39–1.42× rather than 1.26×, so the published ratios flatter plan-mode. This is an estimate (3 runs
+  per task, most of the shift from one task). The judges saw the "pytest missing" text in Codex's plans; there is no
+  sign it moved their scores. The next comparison gives both products the same environment.
 - **Codex runs read-only shell commands while planning;** plan-mode blocks the terminal until approval. Both are
   measured as shipped.
 - **Not covered:** other models, chat platforms, long sessions, non-Python repos, and the time a person takes to

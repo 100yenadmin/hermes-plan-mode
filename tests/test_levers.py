@@ -18,7 +18,9 @@ LEVER_NAMES = {
     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
     "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
+    "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final",
 }
+NEW_044 = {"rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"}
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
 IDS = dict(session_id="s", turn_id="t", api_request_id="r", tool_call_id="submit")
 
@@ -544,7 +546,7 @@ def test_042_plan_skill_suppresses_policy(make_plugin, monkeypatch, levers):
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("skill,question,reply,craft", list(itertools.product(("", "project-plan"), (False, True), (False, True), (False, True))))
 def test_043_planning_levers(lever, text, enabled, skill, question, reply, craft):
-    levers = (set(pm.LEAN_LEVERS) - {"test_commands", "choice_fidelity", "refactor_scope", "lean_craft", "question_shape"})
+    levers = (set(pm.LEAN_LEVERS) - NEW_044 - {"test_commands", "choice_fidelity", "refactor_scope", "lean_craft", "question_shape"})
     levers |= ({lever} if enabled else set()) | ({"question_shape"} if question else set())
     levers |= ({"plan_once"} if reply else set()) | ({"lean_craft"} if craft else set())
     note = render.planning_note("/plans", style="compact", plan_skill=skill, reply_plan=reply, levers=levers)
@@ -638,3 +640,74 @@ def test_043_todo_inline_alone_clears_at_turn_end(make_plugin):
     approve_gate(plugin, write_plan(plugin))
     plugin.post_llm_call(**IDS)
     assert plugin.pre_llm_call() is None
+
+
+@pytest.mark.parametrize("lever,text", [("rename_scope", render.RENAME_SCOPE.format(plans_dir="/plans")),
+    ("test_plan_only", render.TEST_PLAN_ONLY), ("choice_record", render.CHOICE_RECORD)])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("style,skill,question,reply", list(itertools.product(
+    ("compact", "core"), ("", "project-plan"), (False, True), (False, True))))
+def test_044_planning_levers(lever, text, enabled, style, skill, question, reply):
+    levers = ({lever} if enabled else set()) | ({"question_shape"} if question else set()) | {"choice_fidelity"}
+    levers |= {"plan_once"} if reply else set()
+    note = render.planning_note("/plans", style=style, plan_skill=skill, reply_plan=reply, levers=levers)
+    assert (text in note) is enabled
+    if lever == "choice_record" and enabled:
+        assert render.CHOICE_FIDELITY + " " + text + "\n2. " in note
+    assert render.light_note("/plans", levers=levers) == render.light_note("/plans")
+
+
+@pytest.mark.parametrize("commands,refactor", list(itertools.product((False, True), repeat=2)))
+def test_044_scope_order_and_choice_record(commands, refactor):
+    levers = NEW_044 | {"choice_fidelity"} | ({"test_commands"} if commands else set())
+    levers |= {"refactor_scope"} if refactor else set()
+    note = render.planning_note("/plans", levers=levers)
+    rename, refactor_text = render.RENAME_SCOPE.format(plans_dir="/plans"), render.REFACTOR_SCOPE.format(plans_dir="/plans")
+    assert render.CHOICE_FIDELITY + " " + render.CHOICE_RECORD + "\n2. " in note
+    assert (rename in note) is not refactor
+    assert (refactor_text in note) is refactor
+    expected = ([render.TEST_COMMANDS] if commands else []) + ([] if refactor else [rename])
+    expected += [render.TEST_PLAN_ONLY] + ([refactor_text] if refactor else [])
+    assert note.endswith("\n" + "\n".join(expected))
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("lever,text", [("edit_batch", render.EDIT_BATCH), ("brief_final", render.BRIEF_FINAL)])
+def test_044_execution_levers(make_plugin, lever, text, enabled):
+    levers = {"lean_craft", "skill_policy"} | ({lever} if enabled else set())
+    plugin = make_plugin(",".join(sorted(levers)), plan_profile="classic")
+    for output in (plugin._execute_hint(), render.executing_pointer({"approved_path": "/plans/p.md"}, levers=levers)):
+        assert (text in output) is enabled
+        assert output.endswith(render.SKILL_EXECUTION + (" " + text if enabled else ""))
+    assert text not in render.planning_note("/plans", levers=levers)
+
+
+def test_044_execution_order(make_plugin):
+    plugin = make_plugin()
+    for output in (plugin._execute_hint(), render.executing_pointer({"approved_path": "/plans/p.md"}, levers=pm.LEAN_LEVERS)):
+        assert output.endswith(render.SKILL_EXECUTION + " " + render.EDIT_BATCH + " " + render.BRIEF_FINAL)
+
+
+NOTES_043 = Path(__file__).parent / "fixtures/notes_043.json"
+
+
+def test_044_differential_notes():
+    cases = [case for case in json.loads(NOTES_043.read_text()) if case["kind"] != "execute_hint"]
+    assert len(cases) == 67
+    for case in cases:
+        kwargs = dict(case["kwargs"])
+        kwargs["levers"] = (set(kwargs["levers"]) | NEW_044) - NEW_044
+        if case["kind"] == "planning_note":
+            kwargs["now"] = datetime(2026, 10, 11, 12, 34, 56)
+        assert getattr(render, case["kind"])(**kwargs) == case["text"], case
+
+
+@pytest.mark.parametrize("commits", [False, True])
+def test_044_execute_hint_byte_identity(make_plugin, commits):
+    """The v0.4.3 tree computed these strings (tests/tools/gen_notes_043.py); CI checkouts carry no tags to recompute them."""
+    cases = [case for case in json.loads(NOTES_043.read_text()) if case["kind"] == "execute_hint"]
+    assert sorted(case["kwargs"]["commits"] for case in cases) == [False, True]
+    case = next(case for case in cases if case["kwargs"]["commits"] is commits)
+    plugin = make_plugin(",".join(sorted(pm.LEAN_LEVERS - NEW_044)), allow_commits=commits)
+    assert sorted(plugin._levers()) == case["kwargs"]["levers"]
+    assert plugin._execute_hint() == case["text"]
