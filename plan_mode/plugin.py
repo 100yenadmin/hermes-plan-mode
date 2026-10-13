@@ -28,7 +28,7 @@ from .approval import (
 )
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
-    SKILL_EXECUTION, executing_pointer, light_note,
+    BRIEF_FINAL, EDIT_BATCH, SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -111,10 +111,13 @@ _INLINE_TODO_HINT = (
 _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
                      "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
-                     "test_commands", "choice_fidelity", "refactor_scope", "todo_inline"})
+                     "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
+                     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"})
 _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
                  "the approval, not a clarifying question. ")
 # Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
+# The five 0.4.4 levers (rename_scope, test_plan_only, choice_record, edit_batch, brief_final) are opt-in: S44 and its
+# replication S44F cut T8 passing tests below the guard, so none joined lean (README, Experimental levers).
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
                          "light_notes", "question_shape", "bridge_calls", "blocked_tools", "skill_policy",
                          "test_commands", "choice_fidelity", "todo_inline"})
@@ -1518,6 +1521,10 @@ class PlanModePlugin:
             hint += " " + LEAN_EXECUTION
         if "skill_policy" in levers:
             hint += " " + SKILL_EXECUTION
+        if "edit_batch" in levers:
+            hint += " " + EDIT_BATCH
+        if "brief_final" in levers:
+            hint += " " + BRIEF_FINAL
         return hint
 
     def post_llm_call(self, **kwargs: Any) -> None:
@@ -1772,7 +1779,7 @@ class PlanModePlugin:
                         else:
                             self._approve_submission(state, submission, via="clarify")
                             if ("approved_text" in self._levers() or "lean_craft" in self._note_levers()
-                                    or {"bridge_calls", "skill_policy"} & self._note_levers()
+                                    or {"bridge_calls", "skill_policy", "edit_batch", "brief_final"} & self._note_levers()
                                     or self._saved_plan_note(submission)):
                                 note = (self._saved_plan_note(submission) + f"The user approved plan rev {submission['revision']}. "
                                         f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission))

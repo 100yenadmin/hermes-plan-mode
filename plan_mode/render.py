@@ -26,6 +26,21 @@ REFACTOR_SCOPE = (
     "add no new test cases unless asked. Leftover checks search the whole repo; plan files under {plans_dir} will "
     "match, so name them as expected matches instead of narrowing the search."
 )
+RENAME_SCOPE = (
+    "For a rename, keep behaviour and existing test assertions unchanged apart from the rename itself, and add no new "
+    "assertions unless asked. Leftover checks search the whole repo; plan files under {plans_dir} will match, so name "
+    "them as expected matches instead of narrowing the search."
+)
+TEST_PLAN_ONLY = (
+    "The test plan lists the commands that run the tests and check the requested behaviour; leave out git status, git "
+    "diff and other repo-hygiene checks unless the user asked for them."
+)
+CHOICE_RECORD = "Record each answered clarify choice in Assumptions as the user's decision."
+EDIT_BATCH = (
+    "Make all changes to one file in a single edit call where the tool allows it, and send edits to different files, "
+    "including the tests, in the same response."
+)
+BRIEF_FINAL = "When you finish, reply in 2–4 lines: what changed and the test result."
 BUILTIN_OVERRIDE = (
     "This overrides the /plan instruction to offer execution: submit the plan with plan_mode instead."
 )
@@ -144,6 +159,8 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         )
     if "choice_fidelity" in levers:
         note = note.replace("\n2. ", " " + CHOICE_FIDELITY + "\n2. ", 1)
+    if "choice_record" in levers:
+        note = note.replace("\n2. ", " " + CHOICE_RECORD + "\n2. ", 1)
     if "plan_once" in levers and str(platform).strip().lower() == "mattermost":
         note = note.replace(
             '3. Show the complete plan in your reply, then call',
@@ -170,6 +187,10 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         note += "\n" + (LEAN_CRAFT.split(" Write the plan file ")[0] if reply_plan else LEAN_CRAFT)
     if "test_commands" in levers:
         note += "\n" + TEST_COMMANDS
+    if "rename_scope" in levers and "refactor_scope" not in levers:
+        note += "\n" + RENAME_SCOPE.format(plans_dir=plans_dir)
+    if "test_plan_only" in levers:
+        note += "\n" + TEST_PLAN_ONLY
     if "refactor_scope" in levers:
         note += "\n" + REFACTOR_SCOPE.format(plans_dir=plans_dir)
     if "sticky" in levers:
@@ -214,6 +235,10 @@ def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
         result += " " + LEAN_EXECUTION
     if "skill_policy" in levers:
         result += " " + SKILL_EXECUTION
+    if "edit_batch" in levers:
+        result += " " + EDIT_BATCH
+    if "brief_final" in levers:
+        result += " " + BRIEF_FINAL
     return result
 
 
