@@ -1,5 +1,5 @@
 name: plan-mode
-version: "0.4.5"
+version: "0.4.6"
 description: "Enforced plan mode with Claude Code-style approval on every interactive Hermes surface. /plan or /planmode on blocks mutating tools dispatched through pre_tool_call, except plan writes under .hermes/plans. The agent submits the plan with plan_mode(submit) and you approve it through Hermes' own approval prompt (buttons, card, CLI panel or /approve); it then implements in the same turn and tracks todo_list progress. Deny keeps planning. Gateway/TUI/Desktop need Hermes 0.21.5 (v2026.9.24) or newer; 0.21.6 recommended. Not enforced: Codex app-server exec/applyPatch, TUI /background and btw."
 author: 100yenadmin
 kind: standalone
@@ -28,7 +28,7 @@ config_schema:
     type: bool
     default: true
     label: Agent hint
-    description: Adds a short system-prompt hint naming the plan_mode tool. Applies to new sessions.
+    description: Adds a short system-prompt hint naming the plan_mode tool. Applies when Hermes next loads plugins (a new CLI process, or a gateway or app restart).
   footer:
     type: str
     choices: [auto, "off"]

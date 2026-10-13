@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-10-13
+
+Docs only; no code changes. Behaviour is identical to 0.4.5.
+
+- README corrections:
+  - PARITY-3's in-run environment check observed only Codex's command output, so for plan-mode only the before and
+    after checks apply.
+  - One of plan-mode's 9 hidden-preference hits came from a question that named no options.
+  - The agent hint applies when Hermes next loads plugins.
+  - The profile must grant the `plan-mode` toolset.
+  - `todo_list` mirroring under `lean` is for plans of 4+ steps.
 - README: "Measured against Codex plan mode" leads with PARITY-3 (0.4.5, the same test environment for both
   products): every threshold met, 1.61× end to end (95% CI 1.33–1.79). Follow-up on the rename task: #28.
 
