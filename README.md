@@ -339,9 +339,9 @@ Three pre-registered benchmarks, PARITY-1 to PARITY-3, compared plan-mode with C
   coding tasks. Two tasks hide a preference that only the user knows.
 
 **plan-mode 0.4.5 (PARITY-3, 2026-10-13).** Against Codex plan mode on the same model, suite and test environment,
-plan-mode 0.4.5 met every threshold (0 changes before approval in 38 runs; tests passed in 35 vs 35 of 35; hidden
-preferences found 9 vs 10 of 10; judge preference 82% Claude, 82% Codex) and took 1.61× as long end to end on the core
-tasks of this Python suite (95% CI 1.33–1.79): 1.40× in planning and 1.65× in execution.
+plan-mode 0.4.5 met every threshold (0 non-plan repository changes before approval in 38 runs; tests passed in 35 vs 35
+of 35; hidden preferences found 9 vs 10 of 10; judge preference 82% Claude, 82% Codex) and took 1.61× as long end to
+end on the core tasks of this Python suite (95% CI 1.33–1.79): 1.40× in planning and 1.65× in execution.
 - 0 commits before approval, and every approval went through the gate.
 - The judges compared plans blind, plan text only: 95% CI 71–91% for the Claude judge and 76–86% for the Codex judge.
 - Both products ran the same `python3` (3.9.6) and pytest (8.4.2), checked before, during and after the campaign.
@@ -377,10 +377,11 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   judge preferred plan-mode's in 64%.
 
 **What these runs do not show.**
-- **PARITY-3's speed includes a slower API path on the day.** plan-mode made fewer model calls than in PARITY-2 (350 vs
-  410), with the same median input and output sizes, but its median wait per call was 8.8 s against 4.3 s. Codex's
-  run times rose too, and one judge call was refused with "model at capacity". Codex's per-call latency is not
-  recorded, so how much of the 1.61× comes from the product and how much from the API that day is not measured.
+- **PARITY-3 recorded higher per-call latency than PARITY-2; the cause is not isolated.** plan-mode made fewer model
+  calls than in PARITY-2 (350 vs 410), with similar median sizes (about 21k tokens in and 110 out per call), but its
+  median wait per call was 8.8 s against 4.3 s. Codex's run times rose too, and one judge call was refused with "model
+  at capacity". Codex's per-call latency is not recorded, so how much of the 1.61× comes from the product and how much
+  from the API that day is not measured.
 - **In PARITY-1 and PARITY-2 the test environments differed.** Both products ran the same `python3`, but only
   plan-mode's could import pytest: it saw the user's site-packages, and Codex ran with a clean home. In PARITY-2, every
   Codex run's `python3 -m pytest` failed while planning, 36 of 38 then ran tests through `uv run --with pytest` with an
