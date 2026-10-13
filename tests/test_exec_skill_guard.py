@@ -101,11 +101,16 @@ def test_pending_notes_do_not_count_as_request(make_plugin, user_text, asked):
     assert (result is None) is asked
 
 
-def test_plan_skill_disables_guard(make_plugin):
+@pytest.mark.parametrize("skill_loadable", [True, False])
+def test_plan_skill_disables_guard(make_plugin, monkeypatch, skill_loadable):
+    # A plan skill only takes effect when skill_view may load it; otherwise plan-mode falls back to Plan style and the
+    # guard stays on. Pinned here so the no-Hermes CI job (no skill config loader) tests the same branch.
+    monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: None if skill_loadable else "inline shell enabled")
     plugin = make_plugin("exec_skill_guard", plan_skill="custom")
     approve_gate(plugin, write_plan(plugin))
-    assert "exec_skill_guard" not in plugin._note_levers()
-    assert plugin.pre_tool_call("skill_view", {"name": "test-driven-development"}) is None
+    assert ("exec_skill_guard" in plugin._note_levers()) is not skill_loadable
+    result = plugin.pre_tool_call("skill_view", {"name": "test-driven-development"})
+    assert (result is None) is skill_loadable
 
 
 @pytest.mark.parametrize("failure", ["name", "lookup", "levers", "message"])
