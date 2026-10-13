@@ -660,8 +660,8 @@ def test_044_planning_levers(lever, text, enabled, style, skill, question, reply
 def test_046_rename_scope_uses_git_grep():
     """#28: leftover checks use `git grep` (tracked files), so a git repo's plan needs no plan-file exception."""
     text = render.RENAME_SCOPE.format(plans_dir="/plans")
-    assert "`git grep -n <old name>`" in text and "/plans are untracked" in text
-    assert "need not mention them" in text
+    assert "`git grep -n <old name>` (tracked files) plus any new files the rename creates" in text
+    assert "/plans are normally untracked" in text and "leave them out of the plan" in text
     git_part, fallback = text.split("Outside a git repo")
     assert "expected matches" not in git_part and "expected matches" in fallback
     assert "narrowing" not in text

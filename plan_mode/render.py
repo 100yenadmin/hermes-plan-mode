@@ -28,9 +28,9 @@ REFACTOR_SCOPE = (
 )
 RENAME_SCOPE = (
     "For a rename, keep behaviour and existing test assertions unchanged apart from the rename itself, and add no new "
-    "assertions unless asked. Check for leftovers across the repo with `git grep -n <old name>`; plan files under "
-    "{plans_dir} are untracked, so they do not match and the plan need not mention them. Outside a git repo, search "
-    "the whole repo and name plan files as expected matches."
+    "assertions unless asked. Check for leftovers with `git grep -n <old name>` (tracked files) plus any new files the "
+    "rename creates. Plan files under {plans_dir} are normally untracked, so they do not match; leave them out of the "
+    "plan. Outside a git repo, search the whole repo and name plan files as expected matches."
 )
 TEST_PLAN_ONLY = (
     "The test plan lists the commands that run the tests and check the requested behaviour; leave out git status, git "
