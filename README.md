@@ -241,8 +241,8 @@ plugins:
   below the pre-declared guard, 33.5 → 26.25 per run, and a fresh replication confirmed it (29.1 → 22.3), so 0.4.4
   kept them all opt-in. The 0.4.5 stress (S45, gpt-6.1-sol, 26 runs per arm) then tested the three planning levers
   without the two execution levers. Every guard held, including T8 tests (24.9 vs 28.4 per run, above the 85% bar),
-  and two levers joined lean. A labelled third arm ran the two execution levers alone: T8 tests rose (28.4 → 32.3),
-  so they do not cut tests by themselves; the earlier drop came from the five together (#26).
+  and two levers joined lean. A labelled third arm ran the two execution levers alone: in that arm, mean passing tests
+  per run rose on T7 (14.3 → 18.3) and T8 (28.4 → 32.3). The earlier drop was observed with all five enabled (#26).
 - `rename_scope` (lean since 0.4.5) tells the model to keep a rename's behaviour and assertions and to search the whole
   repo, naming plan files as expected matches. Rename plans that narrowed the leftover search fell from 4 of 4 to 0 in
   both S44 and S45, and plans adding an unrequested assertion from 3 to 0 in S45.
@@ -256,7 +256,8 @@ plugins:
   edit-heavy tasks in S45 (48 to 20 in S44).
 - `brief_final` (opt-in) tells the model to finish in 2–4 lines with what changed and the test result. The median final
   reply fell from 128.5 to 64 output tokens in S45 (117.5 to 62.5 in S44).
-- Speed is labelled, not gated: with the two new lean levers, S45's wall time was 1.11× (95% CI 0.97–1.25).
+- Speed is labelled, not gated: S45's arm with the three planning levers (`rename_scope`, `test_plan_only`,
+  `choice_record`) took 1.11× the baseline's wall time (95% CI 0.97–1.25).
 - `test_commands` (lean) tells the model to write test commands the way the repo runs them, falling back to
   `python3 -m pytest` for an undocumented Python repo. In the 0.4.3 stress, plans naming a bare `python` fell from 18
   of 18 to 0, and so did runs that spent a round retrying the command (17 of 18 to 0).

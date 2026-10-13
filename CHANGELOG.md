@@ -9,8 +9,9 @@
 - `choice_record`, `edit_batch` and `brief_final` stay opt-in. `choice_record`: 6 of 6 plans attributed the clarify
   choice with it, but read directly 4 of 6 already did without it, so the deficit was not shown. A labelled arm ran
   `edit_batch` and `brief_final` alone: edit rounds 49 → 27, final reply 128.5 → 64 tokens, and T8 tests rose
-  28.4 → 32.3, so they do not cut tests by themselves (#26).
-- Labelled, not gated: wall time with the two new lean levers was 1.11× (95% CI 0.97–1.25).
+  28.4 → 32.3 (mean per run, labelled). The earlier drop was observed with all five enabled (#26).
+- Labelled, not gated: the S45 arm with the three planning levers (the two above plus `choice_record`) took 1.11× the
+  baseline's wall time (95% CI 0.97–1.25).
 - The execute hint is unchanged from 0.4.3 and 0.4.4.
 
 ## 0.4.4 - 2026-10-13
