@@ -56,6 +56,75 @@ class FakeContext:
         return self.settings.get(key, default)
 
 
+class TestApprovedPlanResume:
+    @pytest.mark.parametrize("surface", ["tui", "desktop"])
+    def test_rotated_execution_commands_and_todos(self, plugin, session_env, tmp_path, surface):
+        path = _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        session_env.update(HERMES_SESSION_KEY="new-a", HERMES_SESSION_SOURCE=surface)
+        assert path in plugin.pre_llm_call(session_id="new-sid-a")["context"]
+        plugin.post_tool_call("todo_list", {"todos": []}, status="ok",
+                             result=json.dumps({"todos": [{"status": "completed"}, {"status": "pending"}]}))
+        session_env["HERMES_UI_SESSION_ID"] = ""
+        assert path in plugin.command("status")
+        assert plugin._load_state("sk:new-a")["progress"]["completed"] == 1
+        assert plugin.command("done") == "The executing plan is done."
+        session_env["HERMES_UI_SESSION_ID"] = "tab-a"
+        assert plugin.pre_llm_call(session_id="new-sid-a") is None
+
+    def test_reopened_family_unbound_reset(self, plugin, session_env, tmp_path):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "shared", "sid", "A")
+        plugin.on_session_finalize(platform="tui", session_id="sid")
+        _r3_start(plugin, session_env, tmp_path, "tab-b", "shared", "sid", "B")
+        session_env.update(HERMES_SESSION_KEY="", HERMES_UI_SESSION_ID="", HERMES_SESSION_SOURCE="telegram")
+        plugin.on_session_reset(platform="telegram", old_session_id="sid", new_session_id="fresh")
+        assert plugin._executing_storage_keys() == []
+        for tab in ("tab-a", "tab-b"):
+            session_env.update(HERMES_UI_SESSION_ID=tab, HERMES_SESSION_KEY="shared", HERMES_SESSION_SOURCE="tui")
+            assert plugin.pre_llm_call(session_id="fresh") is None
+
+    def test_reclaimed_alias_command_activation_stays_owned(self, plugin, session_env, tmp_path):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        session_env["HERMES_SESSION_KEY"] = "new-a"
+        plugin.pre_llm_call(session_id="new-sid-a")
+        b = _r3_start(plugin, session_env, tmp_path, "tab-b", "old-a", "sid-b", "B")
+        session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
+        plugin.pre_llm_call(session_id="new-sid-a", user_message=_BUILTIN_PROMPT)
+        assert plugin._load_state("sk:old-a").get("approved_path") == b
+        session_env["HERMES_UI_SESSION_ID"] = ""
+        session_env["HERMES_SESSION_KEY"] = "old-a"
+        assert b in plugin.command("status")
+        assert plugin.command("done") == "The executing plan is done."
+        assert plugin._load_state("ui:tab-a")["active"]
+
+    def test_cli_restart_recovers_only_matching_session(self, plugin, session_env, tmp_path, monkeypatch):
+        session_env.update(HERMES_SESSION_KEY="", HERMES_SESSION_SOURCE="cli",
+                           HERMES_SESSION_ID="cli-durable", TERMINAL_CWD=str(tmp_path))
+        monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+        monkeypatch.setattr(plugin_mod, "_gateway_process_is_admitted", lambda: False)
+        assert "Plan mode is on" in plugin.command("on resume")
+        path = tmp_path / ".hermes/plans/cli.md"
+        args = {"path": str(path), "content": "# CLI\n1. implement\n"}
+        ids = {"session_id": "cli-durable", "tool_call_id": "cli-write"}
+        assert plugin.pre_tool_call("write_file", args, **ids) is None
+        path.write_text(args["content"])
+        plugin.post_tool_call("write_file", args, status="ok", **ids)
+        assert "Plan approved" in plugin.command("approve")
+        plugin.pre_llm_call(session_id="cli-durable")
+        plugin.post_tool_call("todo_list", {"todos": []}, status="ok",
+                             result=json.dumps({"todos": [{"status": "completed"}, {"status": "pending"}]}))
+        plugin.on_session_finalize(platform="cli", session_id="cli-durable")
+        monkeypatch.setattr(plugin_mod.os, "getpid", lambda: 987654321)
+        resumed = PlanModePlugin(plugin.ctx)
+        session_env["HERMES_SESSION_ID"] = "another-session"
+        assert resumed.pre_llm_call(session_id="another-session") is None
+        session_env["HERMES_SESSION_ID"] = "cli-durable"
+        assert str(path) in resumed.command("status")
+        assert str(path) in resumed.pre_llm_call(session_id="cli-durable")["context"]
+        assert resumed._command_state("cli:987654321")[1]["progress"]["completed"] == 1
+        assert resumed.command("done") == "The executing plan is done."
+        assert PlanModePlugin(plugin.ctx).pre_llm_call(session_id="cli-durable") is None
+
+
 @pytest.fixture
 def session_env(monkeypatch):
     values = {"HERMES_SESSION_KEY": "unit-session"}

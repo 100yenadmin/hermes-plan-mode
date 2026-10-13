@@ -604,6 +604,13 @@ class PlanModePlugin:
     def _save_storage_state(
         self, storage_key: str, state: dict[str, Any], *, key_hint: str | None = None
     ) -> None:
+        resume_storage = self._cli_resume_storage(key_hint or "")
+        if resume_storage and state.get("phase") == "executing":
+            linked = self._linked_command_storage_keys(state)
+            for item in (resume_storage, _state_storage_key(key_hint)):
+                if item not in linked:
+                    linked.append(item)
+            state["command_session_storage_keys"] = linked[-256:]
         state = dict(state)
         self.ctx.state.set(storage_key, state)
         self._mark_executing(storage_key, state.get("phase") == "executing")
@@ -623,6 +630,16 @@ class PlanModePlugin:
                 self._active_keys.discard(key_hint)
             active_storage = [item for item in active_storage if item != storage_key]
         self._set_active_storage_keys(active_storage)
+        if resume_storage and state.get("phase") == "executing":
+            self._save_storage_state(resume_storage, state)
+
+    @staticmethod
+    def _cli_resume_storage(raw_key: str) -> str | None:
+        if not raw_key.startswith("cli:"):
+            return None
+        reader = _session_reader()
+        session_id = str(reader("HERMES_SESSION_ID", "") if reader else "").strip()
+        return _state_storage_key(f"resume:{session_id}") if session_id else None
 
     @staticmethod
     def _linked_command_storage_keys(state: dict[str, Any]) -> list[str]:
@@ -641,7 +658,8 @@ class PlanModePlugin:
         """Save a command mutation to its canonical UI state and linked sk copies."""
         self._save_storage_state(storage_key, state, key_hint=raw_key)
         for linked_storage in self._linked_command_storage_keys(state):
-            if linked_storage != storage_key:
+            if (linked_storage != storage_key
+                    and self._same_family(linked_storage, state.get("canonical_ui_storage_key"))):
                 self._save_storage_state(linked_storage, state)
 
     def _command_state(
@@ -649,6 +667,11 @@ class PlanModePlugin:
     ) -> tuple[str, dict[str, Any], bool]:
         """Resolve a command-only sk key to the one UI state that linked it."""
         storage_key = _state_storage_key(raw_key)
+        resume_storage = self._cli_resume_storage(raw_key)
+        if resume_storage and not self._load_storage_state(storage_key).get("active"):
+            resumed = self._load_storage_state(resume_storage)
+            if resumed.get("phase") == "executing":
+                return resume_storage, resumed, False
         if raw_key.startswith("sk:"):
             matches = []
             canonical_active = False
@@ -659,7 +682,8 @@ class PlanModePlugin:
                     and state.get("canonical_ui_storage_key") == candidate
                 ):
                     canonical_active = True
-                    if storage_key in self._linked_command_storage_keys(state):
+                    if (storage_key in self._linked_command_storage_keys(state)
+                            and self._same_family(storage_key, candidate)):
                         matches.append((candidate, state))
             if len(matches) == 1:
                 candidate, state = matches[0]
@@ -672,6 +696,7 @@ class PlanModePlugin:
             }
             return storage_key, direct, bool(
                 ui_surface and canonical_active and not direct.get("active")
+                and direct.get("phase") != "executing"
             )
         return storage_key, self._load_storage_state(storage_key), False
 
@@ -683,19 +708,29 @@ class PlanModePlugin:
         linked = self._linked_command_storage_keys(state)
         command_storage = _state_storage_key(command_key)
         canonical_storage = _state_storage_key(state_key)
-        if (
-            command_storage in linked
-            and state.get("canonical_ui_storage_key") == canonical_storage
-        ):
-            return
+        previous = state.get("canonical_ui_storage_key")
+        if isinstance(previous, str) and previous != canonical_storage:
+            old = self._load_storage_state(previous)
+            remaining = [item for item in self._linked_command_storage_keys(old)
+                         if item != command_storage and self._same_family(item, previous)]
+            if remaining:
+                old["command_session_storage_keys"] = remaining
+                self._save_storage_state(previous, old)
+                for item in remaining:
+                    self._save_storage_state(item, old)
+            else:
+                self._clear_storage_key(previous)
+            linked = []  # Re-adoption transfers this alias, not the old family's other keys.
         if command_storage not in linked:
             linked.append(command_storage)
         for evicted in linked[:-256]:
-            if evicted != canonical_storage:
+            if evicted != canonical_storage and self._same_family(evicted, canonical_storage):
                 self._clear_storage_key(evicted)
         state["command_session_storage_keys"] = linked[-256:]
         state["canonical_ui_storage_key"] = canonical_storage
-        self._save_state(state_key, state)
+        if previous != canonical_storage or self._same_family(command_storage, canonical_storage):
+            self._save_storage_state(command_storage, state)  # Explicitly claim a re-adopted alias.
+        self._save_command_state(state_key, canonical_storage, state)
 
     @staticmethod
     def _session_id_hash(value: Any) -> str:
@@ -740,7 +775,11 @@ class PlanModePlugin:
                 return identity.key, state
         if identity.key and identity.fallback_key:
             fallback_state = self._load_state(identity.fallback_key)
-            if fallback_state.get("active"):
+            if (fallback_state.get("active") or (
+                fallback_state.get("phase") == "executing" and state.get("phase") != "executing"
+            )) and self._same_family(
+                _state_storage_key(identity.key), fallback_state.get("canonical_ui_storage_key")
+            ):
                 self._claim_state_for_current_process(
                     identity.fallback_key, fallback_state
                 )
@@ -767,6 +806,15 @@ class PlanModePlugin:
                     self._save_state(identity.key, cli_state)
                     return identity.key, cli_state
                 return cli_key, cli_state
+        if identity.key and state.get("phase") == "executing":
+            self._link_command_key(identity.key, state, identity.fallback_key)
+            return identity.key, state
+        if identity.key and identity.key.startswith("cli:"):
+            storage_key, state, _ = self._command_state(identity.key, identity.surface)
+            if state.get("phase") == "executing":
+                # Hooks write via the current PID key; keep the durable copy linked.
+                self._save_state(identity.key, state)
+                return identity.key, state
         return identity.key, self._load_state(identity.key) if identity.key else {}
 
     def _fixed_plans_dir(self) -> str:
@@ -1267,8 +1315,8 @@ class PlanModePlugin:
     def _sync_execution_family(self, storage_key: str, state: dict[str, Any]) -> None:
         """Copy the execution fields to the state's linked copies.
 
-        TUI/Desktop keep a ``ui:`` copy that hooks read and ``sk:`` copies that commands read; only an active state
-        links them, so the executing phase is mirrored here explicitly. Planning copies are never touched.
+        TUI/Desktop keep a ``ui:`` copy that hooks read and ``sk:`` copies that commands read.
+        Planning copies are never touched; every mirror must still belong to this family.
         """
         related = set(self._linked_command_storage_keys(state))
         canonical = state.get("canonical_ui_storage_key")
