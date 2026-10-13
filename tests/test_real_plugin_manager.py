@@ -20,7 +20,8 @@ from test_plan_mode import plan_profile
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_real_cli_process_restart_resumes_approved_execution(tmp_path):
+@pytest.mark.parametrize("mode", ["normal", "on", "reset", "binding"])
+def test_real_cli_process_restart_resumes_approved_execution(tmp_path, mode):
     pytest.importorskip("hermes_cli.plugins")
     home, workspace, bundled = tmp_path / "home", tmp_path / "ws", tmp_path / "bundled"
     workspace.mkdir()
@@ -35,7 +36,7 @@ import json, sys
 from pathlib import Path
 from gateway.session_context import set_current_session_id
 from hermes_cli import plugins
-stage, workspace = sys.argv[1], Path(sys.argv[2])
+stage, workspace, mode = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
 set_current_session_id("other-cli" if stage == "other" else "resumed-cli")
 plugins.get_plugin_manager().discover_and_load()
 handler = plugins.get_plugin_command_handler("planmode")
@@ -51,16 +52,32 @@ if stage == "start":
     plugins.invoke_hook("pre_llm_call", session_id="resumed-cli")
     plugins.invoke_hook("post_tool_call", tool_name="todo_list", args={"todos": []}, status="ok",
                         result=json.dumps({"todos": [{"status": "completed"}, {"status": "pending"}]}))
+    if mode == "binding":
+        set_current_session_id("other-cli")
+        plugins.invoke_hook("pre_llm_call", session_id="other-cli")
+        from hermes_cli.plugins_state import PluginState
+        import hashlib
+        foreign = "session:" + hashlib.sha256(b"resume:other-cli").hexdigest()
+        assert not PluginState("plan-mode").get(foreign, {})
     plugins.invoke_hook("on_session_finalize", platform="cli", session_id="resumed-cli")
 elif stage == "resume":
-    assert str(path) in handler("status"), handler("status")
-    notes = plugins.invoke_hook("pre_llm_call", session_id="resumed-cli")
-    assert any(str(path) in note.get("context", "") for note in notes if isinstance(note, dict)), notes
-    from hermes_cli.plugins_state import PluginState
-    saved = json.loads(PluginState("plan-mode").path.read_text())
-    assert any(value.get("progress", {}).get("completed") == 1
-               for value in saved.values() if isinstance(value, dict) and value.get("phase") == "executing")
-    assert handler("done") == "The executing plan is done."
+    if mode == "on":
+        assert "Plan mode is on" in handler("on next task")
+        assert "Plan mode: on" in handler("status")
+        assert plugins.get_pre_tool_call_block_message("terminal", {"command": "make"}, session_id="resumed-cli")
+        handler("off")
+    elif mode == "reset":
+        plugins.invoke_hook("on_session_reset", platform="cli", old_session_id="resumed-cli", new_session_id="resumed-cli")
+        assert not plugins.invoke_hook("pre_llm_call", session_id="resumed-cli")
+    else:
+        assert str(path) in handler("status"), handler("status")
+        notes = plugins.invoke_hook("pre_llm_call", session_id="resumed-cli")
+        assert any(str(path) in note.get("context", "") for note in notes if isinstance(note, dict)), notes
+        from hermes_cli.plugins_state import PluginState
+        saved = json.loads(PluginState("plan-mode").path.read_text())
+        assert any(value.get("progress", {}).get("completed") == 1
+                   for value in saved.values() if isinstance(value, dict) and value.get("phase") == "executing")
+        assert handler("done") == "The executing plan is done."
 else:
     assert "Phase: off" in handler("status"), handler("status")
     assert not plugins.invoke_hook("pre_llm_call", session_id="resumed-cli")
@@ -73,7 +90,7 @@ else:
                HERMES_ENABLE_PROJECT_PLUGINS="0", TERMINAL_CWD=str(workspace),
                HERMES_DISABLE_LAZY_INSTALLS="1", PYTHONDONTWRITEBYTECODE="1")
     for stage in ("start", "other", "resume", "off"):
-        result = subprocess.run([sys.executable, "-c", script, stage, str(workspace)],
+        result = subprocess.run([sys.executable, "-c", script, stage, str(workspace), mode],
                                 cwd=workspace, env=env, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, f"{stage}: {result.stdout}\n{result.stderr}"
 

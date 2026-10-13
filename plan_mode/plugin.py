@@ -90,7 +90,7 @@ _AGENT_NOTE_BRIDGE = (
 )
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
-_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress")
+_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress", "resume_storage_key")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open",)
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -605,12 +605,14 @@ class PlanModePlugin:
         self, storage_key: str, state: dict[str, Any], *, key_hint: str | None = None
     ) -> None:
         resume_storage = self._cli_resume_storage(key_hint or "")
-        if resume_storage and state.get("phase") == "executing":
-            linked = self._linked_command_storage_keys(state)
-            for item in (resume_storage, _state_storage_key(key_hint)):
-                if item not in linked:
-                    linked.append(item)
-            state["command_session_storage_keys"] = linked[-256:]
+        if key_hint and key_hint.startswith("cli:") and state.get("phase") == "executing":
+            # The first executing save is the approval transition. A later /resume
+            # must not persist this plan under a different durable session's id.
+            state.setdefault("resume_storage_key", resume_storage)
+            if state.get("resume_storage_key") != resume_storage:
+                resume_storage = None
+            if resume_storage:
+                state["command_session_storage_keys"] = [resume_storage, storage_key]
         state = dict(state)
         self.ctx.state.set(storage_key, state)
         self._mark_executing(storage_key, state.get("phase") == "executing")
@@ -663,16 +665,34 @@ class PlanModePlugin:
                 self._save_storage_state(linked_storage, state)
 
     def _command_state(
-        self, raw_key: str, surface: str = ""
+        self, raw_key: str, surface: str = "", *, mutating: bool = False
     ) -> tuple[str, dict[str, Any], bool]:
         """Resolve a command-only sk key to the one UI state that linked it."""
         storage_key = _state_storage_key(raw_key)
         resume_storage = self._cli_resume_storage(raw_key)
         if resume_storage and not self._load_storage_state(storage_key).get("active"):
             resumed = self._load_storage_state(resume_storage)
-            if resumed.get("phase") == "executing":
-                return resume_storage, resumed, False
+            if (resumed.get("phase") == "executing"
+                    and resumed.get("resume_storage_key") == resume_storage):
+                resumed["command_session_storage_keys"] = [resume_storage, storage_key]
+                return storage_key, resumed, False
         if raw_key.startswith("sk:"):
+            direct = self._load_storage_state(storage_key)
+            owner = direct.get("canonical_ui_storage_key")
+            if mutating and isinstance(owner, str) and owner != storage_key:
+                owner_state = self._load_storage_state(owner)
+                links = self._linked_command_storage_keys(owner_state)
+                if storage_key in links and links[-1] != storage_key:
+                    # This family has rotated on. A command on its superseded
+                    # alias belongs to the reclaiming tab, before its first hook.
+                    owner_state["command_session_storage_keys"] = [k for k in links if k != storage_key]
+                    self._save_storage_state(owner, owner_state)
+                    for other in owner_state["command_session_storage_keys"]:
+                        if self._same_family(other, owner):
+                            self._save_storage_state(other, owner_state)
+                    direct.pop("canonical_ui_storage_key", None)
+                    direct["command_session_storage_keys"] = [storage_key]
+                    return storage_key, direct, False
             matches = []
             canonical_active = False
             for candidate in self._active_storage_keys():
@@ -709,11 +729,14 @@ class PlanModePlugin:
         command_storage = _state_storage_key(command_key)
         canonical_storage = _state_storage_key(state_key)
         previous = state.get("canonical_ui_storage_key")
+        if (command_storage in linked and previous == canonical_storage
+                and self._load_storage_state(command_storage).get("canonical_ui_storage_key") == canonical_storage):
+            return  # Already linked and still owned: steady-state hooks do not write.
         if isinstance(previous, str) and previous != canonical_storage:
             old = self._load_storage_state(previous)
             remaining = [item for item in self._linked_command_storage_keys(old)
                          if item != command_storage and self._same_family(item, previous)]
-            if remaining:
+            if remaining or old.get("active"):
                 old["command_session_storage_keys"] = remaining
                 self._save_storage_state(previous, old)
                 for item in remaining:
@@ -1058,7 +1081,8 @@ class PlanModePlugin:
 
         with self._lock:
             command_storage_key, state, unresolved_ui_command = self._command_state(
-                identity.key, identity.surface
+                identity.key, identity.surface,
+                mutating=action in {"on", "off", "done", "approve", "reject", "submit"},
             )
             if action == "status" and unresolved_ui_command:
                 return (
@@ -2040,6 +2064,14 @@ class PlanModePlugin:
                 self._clear_state_family(
                     cli_storage, self._load_storage_state(cli_storage)
                 )
+                # A reset before the first resumed hook has no live PID state.
+                # Clear the named session's durable record without detaching aliases.
+                reader = _session_reader()
+                reset_id = kwargs.get("old_session_id") or kwargs.get("session_id") or (
+                    reader("HERMES_SESSION_ID", "") if reader else "")
+                if reset_id:
+                    resume_storage = _state_storage_key(f"resume:{reset_id}")
+                    self._clear_state_family(resume_storage, self._load_storage_state(resume_storage))
                 if identity.key == cli_key:
                     return
             if identity.key and not identity.non_cli_without_key:

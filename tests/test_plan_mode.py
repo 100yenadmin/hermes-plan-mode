@@ -125,6 +125,265 @@ class TestApprovedPlanResume:
         assert PlanModePlugin(plugin.ctx).pre_llm_call(session_id="cli-durable") is None
 
 
+def _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch):
+    session_env.update(HERMES_SESSION_KEY="", HERMES_SESSION_SOURCE="cli",
+                       HERMES_SESSION_ID="cli-durable", TERMINAL_CWD=str(tmp_path))
+    monkeypatch.setattr(plugin_mod, "_session_context_is_engaged", lambda: False)
+    monkeypatch.setattr(plugin_mod, "_gateway_process_is_admitted", lambda: False)
+    assert "Plan mode is on" in plugin.command("on resume")
+    path = tmp_path / ".hermes/plans/cli.md"
+    args = {"path": str(path), "content": "# CLI\n1. implement\n"}
+    ids = {"session_id": "cli-durable", "tool_call_id": "cli-write"}
+    assert plugin.pre_tool_call("write_file", args, **ids) is None
+    path.write_text(args["content"])
+    plugin.post_tool_call("write_file", args, status="ok", **ids)
+    assert "Plan approved" in plugin.command("approve")
+    plugin.pre_llm_call(session_id="cli-durable")
+    return path
+
+
+
+class TestResumeFailClosed:
+    def test_resume_binding_stays_with_approving_session(self, plugin, session_env, tmp_path, monkeypatch):
+        path = _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        session_env["HERMES_SESSION_ID"] = "unapproved-session"
+        plugin.pre_llm_call(session_id="unapproved-session")
+        assert not plugin._load_state("resume:unapproved-session")
+        plugin.on_session_finalize(platform="cli", session_id="unapproved-session")
+        monkeypatch.setattr(plugin_mod.os, "getpid", lambda: 987654321)
+        resumed = PlanModePlugin(plugin.ctx)
+        assert resumed.pre_llm_call(session_id="unapproved-session") is None
+        session_env["HERMES_SESSION_ID"] = "cli-durable"
+        assert str(path) in resumed.pre_llm_call(session_id="cli-durable")["context"]
+
+    @pytest.mark.parametrize("action", ["done", "off"])
+    def test_resumed_command_before_hook_clears_pointer(self, plugin, session_env, tmp_path, monkeypatch, action):
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.on_session_finalize(platform="cli", session_id="cli-durable")
+        monkeypatch.setattr(plugin_mod.os, "getpid", lambda: 987654321)
+        resumed = PlanModePlugin(plugin.ctx)
+        resumed.command(action)
+        assert resumed.pre_llm_call(session_id="cli-durable") is None
+        assert resumed._executing_storage_keys() == []
+
+    def test_resume_drops_old_pid_links_after_hook(self, plugin, session_env, tmp_path, monkeypatch):
+        old_key = f"cli:{os.getpid()}"
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.on_session_finalize(platform="cli", session_id="cli-durable")
+        monkeypatch.setattr(plugin_mod.os, "getpid", lambda: 987654321)
+        resumed = PlanModePlugin(plugin.ctx)
+        resumed.pre_llm_call(session_id="cli-durable")
+        resumed.command("on next")
+        assert not resumed._load_state(old_key)
+        assert plugin_mod._state_storage_key(old_key) not in resumed._linked_command_storage_keys(
+            resumed._load_state("resume:cli-durable"))
+
+    @pytest.mark.parametrize("action", ["on next", "off", "done", "approve", "reject revise"])
+    @pytest.mark.parametrize("planning", [False, True])
+    def test_superseded_alias_mutations_preserve_owner(self, plugin, session_env, tmp_path, action, planning):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        if planning:
+            plugin.command("on planning again")
+        session_env["HERMES_SESSION_KEY"] = "new-a"
+        plugin.pre_llm_call(session_id="new-sid-a")
+        before = json.loads(json.dumps(plugin._load_state("ui:tab-a")))
+        session_env.update(HERMES_SESSION_KEY="old-a", HERMES_UI_SESSION_ID="")
+        plugin.command(action)
+        after = plugin._load_state("ui:tab-a")
+        for field in ("active", "phase", "approved_path", "task", "pending_note", "activation_id"):
+            assert after.get(field) == before.get(field)
+        session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
+        result = plugin.pre_tool_call("terminal", {"command": "make"}, session_id="new-sid-a", tool_call_id="a")
+        assert bool(result and result.get("action") == "block") == planning
+
+    @pytest.mark.parametrize("action", ["status", "reset"])
+    def test_status_and_reset_do_not_detach_alias(self, plugin, session_env, tmp_path, action):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        session_env["HERMES_SESSION_KEY"] = "new-a"
+        plugin.pre_llm_call(session_id="new-sid-a")
+        session_env.update(HERMES_SESSION_KEY="old-a", HERMES_UI_SESSION_ID="")
+        if action == "status":
+            before = json.loads(json.dumps(plugin.ctx.state.values))
+            plugin.command("status")
+            assert plugin.ctx.state.values == before
+        else:
+            plugin.on_session_reset(platform="tui", old_session_id="sid-a")
+            assert plugin._executing_storage_keys() == []
+
+    @pytest.mark.parametrize("executing", [False, True])
+    def test_steady_state_tool_hooks_do_not_write(self, plugin, session_env, tmp_path, monkeypatch, executing):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        if not executing:
+            plugin.command("on planning again")
+        plugin.pre_tool_call("read_file", {"path": "notes.md"}, session_id="sid-a", tool_call_id="warm")
+        calls = []
+        original = plugin.ctx.state.set
+        def counted(key, value):
+            calls.append(key)
+            original(key, value)
+        monkeypatch.setattr(plugin.ctx.state, "set", counted)
+        plugin.pre_tool_call("read_file", {"path": "notes.md"}, session_id="sid-a", tool_call_id="steady")
+        assert calls == []
+
+    @pytest.mark.parametrize("phase", ["off", "planning"])
+    def test_nonexecuting_resume_record_is_not_adopted(self, plugin, session_env, tmp_path, monkeypatch, phase):
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.on_session_finalize(platform="cli", session_id="cli-durable")
+        record = plugin._load_state("resume:cli-durable")
+        record.update(phase=phase, active=False)
+        plugin._save_state("resume:cli-durable", record)
+        monkeypatch.setattr(plugin_mod.os, "getpid", lambda: 987654321)
+        resumed = PlanModePlugin(plugin.ctx)
+        assert "Phase: off" in resumed.command("status")
+        assert resumed.pre_llm_call(session_id="cli-durable") is None
+
+    def test_active_live_cli_wins_over_executing_record(self, plugin, session_env, tmp_path, monkeypatch):
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        live_key = f"cli:{os.getpid()}"
+        record = json.loads(json.dumps(plugin._load_state("resume:cli-durable")))
+        plugin.command("on new live task")
+        plugin._save_state("resume:cli-durable", record)
+        assert plugin._command_state(live_key)[1]["active"]
+        result = plugin.pre_tool_call("terminal", {}, session_id="cli-durable", tool_call_id="blocked")
+        assert result and result["action"] == "block"
+
+    def test_command_propagation_skips_foreign_alias(self, plugin, session_env, tmp_path):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        foreign = {"active": True, "canonical_ui_storage_key": plugin_mod._state_storage_key("ui:tab-b"), "task": "B"}
+        plugin._save_state("sk:old-a", foreign)
+        plugin.command("on new A")
+        assert plugin._load_state("sk:old-a") == foreign
+
+    def test_command_resolution_skips_foreign_alias(self, plugin, session_env, tmp_path):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        plugin.command("on A again")
+        foreign = {"active": True, "canonical_ui_storage_key": plugin_mod._state_storage_key("ui:tab-b"), "task": "B"}
+        plugin._save_state("sk:old-a", foreign)
+        assert plugin._command_state("sk:old-a", "tui")[1] == foreign
+
+    def test_executing_fallback_adopts_only_matching_family(self, plugin, session_env, tmp_path):
+        path = _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        session_env["HERMES_UI_SESSION_ID"] = "tab-b"
+        foreign = {"active": False, "canonical_ui_storage_key": plugin_mod._state_storage_key("ui:tab-b")}
+        plugin._save_state("ui:tab-b", foreign)
+        assert plugin.pre_llm_call(session_id="sid-b") is None
+        plugin._clear_storage_key(plugin_mod._state_storage_key("ui:tab-b"))
+        assert path in plugin.pre_llm_call(session_id="sid-b")["context"]
+
+    def test_own_execution_wins_over_older_fallback(self, plugin, session_env, tmp_path):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        state = plugin._load_state("ui:tab-a")
+        state["approved_path"] = "newer-approved.md"
+        plugin._save_state("ui:tab-a", state)
+        assert "newer-approved.md" in plugin.pre_llm_call(session_id="sid-a")["context"]
+
+    # R1: resumed CLI, first input is /planmode on -> is the new plan mode enforced?
+    def test_R1_resumed_cli_on_is_enforced(self, plugin, session_env, tmp_path, monkeypatch):
+        oldpid = os.getpid()
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.on_session_finalize(platform="cli", session_id="cli-durable")
+        monkeypatch.setattr(plugin_mod.os, "getpid", lambda: 987654321)
+        resumed = PlanModePlugin(plugin.ctx)
+        assert "Plan mode is on" in resumed.command("on next task")
+        r = resumed.pre_tool_call("terminal", {"command": "rm -rf x"}, session_id="cli-durable", tool_call_id="t1")
+        assert r and r.get("action") == "block"
+        assert "Plan mode: on" in resumed.command("status")
+        assert resumed._load_state("cli:987654321")["active"]
+        assert not resumed._load_state(f"cli:{oldpid}")
+        assert plugin_mod._state_storage_key(f"cli:{oldpid}") not in resumed._linked_command_storage_keys(
+            resumed._load_state("resume:cli-durable"))
+
+
+    # R1b same process control: /planmode on while executing (no restart)
+    def test_R1b_same_process_on_is_enforced(self, plugin, session_env, tmp_path, monkeypatch):
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.command("on next task")
+        r = plugin.pre_tool_call("terminal", {"command": "x"}, session_id="cli-durable", tool_call_id="t1")
+        assert r and r.get("action") == "block"
+
+
+    # R4: resumed CLI, reset before any turn -> does the executing pointer survive?
+    def test_R4_resumed_cli_reset_clears_pointer(self, plugin, session_env, tmp_path, monkeypatch):
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.on_session_finalize(platform="cli", session_id="cli-durable")
+        monkeypatch.setattr(plugin_mod.os, "getpid", lambda: 987654321)
+        resumed = PlanModePlugin(plugin.ctx)
+        resumed.on_session_reset(platform="cli", old_session_id="cli-durable", new_session_id="cli-durable")
+        note = resumed.pre_llm_call(session_id="cli-durable")
+        assert note is None
+
+
+    # R4b same process reset (control)
+    def test_R4b_same_process_reset_clears_pointer(self, plugin, session_env, tmp_path, monkeypatch):
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.on_session_reset(platform="cli", old_session_id="cli-durable", new_session_id="cli-durable")
+        assert plugin.pre_llm_call(session_id="cli-durable") is None
+        assert plugin._executing_storage_keys() == []
+
+
+    # R3: reclaimed alias, command before the reclaiming tab's first turn; tab-a still executing on new-a
+    def test_R3_command_before_turn_does_not_touch_other_tab(self, plugin, session_env, tmp_path):
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        session_env["HERMES_SESSION_KEY"] = "new-a"
+        plugin.pre_llm_call(session_id="new-sid-a")
+        # tab-b reclaims old-a; its first input is the slash command (no ui id bound)
+        session_env.update(HERMES_SESSION_KEY="old-a", HERMES_SESSION_SOURCE="tui", HERMES_UI_SESSION_ID="",
+                           TERMINAL_CWD=str(tmp_path))
+        assert "Plan mode is on" in plugin.command("on B")
+        # tab-a keeps executing: its next tool call
+        session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
+        r = plugin.pre_tool_call("terminal", {"command": "make"}, session_id="new-sid-a", tool_call_id="ta1")
+        assert r is None
+        assert plugin._load_state("ui:tab-a").get("phase") == "executing"
+
+
+    # R2: tab-b has its own prior family; reclaims old-a; /planmode on via command; is tab-b enforced?
+    def test_R2_reclaiming_tab_with_prior_state_is_enforced(self, plugin, session_env, tmp_path):
+        _r3_start(plugin, session_env, tmp_path, "tab-b", "bkey", "sid-b0", "B0")
+        session_env["HERMES_UI_SESSION_ID"] = ""
+        assert "done" in plugin.command("done")
+        _r3_start(plugin, session_env, tmp_path, "tab-a", "old-a", "sid-a", "A")
+        session_env["HERMES_SESSION_KEY"] = "new-a"
+        plugin.pre_llm_call(session_id="new-sid-a")
+        session_env.update(HERMES_SESSION_KEY="old-a", HERMES_SESSION_SOURCE="tui", HERMES_UI_SESSION_ID="",
+                           TERMINAL_CWD=str(tmp_path))
+        assert "Plan mode is on" in plugin.command("on B1")
+        session_env["HERMES_UI_SESSION_ID"] = "tab-b"
+        plugin.pre_llm_call(session_id="sid-b1")
+        r = plugin.pre_tool_call("terminal", {"command": "make"}, session_id="sid-b1", tool_call_id="tb1")
+        assert r and r.get("action") == "block"
+
+
+    # R5: tab-a planning on old-a rotates to new-a (no hook yet); tab-b reopens old-a and runs a turn; is tab-a still enforced?
+    def test_R5_transfer_does_not_wipe_live_tab(self, plugin, session_env, tmp_path):
+        session_env.update(HERMES_SESSION_KEY="old-a", HERMES_SESSION_SOURCE="tui", HERMES_UI_SESSION_ID="",
+                           TERMINAL_CWD=str(tmp_path))
+        assert "Plan mode is on" in plugin.command("on A")
+        session_env["HERMES_UI_SESSION_ID"] = "tab-a"
+        assert "Plan mode is ON" in plugin.pre_llm_call(session_id="sid-a")["context"]
+        # tab-a's durable key rotates; before tab-a's next hook, tab-b opens old-a
+        session_env.update(HERMES_SESSION_KEY="old-a", HERMES_UI_SESSION_ID="tab-b")
+        plugin.pre_llm_call(session_id="sid-b")
+        session_env.update(HERMES_SESSION_KEY="new-a", HERMES_UI_SESSION_ID="tab-a")
+        r = plugin.pre_tool_call("terminal", {"command": "make"}, session_id="sid-a", tool_call_id="ta1")
+        assert r and r.get("action") == "block"
+
+
+    # R6: CLI /new = finalize (old id) -> id rotates -> reset (new id); then /resume old: pointer back?
+    def test_R6_cli_new_then_resume_old(self, plugin, session_env, tmp_path, monkeypatch):
+        _fix1_cli_exec(plugin, session_env, tmp_path, monkeypatch)
+        plugin.on_session_finalize(platform="cli", session_id="cli-durable")
+        session_env["HERMES_SESSION_ID"] = "cli-new"
+        plugin.on_session_reset(platform="cli", session_id="cli-new")
+        assert plugin.pre_llm_call(session_id="cli-new") is None
+        session_env["HERMES_SESSION_ID"] = "cli-durable"
+        note = plugin.pre_llm_call(session_id="cli-durable")
+        assert "Executing the approved plan" in note["context"]
+        assert plugin._executing_storage_keys()
+        assert plugin.command("done") == "The executing plan is done."
+        assert plugin.pre_llm_call(session_id="cli-durable") is None
+
+
 @pytest.fixture
 def session_env(monkeypatch):
     values = {"HERMES_SESSION_KEY": "unit-session"}
