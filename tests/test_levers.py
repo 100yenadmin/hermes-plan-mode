@@ -711,3 +711,35 @@ def test_044_execute_hint_byte_identity(make_plugin, commits):
     plugin = make_plugin(",".join(sorted(pm.LEAN_LEVERS - NEW_044)), allow_commits=commits)
     assert sorted(plugin._levers()) == case["kwargs"]["levers"]
     assert plugin._execute_hint() == case["text"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("route", ["gate", "typed", "typed_open", "bypass", "clarify"])
+def test_044_execution_levers_on_every_approval_path(make_plugin, enabled, route):
+    """edit_batch and brief_final alone reach the model on every approval route (clarify included, PR #25 review)."""
+    plugin = make_plugin("edit_batch,brief_final" if enabled else "approved_text", plan_profile="classic")
+    path = write_plan(plugin)
+    if route == "gate":
+        message = approve_gate(plugin, path)["message"]
+    elif route == "typed":
+        plugin.command("approve")
+        message = plugin.pre_llm_call()["context"]
+    elif route == "typed_open":
+        plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
+        plugin.command("approve")
+        message = json.loads(plugin.tool({"action": "submit"}))["message"]
+    else:
+        plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
+        result = json.loads(plugin.tool({"action": "submit"}))
+        if route == "bypass":
+            message = result["message"]
+        else:
+            clarify = result["clarify"]
+            args = {"questions": [clarify]}
+            assert plugin.pre_tool_call("clarify", args, tool_call_id="clarify") is None
+            payload = json.dumps({"question": clarify["question"], "user_response": clarify["choices"][0]})
+            plugin.post_tool_call("clarify", args, tool_call_id="clarify", status="ok", result=payload)
+            message = json.loads(plugin.transform_tool_result("clarify", args, result=payload,
+                                                             tool_call_id="clarify"))["plan_mode_approval"]
+    assert (render.EDIT_BATCH in message) is enabled
+    assert (render.BRIEF_FINAL in message) is enabled

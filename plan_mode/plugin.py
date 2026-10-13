@@ -1778,7 +1778,7 @@ class PlanModePlugin:
                         else:
                             self._approve_submission(state, submission, via="clarify")
                             if ("approved_text" in self._levers() or "lean_craft" in self._note_levers()
-                                    or {"bridge_calls", "skill_policy"} & self._note_levers()
+                                    or {"bridge_calls", "skill_policy", "edit_batch", "brief_final"} & self._note_levers()
                                     or self._saved_plan_note(submission)):
                                 note = (self._saved_plan_note(submission) + f"The user approved plan rev {submission['revision']}. "
                                         f"Implement it now: {self._execute_hint()}" + self._approved_excerpt(submission))

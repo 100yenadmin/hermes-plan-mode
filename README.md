@@ -238,15 +238,15 @@ plugins:
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
 - `rename_scope` (lean) tells the model to keep rename behaviour and assertions unchanged and search the whole repo,
-  naming plan files as expected matches; measured in the 0.4.4 stress.
+  naming plan files as expected matches; to be measured in the 0.4.4 stress.
 - `test_plan_only` (lean) tells the model to list test and requested-behaviour checks without unrequested repo-hygiene
-  checks; measured in the 0.4.4 stress.
+  checks; to be measured in the 0.4.4 stress.
 - `choice_record` (lean) tells the model to record answered clarify choices in Assumptions as the user's decisions;
-  measured in the 0.4.4 stress.
+  to be measured in the 0.4.4 stress.
 - `edit_batch` (lean) tells the model to edit each file once where possible and send different files' edits, including
-  tests, in the same response; measured in the 0.4.4 stress.
+  tests, in the same response; to be measured in the 0.4.4 stress.
 - `brief_final` (lean) tells the model to finish in 2–4 lines with what changed and the test result;
-  measured in the 0.4.4 stress.
+  to be measured in the 0.4.4 stress.
 - `test_commands` (lean) tells the model to write test commands the way the repo runs them, falling back to
   `python3 -m pytest` for an undocumented Python repo. In the 0.4.3 stress, plans naming a bare `python` fell from 18
   of 18 to 0, and so did runs that spent a round retrying the command (17 of 18 to 0).
