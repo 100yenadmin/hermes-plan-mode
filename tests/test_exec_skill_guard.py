@@ -103,14 +103,32 @@ def test_pending_notes_do_not_count_as_request(make_plugin, user_text, asked):
 
 @pytest.mark.parametrize("skill_loadable", [True, False])
 def test_plan_skill_disables_guard(make_plugin, monkeypatch, skill_loadable):
-    # A plan skill only takes effect when skill_view may load it; otherwise plan-mode falls back to Plan style and the
-    # guard stays on. Pinned here so the no-Hermes CI job (no skill config loader) tests the same branch.
+    # A configured plan skill opts into skill-driven process, even when inline shell (or a missing skill loader, as in
+    # the no-Hermes CI job) makes plan-mode fall back to Plan style for the plan itself.
     monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: None if skill_loadable else "inline shell enabled")
     plugin = make_plugin("exec_skill_guard", plan_skill="custom")
     approve_gate(plugin, write_plan(plugin))
-    assert ("exec_skill_guard" in plugin._note_levers()) is not skill_loadable
-    result = plugin.pre_tool_call("skill_view", {"name": "test-driven-development"})
-    assert (result is None) is skill_loadable
+    assert "exec_skill_guard" not in plugin._note_levers()
+    assert plugin.pre_tool_call("skill_view", {"name": "test-driven-development"}) is None
+
+
+def test_invalid_plan_skill_keeps_guard(make_plugin, monkeypatch):
+    monkeypatch.setattr(pm, "_skill_view_block_reason", lambda: None)
+    plugin = make_plugin("exec_skill_guard", plan_skill="not a skill name")
+    approve_gate(plugin, write_plan(plugin))
+    assert plugin.pre_tool_call("skill_view", {"name": "test-driven-development"})["action"] == "block"
+
+
+@pytest.mark.parametrize("name", ["receiving-code-review", "superpowers:receiving-code-review"])
+def test_receiving_code_review_blocked(executing, name):
+    assert executing.pre_tool_call("skill_view", {"name": name})["action"] == "block"
+
+
+@pytest.mark.parametrize("message", ["please run code reviews as you go", "do a code-review pass"])
+def test_plural_code_review_request_lifts_review_skills(executing, message):
+    executing.pre_llm_call(user_message=message)
+    assert executing.pre_tool_call("skill_view", {"name": "requesting-code-review"}) is None
+    assert executing.pre_tool_call("skill_view", {"name": "writing-plans"})["action"] == "block"
 
 
 @pytest.mark.parametrize("failure", ["name", "lookup", "levers", "message"])
@@ -275,3 +293,18 @@ def test_fix4_multimodal_process_request(executing, message):
 @pytest.mark.parametrize("name", ["superpowers: tdd", "software-development/test-driven-development/"])
 def test_fix5_normalized_names_blocked(executing, name):
     assert executing.pre_tool_call("skill_view", {"name": name})["action"] == "block"
+
+
+# The layout of core /plan's wrapper (agent/plan_prompt.py): rules, the task, then the plan-craft text, which itself
+# mentions TDD and so must never count as a user request.
+_REAL_WRAPPER = ("[/plan — plan mode]\n\nFor this turn, you are in PLAN MODE — planning only.\n- Do not implement code.\n"
+                 "\nTask to plan:\n{task}\n\nWrite the plan for an implementer with zero context for the codebase and\n"
+                 "questionable taste. Bite-sized tasks; DRY, YAGNI, TDD; frequent commits.")
+
+
+@pytest.mark.parametrize("task,asked", [("Fix the parser.\n\nUse TDD.", True), ("Fix the parser.\n\nKeep it small.", False),
+                                        ("Fix the parser.", False)])
+def test_builtin_wrapper_reads_whole_task_not_craft(make_plugin, task, asked):
+    plugin = make_plugin("exec_skill_guard")
+    plugin.pre_llm_call(user_message=_REAL_WRAPPER.format(task=task))
+    assert bool(plugin._load_state("sk:unit-session").get("user_asked_process")) is asked

@@ -114,13 +114,16 @@ _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "
                      "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
                      "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
                      "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard"})
-EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-code-review", "code-review",
-                                 "writing-plans", "plan", "planning", "brainstorming"})
+EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-code-review", "receiving-code-review",
+                                 "code-review", "writing-plans", "plan", "planning", "brainstorming"})
 _USER_ASKED_PROCESS = re.compile(
-    r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]review)\b", re.I)
+    r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]reviews?)\b", re.I)
 # Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
 _EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming"})
 _IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
+# Core /plan puts its plan-craft text right after the task (agent/plan_prompt.py, v0.21.6 and main); its first words
+# end the user's task. Without it, only the task's first paragraph is read.
+_PLAN_CRAFT_START = "\n\nWrite the plan for an implementer with zero context"
 
 
 def _user_message_text(message: Any) -> str | None:
@@ -1343,7 +1346,8 @@ class PlanModePlugin:
             levers.remove("lean_craft")
         if self._plan_skill():
             levers.discard("skill_policy")
-            levers.discard("exec_skill_guard")
+        if self._configured_plan_skill():
+            levers.discard("exec_skill_guard")  # a configured plan skill opts into skill-driven process
         if any(name in {"terminal", "execute_code"} or name.startswith(("delegate", "mcp"))
                for name in self._extra_allowed_tools()):
             levers.discard("blocked_tools")  # the note must not call a tool the operator allowed blocked
@@ -1494,14 +1498,16 @@ class PlanModePlugin:
         except OSError:
             return ""  # Keep the already-approved path when the file can no longer be read.
 
-    def _plan_skill(self) -> str:
+    def _configured_plan_skill(self) -> str:
         # A skill name only; anything else (paths with spaces, prose, oversized values) is ignored.
         name = self._config("plan_skill", "")
         name = name.strip() if isinstance(name, str) else ""
-        if not _PLAN_SKILL_RE.fullmatch(name):
-            return ""
+        return name if _PLAN_SKILL_RE.fullmatch(name) else ""
+
+    def _plan_skill(self) -> str:
+        name = self._configured_plan_skill()
         # Plan mode blocks skill_view while inline shell may run; then the skill can't be loaded, so use Plan style.
-        return "" if _skill_view_block_reason() else name
+        return "" if not name or _skill_view_block_reason() else name
 
     def _allow_commits(self) -> bool:
         # YAML 1.1 reads a bare `off`/`no` as False; quoted strings are accepted as well.
@@ -1947,8 +1953,9 @@ class PlanModePlugin:
                         if isinstance(user_text, str) and not user_text.strip().startswith(_IMPLEMENT_PREFIX):
                             if ("[/plan — plan mode]" in user_text
                                     and "For this turn, you are in PLAN MODE — planning only." in user_text):
-                                user_text = re.split(r"\n\s*\n", user_text.partition("Task to plan:")[2].lstrip("\r\n"),
-                                                     maxsplit=1)[0]
+                                task = user_text.partition("Task to plan:")[2].lstrip("\r\n")
+                                user_text = (task.partition(_PLAN_CRAFT_START)[0] if _PLAN_CRAFT_START in task
+                                             else re.split(r"\n\s*\n", task, maxsplit=1)[0])
                             pending_note = state.get("pending_note")
                             if isinstance(pending_note, str) and pending_note.strip():
                                 user_text = user_text.replace(pending_note.strip(), "")
