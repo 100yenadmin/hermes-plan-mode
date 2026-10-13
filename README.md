@@ -244,6 +244,11 @@ plugins:
   message that mentions TDD, test-first, red-green or code review while plan mode is on or the plan is executing
   lifts the block for TDD and code-review skills; planning and brainstorming skills stay blocked.
   A configured `plan_skill` turns the guard off.
+  PROOF-050 (2026-10-13, HP with vs without the guard, two PARITY-4 tasks, 4 runs each per arm) is why it stays
+  opt-in:
+  - The guard blocked the skill in the one lever run that asked for it, and no lever run loaded a process skill.
+  - Results were unchanged: 8 of 8 verified in both arms.
+  - The speed effect was not shown, because the control loaded the TDD skill in only 2 of 8 runs.
 - **How the 0.4.4 levers were decided.** With all five on (S44), the set cut passing tests on the refactor task (T8)
   below the pre-declared guard, 33.5 → 26.25 per run, and a fresh replication confirmed it (29.1 → 22.3), so 0.4.4
   kept them all opt-in. The 0.4.5 stress (S45, gpt-6.1-sol, 26 runs per arm) then tested the three planning levers
