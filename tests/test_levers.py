@@ -657,6 +657,17 @@ def test_044_planning_levers(lever, text, enabled, style, skill, question, reply
     assert render.light_note("/plans", levers=levers) == render.light_note("/plans")
 
 
+def test_046_rename_scope_uses_git_grep():
+    """#28: leftover checks use `git grep` (tracked files), so a git repo's plan needs no plan-file exception."""
+    text = render.RENAME_SCOPE.format(plans_dir="/plans")
+    assert "`git grep -n <old name>`" in text and "/plans are untracked" in text
+    assert "need not mention them" in text
+    git_part, fallback = text.split("Outside a git repo")
+    assert "expected matches" not in git_part and "expected matches" in fallback
+    assert "narrowing" not in text
+    assert render.REFACTOR_SCOPE.endswith("so name them as expected matches instead of narrowing the search.")
+
+
 @pytest.mark.parametrize("commands,refactor", list(itertools.product((False, True), repeat=2)))
 def test_044_scope_order_and_choice_record(commands, refactor):
     levers = NEW_044 | {"choice_fidelity"} | ({"test_commands"} if commands else set())
