@@ -319,7 +319,7 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.2 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.5 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every interactive surface |
@@ -332,11 +332,24 @@ plugins:
 
 ### Measured against Codex plan mode
 
-Two pre-registered benchmarks, PARITY-1 and PARITY-2, compared plan-mode with Codex's own plan mode.
+Three pre-registered benchmarks, PARITY-1 to PARITY-3, compared plan-mode with Codex's own plan mode.
 - **Freezing and judging:** the bars were written and hashed before any run, and a blind adjudicator applied them,
   seeing only the bars and the measurements.
 - **Setup:** both products ran the same model (gpt-6.1-sol, medium) with the same scripted user, on a suite of Python
   coding tasks. Two tasks hide a preference that only the user knows.
+
+**plan-mode 0.4.5 (PARITY-3, 2026-10-13).** Against Codex plan mode on the same model, suite and test environment,
+plan-mode 0.4.5 met every threshold (0 changes before approval in 38 runs; tests passed in 35 vs 35 of 35; hidden
+preferences found 9 vs 10 of 10; judge preference 82% Claude, 82% Codex) and took 1.61× as long end to end on the core
+tasks of this Python suite (95% CI 1.33–1.79): 1.40× in planning and 1.65× in execution.
+- 0 commits before approval, and every approval went through the gate.
+- The judges compared plans blind, plan text only: 95% CI 71–91% for the Claude judge and 76–86% for the Codex judge.
+- Both products ran the same `python3` (3.9.6) and pytest (8.4.2), checked before, during and after the campaign.
+- 0.4.5's two new lean levers held: 0 of 3 rename plans narrowed the leftover check or added an unrequested assertion,
+  and 0 of 38 plans had git status or diff checks (the S44 probes).
+- On the rename task, the Codex judge preferred Codex's plan in 3 of 3 pairs: plan-mode's plan names plan files as
+  expected matches of the leftover search, which that judge read as permitting old names (#28). The Claude judge
+  preferred plan-mode's plan in 2 of 3.
 
 **plan-mode 0.4.2 (PARITY-2, 2026-10-12).** It met every pre-declared threshold.
 - 0 changes and 0 commits before approval in 38 runs, and every approval went through the gate.
@@ -364,15 +377,20 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   judge preferred plan-mode's in 64%.
 
 **What these runs do not show.**
-- **The test environments differed.** Both products ran the same `python3`, but only plan-mode's could import pytest:
-  it saw the user's site-packages, and Codex ran with a clean home. In PARITY-2, every Codex run's `python3 -m pytest`
-  failed while planning, 36 of 38 then ran tests through `uv run --with pytest` with an approval, and 30 of 38 Codex
-  plans said pytest was missing. A re-analysis (2026-10-13) estimates that without that setup cost the execution ratio
-  would be about 1.39–1.42× rather than 1.26×, so the published ratios flatter plan-mode. This is an estimate (3 runs
-  per task, most of the shift from one task). The judges saw the "pytest missing" text in Codex's plans; there is no
-  sign it moved their scores. The next comparison gives both products the same environment.
-- **Codex runs read-only shell commands while planning;** plan-mode blocks the terminal until approval. Both are
-  measured as shipped.
+- **PARITY-3's speed includes a slower API path on the day.** plan-mode made fewer model calls than in PARITY-2 (350 vs
+  410), with the same median input and output sizes, but its median wait per call was 8.8 s against 4.3 s. Codex's
+  run times rose too, and one judge call was refused with "model at capacity". Codex's per-call latency is not
+  recorded, so how much of the 1.61× comes from the product and how much from the API that day is not measured.
+- **In PARITY-1 and PARITY-2 the test environments differed.** Both products ran the same `python3`, but only
+  plan-mode's could import pytest: it saw the user's site-packages, and Codex ran with a clean home. In PARITY-2, every
+  Codex run's `python3 -m pytest` failed while planning, 36 of 38 then ran tests through `uv run --with pytest` with an
+  approval, and 30 of 38 Codex plans said pytest was missing. A re-analysis (2026-10-13) estimates that without that
+  setup cost the execution ratio would be about 1.39–1.42× rather than 1.26×, so the published ratios flatter plan-mode.
+  This is an estimate (3 runs per task, most of the shift from one task). The judges saw the "pytest missing" text in
+  Codex's plans; there is no sign it moved their scores. PARITY-3 gave both products the same environment.
+- **Codex runs read-only shell commands while planning;** plan-mode blocks the terminal until approval. In PARITY-3,
+  Codex ran shell commands and tests before approval in 38 of 38 runs, and plan-mode in 0. Both are measured as
+  shipped.
 - **Not covered:** other models, chat platforms, long sessions, non-Python repos, and the time a person takes to
   review a plan.
 
