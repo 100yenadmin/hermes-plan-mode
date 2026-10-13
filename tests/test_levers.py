@@ -18,7 +18,7 @@ LEVER_NAMES = {
     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
     "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
-    "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final",
+    "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard",
 }
 NEW_044 = {"rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"}
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."

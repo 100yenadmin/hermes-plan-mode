@@ -28,7 +28,7 @@ from .approval import (
 )
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
-    BRIEF_FINAL, EDIT_BATCH, SKILL_EXECUTION, executing_pointer, light_note,
+    BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -90,7 +90,8 @@ _AGENT_NOTE_BRIDGE = (
 )
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
-_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress")
+_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress",
+                     "user_asked_process")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open",)
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -112,7 +113,11 @@ _LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
                      "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
                      "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
-                     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"})
+                     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard"})
+EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-code-review", "code-review",
+                                 "writing-plans", "plan", "planning", "brainstorming"})
+_USER_ASKED_PROCESS = re.compile(
+    r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]review)\b", re.I)
 _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the user can approve the plan, and this is "
                  "the approval, not a clarifying question. ")
 # Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
@@ -1325,6 +1330,7 @@ class PlanModePlugin:
             levers.remove("lean_craft")
         if self._plan_skill():
             levers.discard("skill_policy")
+            levers.discard("exec_skill_guard")
         if any(name in {"terminal", "execute_code"} or name.startswith(("delegate", "mcp"))
                for name in self._extra_allowed_tools()):
             levers.discard("blocked_tools")  # the note must not call a tool the operator allowed blocked
@@ -1654,6 +1660,17 @@ class PlanModePlugin:
                 state_key, state = self._state_for_hook(identity)
                 if not state.get("active"):
                     self._active_keys.discard(identity.key)
+                    # This optional speed guard fails open, independently of planning's safety checks.
+                    try:
+                        if (tool_name == "skill_view" and state.get("phase") == "executing"
+                                and "exec_skill_guard" in self._note_levers()
+                                and not state.get("user_asked_process")):
+                            name = str(call_args.get("name") or "")
+                            normalized = name.strip().lower().rsplit(":", 1)[-1].rsplit("/", 1)[-1]
+                            if normalized in EXEC_PROCESS_SKILLS:
+                                return {"action": "block", "message": EXEC_SKILL_GUARD_MESSAGE.format(name=name)}
+                    except Exception:
+                        return None
                     return _block_message(PLAN_MODE_TOOL, "Cannot submit: plan mode is not active for this session.") if is_submit else None
                 assert state_key is not None
                 self._active_keys.add(state_key)
@@ -1909,6 +1926,18 @@ class PlanModePlugin:
                     state_key, state = self._state_for_hook(identity)
                     if not state.get("active"):
                         return None  # Refusal text is never injected into a turn.
+                if state_key is not None and state and isinstance(message, str):
+                    user_text = message
+                    if ("[/plan — plan mode]" in user_text
+                            and "For this turn, you are in PLAN MODE — planning only." in user_text):
+                        user_text = re.split(r"\n\s*\n", user_text.partition("Task to plan:")[2].lstrip("\r\n"),
+                                             maxsplit=1)[0]
+                    pending_note = state.get("pending_note")
+                    if isinstance(pending_note, str) and pending_note.strip():
+                        user_text = user_text.replace(pending_note.strip(), "")
+                    if _USER_ASKED_PROCESS.search(user_text):
+                        state["user_asked_process"] = True
+                        self._save_state(state_key, state)
                 parts: list[str] = []
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():

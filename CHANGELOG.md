@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New opt-in lever `exec_skill_guard`: while an approved plan is executing, block loading the TDD, planning and
+  code-review process skills unless the user asked for that process.
+
 ## 0.4.6 - 2026-10-13
 
 Docs only; no code changes. Behaviour is identical to 0.4.5.
