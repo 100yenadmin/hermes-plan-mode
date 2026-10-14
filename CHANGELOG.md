@@ -5,7 +5,7 @@
 - Add the `plan-mode-report-problem` skill, registered with `ctx.register_skill`. Ask the agent to "report a problem
   with Plan Mode": it checks `/planmode status`, collects versions and log lines, searches existing issues, drafts a
   report with the bug form's headings, and files it with `gh` only after you approve that draft. Security problems go
-  to a private advisory instead. Hermes 0.21.6 and newer list the skill for the agent; older Hermes loads it by name
+  to a private advisory instead, and problems in Hermes itself to the Hermes tracker. Hermes 0.21.6 and newer list the skill for the agent; older Hermes loads it by name
   (`plan-mode:plan-mode-report-problem`). While plan mode is on, the agent hands you the draft and the form link.
 - Add contributor docs: AGENTS.md, CONTRIBUTING.md, SECURITY.md, a bug report form and a README troubleshooting
   section (#56).
