@@ -579,3 +579,21 @@ def test_large_patch_preview_is_fast(reviewed, session_env, tmp_path):
     start = time.perf_counter()
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
     assert time.perf_counter() - start < 5 and "10000 deletes" in text and len(text) <= 1000
+
+
+def test_outside_target_is_named_first(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    session_env["TERMINAL_CWD"] = str(cwd)
+    adds = "\n".join(f"*** Add File: a{n}_" + "x" * 120 + ".py\n+x" for n in range(9))
+    patch = f"*** Begin Patch\n{adds}\n*** Add File: ../out.py\n+y\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    out = str((tmp_path / "out.py").resolve())
+    assert f"patch {out}, a0_" in text and "1 path outside the working directory)" in text
+
+
+def test_a_long_removed_line_leaves_room_for_the_replacement(reviewed, session_env):
+    plugin, _ = reviewed
+    text = plugin.pre_tool_call("patch", {"path": "a.py", "old_string": "o" * 2000, "new_string": "new"})["message"]
+    assert len(text) <= 1000 and text.endswith("… ⏎ +new")

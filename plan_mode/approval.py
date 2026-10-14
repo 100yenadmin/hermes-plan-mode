@@ -291,7 +291,10 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
         return shown
 
     limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
-    paths = ", ".join(display(target, header=True) for target in targets) or "(unknown path)"
+    shown = [display(target, header=True) for target in targets]
+    # Outside targets come first, so the cap below cannot cut the name the outside count refers to.
+    flagged = set(outside)
+    paths = ", ".join([x for x in shown if x in flagged] + [x for x in shown if x not in flagged]) or "(unknown path)"
     if len(paths) > limit // 4:  # long names must not push the counts below out of the capped message
         paths = paths[:limit // 4 - 1] + "…"
     operations = []  # deletes and moves: always listed, since they carry no +/- lines
@@ -339,7 +342,9 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
         sample = (old[:max(4, 8 - len(new))] + new)[:8]  # a long removal still leaves room for the replacement
         added, removed = len(new), len(old)
     hidden = len(body) - len(sample)
-    lines = [_LINE_BREAKS.sub(" ", line) for line in operations + sample]
+    width = max(40, limit // 6)  # one long line must not crowd out the rest of the preview
+    lines = [line if len(line) <= width else line[:width - 1] + "…"
+             for line in (_LINE_BREAKS.sub(" ", line) for line in operations + sample)]
     if hidden:
         lines.append(f"… {hidden} more line{'' if hidden == 1 else 's'}")
     # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
