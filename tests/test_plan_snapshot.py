@@ -84,7 +84,7 @@ def test_edited_approval_captures_full_snapshot(make_plugin, session_env, monkey
     assert current["submission"]["digest"] == digest
     assert current["submission"]["path"] == str(path)
     assert "review" not in current
-    snapshot = path.parent / "approved" / "parser-rev2.md"
+    snapshot = path.parent / "approved" / f"parser-rev2-{digest[:12]}.md"
     assert snapshot.read_text() == text
     note = current["pending_note"]
     assert note.startswith(f"The user approved revised plan rev 2 of {path} (it replaces rev 1). Implement this approved text; preserve its changes; if something conflicts, ask rather than restoring the old plan.")
@@ -94,7 +94,7 @@ def test_edited_approval_captures_full_snapshot(make_plugin, session_env, monkey
     assert "Later unapproved" not in plugin._approved_excerpt(current["submission"])
     plugin.command("approve")
     assert state(plugin)["revision"] == state(plugin)["approved_revision"] == 2
-    assert not (snapshot.parent / "parser-rev3.md").exists()
+    assert not list(snapshot.parent.glob("parser-rev3-*.md"))
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -184,6 +184,52 @@ def test_snapshot_save_failure_keeps_approval_pending(make_plugin, session_env, 
     monkeypatch.setattr(Path, "open", fail_snapshot)
     assert "snapshot could not be saved" in plugin.command("approve")
     assert state(plugin) == before
+
+
+@pytest.mark.parametrize("identical", [False, True], ids=["different-text", "identical-text"])
+def test_two_sessions_share_snapshot_names_safely(make_plugin, session_env, identical):
+    snapshots, texts = [], []
+    for index in range(2):
+        session_env["HERMES_SESSION_KEY"] = "unit-session" if index == 0 else "second-session"
+        plugin, path = prepared(make_plugin, session_env)
+        text = f"# Revised\r\nPreserve café {0 if identical else index}.\r\n"
+        path.write_bytes(text.encode("utf-8"))
+        assert plugin.command("show").endswith(text)
+        assert "Plan approved" in plugin.command("approve")
+        current = plugin._load_state(f"sk:{session_env['HERMES_SESSION_KEY']}")
+        assert current["approved_revision"] == 2
+        snapshot = Path(current["approved_snapshot"])
+        assert current["submission"]["snapshot_path"] == str(snapshot)
+        assert snapshot.read_bytes() == text.encode("utf-8")
+        snapshots.append(snapshot)
+        texts.append(text)
+    assert (snapshots[0] == snapshots[1]) == identical
+    assert len(list(path.parent.joinpath("approved").glob("*.md"))) == (1 if identical else 2)
+    for snapshot, text in zip(snapshots, texts):
+        assert snapshot.read_bytes() == text.encode("utf-8")
+
+
+@pytest.mark.parametrize("symlink", [False, True], ids=["different-regular-file", "matching-symlink"])
+def test_existing_snapshot_refusal_preserves_files(make_plugin, session_env, symlink):
+    plugin, path = prepared(make_plugin, session_env)
+    text = "# Revised\nPreserve café.\n"
+    path.write_text(text, encoding="utf-8")
+    plugin.command("show")
+    before = copy.deepcopy(state(plugin))
+    snapshot = path.parent / "approved" / f"{path.stem}-rev2-{before['review']['digest'][:12]}.md"
+    snapshot.parent.mkdir()
+    target = path.with_name("existing.md") if symlink else snapshot
+    original = text.encode("utf-8") if symlink else b"different existing bytes"
+    target.write_bytes(original)
+    if symlink:
+        snapshot.symlink_to(target)
+    assert "snapshot could not be saved" in plugin.command("approve")
+    assert state(plugin) == before
+    assert target.read_bytes() == original
+    if symlink:
+        assert snapshot.is_symlink() and snapshot.readlink() == target
+    else:
+        assert snapshot.is_file() and not snapshot.is_symlink()
 
 
 @pytest.mark.parametrize("levers", ["", "approval_card"])
@@ -315,15 +361,16 @@ def test_failed_snapshot_write_leaves_no_partial_file(make_plugin, session_env):
     current["review"]["text"] = good
     plugin._save_state("sk:unit-session", current)
     assert "Plan approved" in plugin.command("approve")
-    assert (approved / f"{path.stem}-rev2.md").read_bytes() == text.encode()
+    assert (approved / f"{path.stem}-rev2-{current['review']['digest'][:12]}.md").read_bytes() == text.encode()
 
 
 def test_executing_pointer_rereads_the_approved_snapshot(make_plugin, session_env):
     plugin, path = prepared(make_plugin, session_env)
     path.write_text("# Revised\nUse pow2.\n")
     plugin.command("show")
+    digest = state(plugin)["review"]["digest"]
     assert "Plan approved" in plugin.command("approve")
-    snapshot = path.parent / "approved" / f"{path.stem}-rev2.md"
+    snapshot = path.parent / "approved" / f"{path.stem}-rev2-{digest[:12]}.md"
     pointer = render.executing_pointer(state(plugin))
     assert f"The approved text is the snapshot {snapshot}" in pointer and "not the working plan" in pointer
 

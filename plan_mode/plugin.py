@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import sys
 import threading
 from typing import Any, Callable
@@ -967,22 +968,44 @@ class PlanModePlugin:
                 clarify = submission.get("clarify") or {}
                 self._open_asks.discard((clarify.get("nonce", ""), clarify.get("tool_call_id", "")))
 
+    @staticmethod
+    def _reuse_snapshot(snapshot: Path, text: str) -> None:
+        expected = text.encode("utf-8")
+        try:
+            if not stat.S_ISREG(os.lstat(snapshot).st_mode):
+                raise ValueError("the existing approved snapshot is not a regular file")
+            fd = os.open(snapshot, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_size > len(expected):
+                    raise ValueError("the existing approved snapshot is not reusable")
+                if os.read(fd, len(expected) + 1) != expected:
+                    raise ValueError("the existing approved snapshot has different bytes")
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            raise ValueError("the existing approved snapshot could not be read") from exc
+
     def _approve_submission(self, state: dict[str, Any], submission: dict, via: str | None = None, storage_key: str = "", review: dict | None = None) -> None:
         """The shared transition after a correlated human decision and digest check."""
         state.pop("approved_snapshot", None)  # set again below only for a reviewed replacement
         if review is not None:
             revision = int(state.get("revision") or 0) + 1
-            snapshot = Path(state["plans_dir"]) / "approved" / f"{Path(review['path']).stem}-rev{revision}.md"
+            snapshot = Path(state["plans_dir"]) / "approved" / f"{Path(review['path']).stem}-rev{revision}-{review['digest'][:12]}.md"
             if not _plans_dir_is_still_safe(state["plans_dir"]) or os.path.islink(snapshot.parent):
                 raise ValueError("the approved snapshot path is unsafe")
             snapshot.parent.mkdir(exist_ok=True)
-            stream = snapshot.open("x", encoding="utf-8", newline="")  # exact captured text, no newline translation
             try:
-                with stream:
-                    stream.write(review["text"])
-            except BaseException:
-                snapshot.unlink(missing_ok=True)  # a partial snapshot would block every retry of the exclusive open
-                raise
+                stream = snapshot.open("x", encoding="utf-8", newline="")  # exact captured text, no newline translation
+            except FileExistsError:
+                self._reuse_snapshot(snapshot, review["text"])
+            else:
+                try:
+                    with stream:
+                        stream.write(review["text"])
+                except BaseException:
+                    snapshot.unlink(missing_ok=True)  # a partial snapshot would block every retry of the exclusive open
+                    raise
             submission.update(replaces_revision=review["revision"], revision=revision, path=review["path"],
                               digest=review["digest"], review_text=review["text"], snapshot_path=str(snapshot))
             state["revision"] = revision

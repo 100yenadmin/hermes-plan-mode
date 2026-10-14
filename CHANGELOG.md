@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3 - 2026-10-14
+
+- Approved snapshots carry a short digest of the reviewed text in their name (`<stem>-rev<N>-<digest>.md`), so two
+  sessions approving the same plan name no longer block each other; an identical existing snapshot is reused (#52).
+
 ## 0.6.2 - 2026-10-14
 
 - Local `/planmode show [file]` displays one complete plan up to 64 KiB and captures its review. Typed approval of a
