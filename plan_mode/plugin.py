@@ -92,7 +92,7 @@ _AGENT_NOTE_BRIDGE = (
 )
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
-_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress",
+_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
                      "user_asked_process")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")

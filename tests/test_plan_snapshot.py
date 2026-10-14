@@ -343,3 +343,18 @@ def test_reply_saved_plans_get_no_link_sentence():
     note = render.planning_note("/plans", ui_session=True, levers=levers, reply_plan=True)
     assert "markdown link to the plan file" not in note
     assert "markdown link to the plan file" in render.planning_note("/plans", ui_session=True, levers=levers)
+
+
+@pytest.mark.parametrize("command", ["done", "off"])
+def test_snapshot_pointer_is_cleared_with_the_execution(make_plugin, session_env, command):
+    plugin, path = prepared(make_plugin, session_env)
+    path.write_text("# Revised\nUse pow2.\n")
+    plugin.command("show")
+    assert "Plan approved" in plugin.command("approve")
+    assert state(plugin).get("approved_snapshot")
+    plugin.command(command)
+    assert "approved_snapshot" not in state(plugin)
+
+
+def test_snapshot_pointer_is_an_execution_family_field():
+    assert "approved_snapshot" in pm._EXECUTION_FIELDS and "approved_snapshot" in pm._FAMILY_FIELDS
