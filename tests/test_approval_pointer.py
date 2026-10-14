@@ -36,7 +36,9 @@ def awaiting(request, make_plugin, session_env):
 
 
 def expected(reply, revision=1):
-    return reply.rstrip() + "\n\n" + POINTER.format(revision=revision)
+    # A pure append: the streamed reply stays an exact prefix.
+    sep = "" if not reply or reply.endswith("\n\n") else "\n" if reply.endswith("\n") else "\n\n"
+    return reply + sep + POINTER.format(revision=revision)
 
 
 def test_pointer_on_every_surface_is_read_only_and_idempotent(awaiting):
@@ -44,18 +46,38 @@ def test_pointer_on_every_surface_is_read_only_and_idempotent(awaiting):
     before = copy.deepcopy(plugin.ctx.state.values)
     asks = plugin._open_asks.copy()
     reply = plugin.transform_llm_output("Saved the plan.  \n", platform=platform)
-    assert reply == expected("Saved the plan.")
+    assert reply == expected("Saved the plan.  \n") and reply.startswith("Saved the plan.  \n")
     assert PLANNING not in reply
     assert plugin.transform_llm_output(reply, platform=platform) is None
     assert plugin.ctx.state.values == before and plugin._open_asks == asks
 
 
-@pytest.mark.parametrize("footer", ["off", False])
-def test_pointer_ignores_cosmetic_footer_limits(awaiting, footer):
+def test_pointer_ignores_the_footer_length_limit(awaiting):
     plugin, _, _, _, platform = awaiting
-    plugin.ctx.settings["footer"] = footer
     reply = "x" * 1801
     assert plugin.transform_llm_output(reply, platform=platform) == expected(reply)
+
+
+@pytest.mark.parametrize("footer", ["off", False])
+def test_footer_off_turns_off_the_pointer_too(awaiting, footer):
+    # `footer: off` is the documented opt-out that lets another plugin's output transform win.
+    plugin, _, _, _, platform = awaiting
+    plugin.ctx.settings["footer"] = footer
+    assert plugin.transform_llm_output("Saved the plan.", platform=platform) is None
+
+
+@pytest.mark.parametrize("reply", ["Saved", "Saved  ", "Saved\n", "Saved\n\n", ""])
+def test_pointer_is_a_pure_append(awaiting, reply):
+    plugin, _, _, _, platform = awaiting
+    result = plugin.transform_llm_output(reply, platform=platform)
+    assert result.startswith(reply) and result.endswith(POINTER.format(revision=1))
+    assert result == expected(reply)
+
+
+@pytest.mark.parametrize("child", ["subagent", "curator"])
+def test_internal_child_turns_get_no_pointer(awaiting, child):
+    plugin = awaiting[0]
+    assert plugin.transform_llm_output("Child result.", platform=child) is None
 
 
 @pytest.mark.parametrize("reply", [

@@ -25,7 +25,8 @@ hook, except writes to the plan file.
    edits" (recommended), "Approve, review each file edit" (only when Hermes approvals are on) or "Keep planning".
    `/planmode show` prints the plan (up to 64 KB, then a truncation notice). The classic profile, a custom `levers` list without `approval_card`, and
    ACP, API server, cron and webhooks keep Hermes' own approval prompt: buttons, a card, the CLI panel or `/approve`.
-   If a turn ends while the plan still awaits approval and no card was answered, the reply ends with a line saying how to approve.
+   If a turn ends while the plan still awaits approval and no card was answered, the reply ends with a line saying how to approve
+   (unless `footer` is off).
 6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
    `todo_list` (with the default `lean` profile, for plans of 4 or more steps). With "review each file edit", every
    `write_file` / `patch` gets Hermes' approval prompt first. Typed `/planmode approve` also works while the card is
@@ -590,10 +591,11 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Footer limits.** Chat platforms only: never CLI, TUI, Desktop (also not for a chat session resumed in Desktop),
   API server, webhook, cron or delegate subagents. Only on replies of 1800 chars or fewer, because adding a footer to
   a longer streamed reply could re-send part of it. The approval pointer applies on every resolved surface regardless
-  of reply length or the footer setting, so on a long streamed chat reply it may re-send that reply's last part.
+  of reply length, so on a long streamed chat reply it may re-send that reply's last part. `footer: off` turns off
+  both the footer and the pointer, and the pointer never goes to subagent or curator turns.
 - **Other output transforms.** Hermes runs every plugin's `transform_llm_output` but uses only the first returned
-  text. While the footer shows, another plugin's transformed reply (for example a redactor's) may be discarded; set
-  `plan_mode.footer: off` if you rely on one.
+  text. While the footer or the approval pointer shows, another plugin's transformed reply (for example a redactor's)
+  may be discarded; set `plan_mode.footer: off` if you rely on one (this also turns off the pointer).
 - **Telegram, Slack and Discord approval text** is a short summary; the full plan comes from the agent's reply or
   `/planmode show`.
 - **Duplicate submits on hosts without tool call ids.** Hermes builds that pass no `tool_call_id` to hooks cannot
@@ -640,7 +642,7 @@ surfaces without a card), or with `/planmode approve`. It reads eight groups of 
 profile and `skills.inline_shell`, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
 files there, saves the approved text of an edited plan as a new file under `.hermes/plans/approved/`, and keeps
 per-session state in plugin state. It adds a turn note while planning or executing, a
-≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. When a turn ends while a submitted plan still awaits approval and no approval card was answered, it adds one line to that reply on any surface, whatever its length, saying how to approve. On TUI, Desktop and
+≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. When a turn ends while a submitted plan still awaits approval and no approval card was answered, it adds one line to that reply on any surface, whatever its length, saying how to approve (unless `footer` is off). On TUI, Desktop and
 `hermes serve` sessions (lean profile, `plan_once`) it reads the agent's visible reply text while planning and saves
 the `<proposed_plan>` block from it as the plan file. When the user picks
 "Always" on a plan approval or a per-edit review, Hermes core writes a `plugin_rule:plan-mode:…` entry to

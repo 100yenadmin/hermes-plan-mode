@@ -2439,6 +2439,8 @@ class PlanModePlugin:
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:
             platform = str(kwargs.get("platform") or "").strip().lower()
+            if self._footer_off() or platform in _NO_TURN_NOTE_PLATFORMS:
+                return None  # `footer: off` opts out of every plan-mode output transform; child turns belong to the parent.
             identity = derive_session_identity(platform)
             if identity.unsupported or identity.non_cli_without_key or not identity.key:
                 return None
@@ -2463,10 +2465,13 @@ class PlanModePlugin:
                     if (not clarify.get("tool_call_id")
                             and not any(nonce == clarify.get("nonce") for nonce, _ in self._open_asks)
                             and "/planmode approve" not in response_text):
-                        return response_text.rstrip() + "\n\n" + (
+                        # A pure append: the streamed reply must stay an exact prefix of the transformed text.
+                        sep = ("" if not response_text or response_text.endswith("\n\n")
+                               else "\n" if response_text.endswith("\n") else "\n\n")
+                        return response_text + sep + (
                             f"⏸ Plan rev {submission['revision']} is waiting for your approval: "
                             "type /planmode approve to approve it, or say what to change.")
-                if (self._footer_off() or not platform or platform in LOCAL_PLATFORMS
+                if (not platform or platform in LOCAL_PLATFORMS
                         or len(response_text) > _FOOTER_MAX_CHARS or identity.key.startswith("ui:")):
                     return None
                 return response_footer(response_text, state)

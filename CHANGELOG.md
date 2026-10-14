@@ -7,7 +7,8 @@
   it, or say what to change.` It applies on every surface (#19). On Hermes 0.21.6 `hermes serve` with approvals off,
   gpt-6.1-sol skipped the card in 6 of 6 runs when the task said "do not ask questions" (3 of them with the
   `approval_ask` lever), and in 0 of 2 without that phrase; on the classic CLI it asked in 3 of 3. The line changes no
-  approval decision.
+  approval decision. It is a pure append to the reply, `footer: off` turns it off, and subagent or curator turns never
+  get it.
 - Bound approved snapshot names to 255 filesystem bytes, including non-UTF-8 names, so surrogate-escaped plan
   names no longer refuse edited-plan approval (#54).
 

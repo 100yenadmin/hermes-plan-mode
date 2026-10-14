@@ -34,7 +34,7 @@ config_schema:
     choices: [auto, "off"]
     default: auto
     label: Chat footer
-    description: A one-line plan-mode or progress footer under short replies on chat platforms.
+    description: A one-line plan-mode or progress footer under short replies on chat platforms. Off also turns off the line that tells you how to approve a plan still waiting for approval.
   plan_style:
     type: str
     choices: [compact, core]
