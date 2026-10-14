@@ -49,18 +49,27 @@ hook, except writes to the plan file.
    all todos done, /planmode done or off ─► OFF
 ```
 
-A real run on the Hermes CLI (`/plan Add a power(a, b) function to calc.py with tests.`). These screenshots show the
-approval panel used by the classic profile:
+A real run on the Hermes CLI with the default lean profile (`/planmode on Add a subtract(a, b) function to calc.py
+with a test, and make divide raise ValueError on zero.`), after one clarifying question:
 
-![The CLI approval panel for plan rev 1, under the end of the plan the agent just showed](docs/media/cli-approval.png)
+![The approval card for plan rev 1 under the end of the plan: approve and auto-accept edits, approve and review each file edit, keep planning, or Other](docs/media/cli-card.png)
 
-After **Deny**, the agent asks what to change instead of giving up (excerpt):
+With **Approve, review each file edit**, each file write shows its path and a preview before it applies:
 
-![After a denial the agent asks what to change, with four suggested answers](docs/media/cli-deny-clarify.png)
+![A plan-mode edit review prompt for a patch to calc.py with Allow once, Allow for this session, Add to permanent allowlist and Deny](docs/media/cli-edit-review.png)
 
-After **Allow once** on rev 2, it implements in the same turn and keeps `todo_list` current (excerpt):
+The implementation then runs in the same turn (excerpt):
 
-![The approved plan runs with three todo items ticked off and a final summary](docs/media/cli-approve-implement.png)
+![The two approved patches applied and the final summary with both test commands passing](docs/media/cli-card-implement.png)
+
+To change the plan yourself, choose **Keep planning**, run `/planmode edit`, save your change, then `/planmode show`
+and `/planmode approve`. Approving a changed file before showing it is refused:
+
+![/planmode edit prints the plan path; approve before show is refused with a summary of the changed lines; show prints the full plan with the added section; approve then starts implementation](docs/media/cli-edit-approve.png)
+
+The classic profile (`plan_profile: classic`) approves through Hermes' own approval panel instead:
+
+![The classic CLI approval panel for plan rev 1, under the end of the plan the agent just showed](docs/media/cli-approval.png)
 
 ## What you see on each channel
 
