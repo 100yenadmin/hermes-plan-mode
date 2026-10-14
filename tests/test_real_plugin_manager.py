@@ -1025,6 +1025,34 @@ def test_u1_real_auto_approval_keeps_planning(real_submit_host, monkeypatch, mod
     assert host.plugins.get_pre_tool_call_block_message("terminal", {}, session_id="submit-session")
 
 
+def test_062_real_show_then_approve_changed_snapshot(real_submit_host):
+    host = real_submit_host
+    plugin = host.command.__self__
+
+    def edit_then_deny(*args, **kwargs):
+        path = Path(plugin._load_state("sk:submit-session")["submission"]["path"])
+        path.write_text("# Revised\n" + "x" * 12000 + "\nPreserve the approved change.\n")
+        return "deny"
+
+    host.callback(edit_then_deny)
+    host.submit()
+    path = Path(plugin._load_state("sk:submit-session")["submission"]["path"])
+    captured = path.read_text()
+    assert host.command("show").endswith(captured)
+    assert "Plan approved" in host.command("approve")
+    current = plugin._load_state("sk:submit-session")
+    assert current["approved_revision"] == 2
+    snapshot = path.parent / "approved" / "plan-rev2.md"
+    assert snapshot.read_text() == captured
+    path.write_text("# Later unapproved change")
+    notes = host.plugins.invoke_hook("pre_llm_call", session_id="submit-session")
+    note = next(n["context"] for n in notes if isinstance(n, dict) and "context" in n)
+    assert note.startswith("The user approved revised plan rev 2")
+    assert captured in note and str(snapshot) in note
+    assert "Later unapproved" not in note
+    assert host.plugins.get_pre_tool_call_block_message("terminal", {}, session_id="submit-session") is None
+
+
 def test_u1_real_gateway_callback_approves(real_submit_host, monkeypatch):
     host = real_submit_host
     monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
@@ -1101,7 +1129,7 @@ def test_u2_real_telegram_menu_rule(real_u2_host):
     if not callable(requires):
         pytest.skip("Hermes lacks the private _requires_argument menu rule")
     hint = real_u2_host.plugins.get_plugin_commands()["planmode"]["args_hint"]
-    assert hint == "[on|status|show|approve|reject|done|off] [task]"
+    assert hint == "[on|status|show|edit|approve|reject|done|off] [task]"
     assert requires(hint) is False
     assert "planmode" in {name for name, _ in commands.telegram_bot_commands()}
 

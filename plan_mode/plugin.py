@@ -92,7 +92,7 @@ _AGENT_NOTE_BRIDGE = (
 )
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
-_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress",
+_EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
                      "user_asked_process")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
@@ -559,7 +559,7 @@ class PlanModePlugin:
             "planmode",
             self.command,
             "Enforce plan-only tool access for this session",
-            args_hint="[on|status|show|approve|reject|done|off] [task]",
+            args_hint="[on|status|show|edit|approve|reject|done|off] [task]",
         )
         self.ctx.register_tool(
             name=PLAN_MODE_TOOL,
@@ -967,9 +967,29 @@ class PlanModePlugin:
                 clarify = submission.get("clarify") or {}
                 self._open_asks.discard((clarify.get("nonce", ""), clarify.get("tool_call_id", "")))
 
-    def _approve_submission(self, state: dict[str, Any], submission: dict, via: str | None = None, storage_key: str = "") -> None:
+    def _approve_submission(self, state: dict[str, Any], submission: dict, via: str | None = None, storage_key: str = "", review: dict | None = None) -> None:
         """The shared transition after a correlated human decision and digest check."""
+        state.pop("approved_snapshot", None)  # set again below only for a reviewed replacement
+        if review is not None:
+            revision = int(state.get("revision") or 0) + 1
+            snapshot = Path(state["plans_dir"]) / "approved" / f"{Path(review['path']).stem}-rev{revision}.md"
+            if not _plans_dir_is_still_safe(state["plans_dir"]) or os.path.islink(snapshot.parent):
+                raise ValueError("the approved snapshot path is unsafe")
+            snapshot.parent.mkdir(exist_ok=True)
+            stream = snapshot.open("x", encoding="utf-8", newline="")  # exact captured text, no newline translation
+            try:
+                with stream:
+                    stream.write(review["text"])
+            except BaseException:
+                snapshot.unlink(missing_ok=True)  # a partial snapshot would block every retry of the exclusive open
+                raise
+            submission.update(replaces_revision=review["revision"], revision=revision, path=review["path"],
+                              digest=review["digest"], review_text=review["text"], snapshot_path=str(snapshot))
+            state["revision"] = revision
+            state["submission"] = submission
+            state["approved_snapshot"] = str(snapshot)  # the executing pointer re-reads this after a compaction
         state["active"] = False
+        state.pop("review", None)
         state.pop("edit_review", None)
         for field in ("activation_id", "entered_by", "agent_activation_id"):
             state.pop(field, None)
@@ -981,6 +1001,30 @@ class PlanModePlugin:
         submission.pop("clarify", None)
         if submission.get("card"):
             self._card_baselines.pop(storage_key, None)
+        if review is not None:
+            state["pending_note"] = (
+                f"The user approved revised plan rev {submission['revision']} of {submission['path']} "
+                f"(it replaces rev {submission['replaces_revision']}). Implement this approved text; preserve its changes; "
+                "if something conflicts, ask rather than restoring the old plan." + self._approved_excerpt(submission)
+                + self._typed_todo_hint() + self._commit_rule())
+            if "lean_craft" in self._note_levers():
+                state["pending_note"] += " " + LEAN_EXECUTION
+            if "skill_policy" in self._note_levers():
+                state["pending_note"] += " " + SKILL_EXECUTION
+
+    @staticmethod
+    def _changed_plan_note(state: dict) -> str:
+        submission = state.get("submission") or {}
+        if not submission:
+            return ""
+        try:
+            unchanged = plan_digest(submission["path"])[0] == submission["digest"]
+        except (OSError, ValueError):
+            unchanged = False  # an unreadable or oversized (> 1 MiB) plan cannot be shown unchanged
+        if unchanged:
+            return ""
+        return (f"The plan file changed after rev {submission['revision']} was submitted (writer unknown). "
+                "Read the current file, keep its changes, apply the feedback, and submit a complete new revision.")
 
     @staticmethod
     def _stale_note(revision) -> str:
@@ -992,6 +1036,7 @@ class PlanModePlugin:
                 "if no reason was given, ask what to change; then revise the plan file and submit a complete new revision.")
 
     def _complete_submission(self, raw_key: str, storage_key: str, state: dict[str, Any]) -> dict:
+        state.pop("review", None)
         submission = state.get("submission")
         opened = state.pop("approved_while_open", None)
         if (opened and isinstance(submission, dict) and opened == submission.get("rule_key")
@@ -1088,7 +1133,7 @@ class PlanModePlugin:
                 "only exposed inherited session identity, so activation cannot be "
                 "bound safely to one session."
             )
-        if action in {"on", "off", "approve", "reject", "submit", "done", "show"}:
+        if action in {"on", "off", "approve", "reject", "submit", "done", "show", "edit"}:
             # Every state-mutating command, and show (it prints plan contents), must run in the plugin
             # instance of the session's own profile; status stays read-only and is not gated.
             refused = (
@@ -1206,40 +1251,49 @@ class PlanModePlugin:
             if action == "status":
                 return self._status_text(state, self._plan_files(state))
 
-            if action == "show":
+            if action in {"show", "edit"}:
                 files = self._plan_files(state)
                 submission = state.get("submission") or {}
                 path = (os.path.realpath(remainder if os.path.isabs(remainder) else
                         os.path.join(str(state.get("plans_dir") or ""), remainder))
                         if remainder else submission.get("path") or (files[-1] if files else ""))
+                if action == "show":
+                    state.pop("review", None)
+                    self._save_command_state(identity.key, command_storage_key, state)
                 if not path:
                     return "This session has no tracked plan to show."
                 if path not in files:
                     return "Plan display was refused: the requested file was not written by this session."
+                if action == "edit":
+                    return (f"{path}\nEdit and save it in your editor (GUI editors: wait for the save). "
+                            f"Then /planmode show {path}, then /planmode approve {path}.")
                 try:
-                    card = self._card_path(command_storage_key)
-                    if card:
-                        with open(path, "rb") as stream:
-                            data = stream.read(65537)
-                            size = os.fstat(stream.fileno()).st_size
-                        text = data[:65536].decode("utf-8", errors="replace")[:65536]
-                    else:
-                        with open(path, "r", encoding="utf-8", errors="replace") as stream:
-                            text = stream.read(3501)
+                    with open(path, "rb") as stream:
+                        data = stream.read(65537)
+                        size = os.fstat(stream.fileno()).st_size
+                    text = data[:65536].decode("utf-8", errors="replace")
                 except OSError:
                     return "The tracked plan file could not be read."
                 matched = submission.get("path") == path
                 revision = submission.get("revision", 0) if matched else state.get("revision", 0)
                 status = submission.get("status", "planning") if matched else (
                     "planning" if state.get("active") else state.get("phase") or "off")
-                if card:
-                    result = plan_text(path, text, revision, status, cap=65536)
-                    if size > 65536:
-                        result += f"\n…(truncated: showing 65536 of {size} bytes; full file: {path})"
-                    return result
-                return plan_text(path, text, revision, status)
+                result = plan_text(path, text, revision, status, cap=65536)
+                local = (identity.key.startswith("ui:") or state.get("canonical_ui_storage_key") == command_storage_key
+                         or identity.surface.lower() in {"", "cli", "terminal", "local"})
+                if len(data) > 65536:
+                    result += f"\n…(truncated: showing 65536 of {size} bytes; full file: {path})"
+                elif local:
+                    state["review"] = dict(activation_id=state.get("activation_id"), path=path,
+                                           revision=revision, digest=hashlib.sha256(data).hexdigest(), text=text)
+                    self._save_command_state(identity.key, command_storage_key, state)
+                if not local:
+                    result += "\nEdited-plan approval is not armed on chat platforms; complete delivery is unverified."
+                return result
 
             if action == "done":
+                state.pop("review", None)
+                self._save_command_state(identity.key, command_storage_key, state)
                 if state.get("phase") != "executing" and not ("approval_card" in self._levers() and state.get("edit_review")):
                     return "There is no executing plan to finish."
                 state.pop("edit_review", None)
@@ -1269,19 +1323,6 @@ class PlanModePlugin:
                     if files[-1] != submission.get("path"):
                         return (f"Plan approval was refused: the newest tracked plan, {files[-1]}, was never submitted. "
                                 "Ask the agent to submit it, or use /planmode approve <file> after reviewing it with /planmode show.")
-                    text = None
-                    try:
-                        digest, text = plan_digest(submission["path"])
-                        unchanged = digest == submission["digest"]
-                    except (OSError, ValueError):
-                        unchanged = False
-                    if not unchanged:
-                        baseline = self._card_baselines.get(command_storage_key)
-                        summary = (self._card_diff(baseline, text)[0] if text is not None and baseline
-                                   and baseline.get("revision") == submission.get("revision") else "")
-                        return (f"Plan rev {submission['revision']} changed after it was submitted. "
-                                + (summary + ". " if summary else "")
-                                + "Review it with /planmode show, then ask the agent to resubmit or use /planmode approve <file>.")
                 if not files:
                     return (
                         "Plan approval was refused: this session has no tracked plan file. "
@@ -1305,10 +1346,39 @@ class PlanModePlugin:
                         return "Plan approval was refused: the submitted file is not a tracked plan file."
                 else:
                     approved_path = files[-1]
+                digest, text = None, None
+                try:
+                    digest, text = plan_digest(approved_path)
+                except (OSError, ValueError):
+                    pass
+                unchanged = submission.get("path") == approved_path and digest is not None and digest == submission.get("digest")
+                if not unchanged and (submission or remainder):
+                    clarify = submission.get("clarify") or {}
+                    if (self._ledger.is_inflight(submission.get("rule_key"))
+                            or (clarify.get("nonce", ""), clarify.get("tool_call_id", "")) in self._open_asks):
+                        return "Plan approval was refused: finish or dismiss the open approval first."
+                    review = state.get("review") or {}
+                    if (not state.get("activation_id") or review.get("activation_id") != state.get("activation_id")
+                            or review.get("path") != approved_path or digest is None or review.get("digest") != digest):
+                        baseline = self._card_baselines.get(command_storage_key)
+                        summary = (self._card_diff(baseline, text)[0] if text is not None and baseline
+                                   and baseline.get("revision") == submission.get("revision") else "")
+                        return (f"Plan rev {submission.get('revision', 0)} changed after it was submitted. "
+                                + (summary + ". " if summary else "")
+                                + "Review it with /planmode show [file], then approve, resubmit or use /planmode approve <file>.")
+                    try:
+                        self._approve_submission(state, submission, via="review", storage_key=command_storage_key, review=review)
+                    except (OSError, ValueError):
+                        return "Plan approval was refused: the approved snapshot could not be saved."
+                    self._forget_submission(state, command_storage_key)
+                    self._save_command_state(identity.key, command_storage_key, state)
+                    started = self._start_implementation(approved_path)
+                    return f"Plan approved. Plan mode is off. Next turn will implement {approved_path}. " + ("Starting implementation now." if started else "Send any message to start.")
                 if "approval_card" in self._levers() and submission.get("card"):
                     self._forget_submission(state, command_storage_key)
                 submission.pop("clarify", None)
                 state["active"] = False
+                state.pop("review", None)
                 state.pop("edit_review", None)
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
@@ -1322,16 +1392,14 @@ class PlanModePlugin:
                     state["pending_note"] += " " + SKILL_EXECUTION
                 state.update(phase="executing", approved_path=approved_path, approved_at=_utc_now())
                 state.pop("approved_revision", None)
+                state.pop("approved_snapshot", None)
                 if submission.get("path") == approved_path:
-                    try:
-                        if plan_digest(approved_path)[0] == submission["digest"]:
-                            submission["status"] = "approved"
-                            state["approved_revision"] = submission["revision"]
-                            if card_open:
-                                # The open card's call resumes and reports this approval once.
-                                state["approved_while_open"] = submission["rule_key"]
-                    except (OSError, ValueError):
-                        pass
+                    if unchanged:
+                        submission["status"] = "approved"
+                        state["approved_revision"] = submission["revision"]
+                        if card_open:
+                            # The open card's call resumes and reports this approval once.
+                            state["approved_while_open"] = submission["rule_key"]
                 if submission.get("path") == approved_path:
                     state["pending_note"] = self._saved_plan_note(submission) + state["pending_note"]
                 self._forget_submission(state)
@@ -1347,6 +1415,7 @@ class PlanModePlugin:
                 return f"Plan approved. Plan mode is off. Next turn will implement {approved_path}. {ending}"
 
             if action == "reject":
+                state.pop("review", None)
                 if not state.get("active"):
                     return "Plan mode is not on for this session."
                 feedback = remainder or "No additional feedback was provided."
@@ -1378,6 +1447,7 @@ class PlanModePlugin:
                         "reject or off can end it."
                     )
                 state["active"] = False
+                state.pop("review", None)
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
                 state["pending_note"] = ""
@@ -1390,7 +1460,7 @@ class PlanModePlugin:
                 self._sync_execution_family(command_storage_key, state)
                 return "Plan mode is off for this session. No approval note will be injected."
 
-        return "Usage: /planmode on [task] | status | show [file] | approve [file] | reject [feedback] | done | off"
+        return "Usage: /planmode on [task] | status | show [file] | edit [file] | approve [file] | reject [feedback] | done | off"
 
     @staticmethod
     def _clear_execution(state: dict[str, Any]) -> None:
@@ -1512,7 +1582,8 @@ class PlanModePlugin:
             previous = ""
         return planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
                              commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform,
-                             reply_plan="plan_once" in self._levers() and _plan_once_visible(), card_path=self._card_path(storage_key))
+                             reply_plan="plan_once" in self._levers() and _plan_once_visible(), card_path=self._card_path(storage_key),
+                             ui_session=bool(_tui_ui_session_id()))
 
     def _card_path(self, storage_key: str = "") -> bool:
         reader = _session_reader()
@@ -1690,6 +1761,9 @@ class PlanModePlugin:
         return ""
 
     def _approved_excerpt(self, submission: dict) -> str:
+        if "review_text" in submission:
+            return (f"\nIf this note was shortened, read {submission['snapshot_path']} in full before implementing.\n\n"
+                    + submission["review_text"])
         if "approved_text" not in self._levers():
             return ""
         try:
@@ -1824,6 +1898,7 @@ class PlanModePlugin:
         except ValueError as exc:
             return _block_message(PLAN_MODE_TOOL, str(exc))
         revision = int(state.get("revision") or 0) + 1
+        state.pop("review", None)
         rule_key = make_rule_key(state.get("activation_id") or "", revision, digest)
         self._forget_submission(state)
         state["revision"] = revision
@@ -2096,12 +2171,20 @@ class PlanModePlugin:
                                 while len(self._clarify_notes) > 256:
                                     self._clarify_notes.pop(next(iter(self._clarify_notes)))
                     else:
+                        state.pop("review", None)
                         submission["status"] = "rejected"
                         if "light_notes" in self._levers():
                             state.pop("light_note_seen", None)
                         state["pending_note"] = self._rejection_note(submission["revision"])
                         if answer != clarify["choices"][-1]:
                             state["pending_note"] += f' Feedback: "{answer[:2000 if card else 280]}"'
+                        changed = self._changed_plan_note(state)
+                        if changed:
+                            state["pending_note"] += " " + changed
+                            if card:
+                                self._clarify_notes[(state_key, call_id)] = (kwargs.get("result"), state["pending_note"])
+                                while len(self._clarify_notes) > 256:
+                                    self._clarify_notes.pop(next(iter(self._clarify_notes)))
                         submission.pop("clarify", None)
                     self._save_command_state(identity.key, _state_storage_key(state_key), state)
                     self._sync_execution_family(_state_storage_key(state_key), state)
@@ -2244,6 +2327,9 @@ class PlanModePlugin:
                 except Exception:
                     pass
                 parts: list[str] = []
+                changed = self._changed_plan_note(state) if state.get("active") else ""
+                if changed and changed not in state.get("pending_note", ""):
+                    state["pending_note"] = (state.get("pending_note") or "") + " " + changed
                 pending = state.get("pending_note")
                 if isinstance(pending, str) and pending.strip():
                     parts.append(pending.strip())

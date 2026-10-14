@@ -163,6 +163,7 @@ def test_approve_uses_only_this_sessions_tracked_plan_files(
     newer_a = plans / "2026-09-23_newer-a.md"
     assert plugin.pre_tool_call("write_file", {"path": str(newer_a), "content": "A2"}) is None
     newer_a.write_text("A2", encoding="utf-8")
+    plugin.command(f"show {plan_a.name}")
     explicit = plugin.command(f"approve {plan_a.name}")
     assert str(plan_a) in explicit
     assert str(newer_a) not in explicit
@@ -1581,13 +1582,15 @@ def test_u1_blocked_submit_note_once_and_typed_fallback(plugin, submitted_plan, 
         assert "Plan approved" in plugin.command("approve")
 
 
-def test_u1_typed_approval_refuses_changed_submission_but_explicit_file_works(plugin, submitted_plan):
+def test_u1_typed_approval_of_changed_submission_requires_show(plugin, submitted_plan):
     _submit(plugin)
     plugin.post_tool_call("plan_mode", {"action": "submit"}, tool_call_id="submit-1", status="blocked")
     submitted_plan.write_text("# Changed", encoding="utf-8")
     reply = plugin.command("approve")
     assert "Plan rev 1 changed after it was submitted" in reply
     assert plugin._load_state("sk:unit-session")["active"]
+    assert "Plan approved" not in plugin.command(f"approve {submitted_plan.name}")
+    plugin.command(f"show {submitted_plan.name}")
     assert "Plan approved" in plugin.command(f"approve {submitted_plan.name}")
 
 
@@ -1872,7 +1875,7 @@ def test_u2_hint_and_command_hint_registered(plugin, plan_profile):
     else:
         assert section["content"] == 'For multi-step or risky changes you can enter enforced plan mode with the plan_mode tool (action "on"; find it with tool_search) and submit a plan for the user\'s approval before building.'
     assert len(section["content"]) <= 200
-    assert plugin.ctx.command_hints["planmode"] == "[on|status|show|approve|reject|done|off] [task]"
+    assert plugin.ctx.command_hints["planmode"] == "[on|status|show|edit|approve|reject|done|off] [task]"
 
 
 @pytest.mark.parametrize("key", ["agent_hint", "plan_mode.agent_hint"])
@@ -1891,17 +1894,17 @@ def test_u2_hint_registration_fail_open(session_env, capability):
     assert "plan_mode" in ctx.tools and "transform_llm_output" in ctx.hooks
 
 
-def test_u2_show_default_explicit_and_read_only(plugin, submitted_plan, session_env):
+def test_u2_show_default_explicit_and_profile_gated(plugin, submitted_plan, session_env):
     assert plugin.command("show").endswith(submitted_plan.read_text())
     _submit(plugin)
     newer = submitted_plan.with_name("newer.md")
     plugin.pre_tool_call("write_file", {"path": str(newer)})
     newer.write_text("# Newer")
-    before = _snapshot(plugin)
     assert plugin.command("show").startswith(f"Plan: {submitted_plan} (rev 1, pending)\n\n")
     for argument in (submitted_plan.name, str(submitted_plan)):
         assert plugin.command("show " + argument).endswith(submitted_plan.read_text())
     assert plugin.command("show newer.md").endswith("# Newer")
+    before = _snapshot(plugin)
     session_env["HERMES_SESSION_PROFILE"] = "different-profile"
     assert "refused" in plugin.command("show")  # show prints plan contents, so it is profile-gated
     assert _snapshot(plugin) == before
@@ -1915,7 +1918,7 @@ def test_u2_show_no_plan_foreign_and_truncation(plugin, session_env, tmp_path):
     plugin.pre_tool_call("write_file", {"path": str(path)})
     path.write_text("# Plan\n" + "x" * 4000)
     reply = plugin.command("show")
-    assert len(reply) <= 3500 and reply.endswith(f"… (truncated; full plan at {path})")
+    assert reply.startswith(f"Plan: {path}") and "x" * 4000 in reply and "truncated" not in reply
     session_env["HERMES_SESSION_KEY"] = "other-session"
     plugin.command("on")
     assert "not written by this session" in plugin.command("show " + str(path))

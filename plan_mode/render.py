@@ -126,7 +126,7 @@ def plan_file_stamp(now=None) -> str:
 
 
 def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=True,
-                  levers=frozenset(), previous_plan="", platform="", reply_plan=False, card_path=False) -> str:
+                  levers=frozenset(), previous_plan="", platform="", reply_plan=False, card_path=False, ui_session=False) -> str:
     stamp = plan_file_stamp(now)
     target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
     compact = CODEX_COMPACT_PLAN if "codex_compact" in levers else COMPACT_PLAN
@@ -154,6 +154,8 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'
         "In group chats, keep secrets and private details out of the plan."
     )
+    if ui_session and not ("plan_once" in levers and reply_plan):  # a reply-saved plan has no path until after the reply
+        note += "\nInclude a markdown link to the plan file in your plan reply."
     if "question_shape" in levers:
         # v2: keep the ask-before-writing directive; only bound the number and shape of questions.
         note = note.replace(
@@ -234,6 +236,8 @@ def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
     result = (
         f"Executing the approved plan {state.get('approved_path')}{rev}. "
         "Keep todo_list statuses current; re-read the plan if your context was compacted."
+        + (f" The approved text is the snapshot {state['approved_snapshot']}: re-read that file, not the working plan."
+           if state.get("approved_snapshot") else "")
     ) + ("" if commits else f" {no_commits(levers)}")
     if "todo_inline" in levers:
         result = result.replace("Keep todo_list statuses current;",
