@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix `/planmode on <task>`: the task now reaches the model on the next turn. Before, only the user saw it (#40).
+  A note queued by a slash command is delivered once and no longer replays after a TUI/Desktop cold resume.
+
 - Extract every V4A patch target in linear time while preserving conservative checks for malformed and multiline headers.
 
 - Extend opt-in `approval_card` with per-plan review of each `write_file` / `patch` edit, including file-tool calls inside `execute_code`.
