@@ -150,12 +150,10 @@ _DEFAULT_PLAN_STYLE = "compact"
 _DEFAULT_ALLOW_COMMITS = False
 _PLAN_SKILL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
 
-_V4A_FILE_RE = re.compile(
-    r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+)$", re.MULTILINE
+_V4A_HEADER_RE = re.compile(
+    r"^\*\*\*\s*(Update|Add|Delete|Move)\s+File:", re.MULTILINE
 )
-_V4A_MOVE_RE = re.compile(
-    r"^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)$", re.MULTILINE
-)
+_V4A_SPACE_RE = re.compile(r"\s*")
 
 
 @dataclass(frozen=True)
@@ -443,9 +441,47 @@ def _patch_targets(args: dict[str, Any]) -> list[str] | None:
         return None
 
     patch = args["patch"]
-    targets = [match.group(1).strip() for match in _V4A_FILE_RE.finditer(patch)]
-    for match in _V4A_MOVE_RE.finditer(patch):
-        targets.extend((match.group(1).strip(), match.group(2).strip()))
+    targets = []
+
+    def line_end(start: int) -> int:
+        end = patch.find("\n", start)
+        return len(patch) if end < 0 else end
+
+    # Prefixes and whitespace scans have no overlapping quantified alternatives.
+    # Each header scans only its payload line and adjacent whitespace, so total
+    # work is linear. Scan headers independently, even in malformed patches.
+    for match in _V4A_HEADER_RE.finditer(patch):
+        start = _V4A_SPACE_RE.match(patch, match.end()).end()
+        if match.group(1) != "Move":
+            # Preserve the old regex's conservative newline-crossing targets,
+            # including an empty target when whitespace was its only payload.
+            targets.append(patch[start:line_end(start)].strip())
+            continue
+        end = line_end(start)
+        arrow = patch.find("->", start + 1, end)
+        if arrow < 0 and end > start:
+            # An arrow on the next line still counts: the host's path rewrite joins
+            # "*** Move File: a\n-> b" into one Move line before it parses the patch.
+            after_space = _V4A_SPACE_RE.match(patch, end).end()
+            if patch.startswith("->", after_space):
+                arrow = after_space
+        if arrow >= 0:
+            destination = _V4A_SPACE_RE.match(patch, arrow + 2).end()
+            # .+ cannot consume a destination made solely of newlines. Such an
+            # arrow fails before the legacy leading-whitespace fallback.
+            if destination == len(patch) and not patch[arrow + 2:destination].strip("\n"):
+                arrow = -1
+        # Prefer a later arrow when the source starts with '->'. Only if that
+        # fails may leading whitespace supply the old .+?'s required character.
+        if arrow < 0 and patch.startswith("->", start):
+            whitespace = patch[match.end():start].rstrip("\n")
+            if whitespace:
+                arrow = start
+                start = match.end() + len(whitespace) - 1
+        if arrow >= 0:
+            destination = _V4A_SPACE_RE.match(patch, arrow + 2).end()
+            targets.extend((patch[start:arrow].strip(),
+                            patch[destination:line_end(destination)].strip()))
     return targets or None
 
 
