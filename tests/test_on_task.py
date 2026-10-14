@@ -63,3 +63,19 @@ def test_tui_cold_resume_does_not_replay_a_slash_reject_note(plugin, session_env
     assert _context(plugin).count("unique-revision-ask") == 1
     session_env["HERMES_UI_SESSION_ID"] = "reopened-tab"
     assert "unique-revision-ask" not in _context(plugin)
+
+
+def test_reused_session_key_does_not_replay_the_task(plugin, session_env, tmp_path):
+    # The alias copy keeps the previous tab's canonical marker after off/on; a later reopen must not replay.
+    session_env.update({"HERMES_SESSION_KEY": "reused-key", "HERMES_SESSION_SOURCE": "tui",
+                        "HERMES_UI_SESSION_ID": "", "TERMINAL_CWD": str(tmp_path)})
+    plugin.command("on")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-1"
+    _context(plugin)
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "off" in plugin.command("off").lower()
+    plugin.command("on unique-second-task")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-2"
+    assert _context(plugin).count("unique-second-task") == 1
+    session_env["HERMES_UI_SESSION_ID"] = "tab-3"
+    assert "unique-second-task" not in _context(plugin)

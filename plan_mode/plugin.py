@@ -1418,7 +1418,8 @@ class PlanModePlugin:
         """Clear a delivered note from the state's linked copies too.
 
         A TUI/Desktop cold resume adopts a linked sk: copy into a fresh UI state, which would replay the note. Only
-        a copy holding this exact note is changed, so a different queued note is never dropped.
+        a copy holding this exact note is changed, so a different queued note is never dropped. A copy from the same
+        activation counts even when its family marker is stale (a reused session key keeps the previous tab's).
         """
         related = set(self._linked_command_storage_keys(state))
         canonical = state.get("canonical_ui_storage_key")
@@ -1427,7 +1428,8 @@ class PlanModePlugin:
         related.discard(storage_key)
         for other in related:
             copy = self._load_storage_state(other)
-            if copy.get("pending_note") == note and self._same_family(other, canonical):
+            same_activation = bool(state.get("activation_id")) and copy.get("activation_id") == state.get("activation_id")
+            if copy.get("pending_note") == note and (same_activation or self._same_family(other, canonical)):
                 copy["pending_note"] = ""
                 self._save_storage_state(other, copy)
 
