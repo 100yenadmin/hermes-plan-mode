@@ -1027,9 +1027,10 @@ class PlanModePlugin:
     def command(self, raw_args: str) -> str:
         raw = str(raw_args or "").strip()
         action, _, remainder = raw.partition(" ")
-        return self._run_command(action.lower() or "status", remainder.strip())
+        return self._run_command(action.lower() or "status", remainder.strip(), deliver_task=True)
 
-    def _run_command(self, action: str, remainder: str, entered_by: str = "user") -> str | dict:
+    def _run_command(self, action: str, remainder: str, entered_by: str = "user",
+                     deliver_task: bool = False) -> str | dict:
         """Resolve identity like the slash command, then apply one plan-mode action."""
         identity, error = self._identity_or_reply()
         if error:
@@ -1129,6 +1130,9 @@ class PlanModePlugin:
                     "revision": int(state.get("revision") or 0),
                     **preserved,
                 }
+                if deliver_task and remainder:
+                    # The slash reply goes to the user only; the next turn's note carries the task to the model.
+                    state["pending_note"] = f"The user's task for this plan (from /planmode on): {remainder[:2000]}"
                 if entered_by == "user" and _USER_ASKED_PROCESS.search(remainder):
                     state["user_asked_process"] = True
                 if entered_by == "agent":

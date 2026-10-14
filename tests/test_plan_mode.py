@@ -1714,6 +1714,7 @@ def test_u2_builtin_keeps_existing_activation_and_submission(plugin, submitted_p
     _submit(plugin)
     before = plugin._load_state("sk:unit-session")
     note = plugin.pre_llm_call(user_message=_BUILTIN_PROMPT)["context"]
+    before["pending_note"] = ""  # this first turn delivers the queued /planmode on task
     if plan_profile == "lean":
         before["light_note_seen"] = True  # the first planning note records only its display bookkeeping
     assert plugin._load_state("sk:unit-session") == before
