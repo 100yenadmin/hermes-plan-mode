@@ -316,3 +316,35 @@ def test_family_fields_and_linked_copy(reviewed):
     assert plugin._load_storage_state(linked)["edit_review"] == current["edit_review"]
     plugin.command("done")
     assert "edit_review" not in plugin._load_storage_state(linked)
+
+
+@pytest.mark.parametrize("child", [True, False])
+def test_delegated_child_edits_are_not_reviewed(reviewed, monkeypatch, child):
+    plugin, _ = reviewed
+    monkeypatch.setattr(pm, "_delegated_child", lambda: child)
+    directive = plugin.pre_tool_call(*EDITS[0])
+    assert (directive is None) if child else (directive["action"] == "approve")
+    key = state(plugin)["edit_review"]["key"]
+    plugin.ctx.hooks["post_approval_response"](pattern_key="plugin_rule:" + key, choice="deny")
+    assert bool(state(plugin)["edit_review"].get("denied")) is (not child)
+
+
+def test_review_after_automatic_clear_stays_in_executing_index(reviewed):
+    plugin, _ = reviewed
+    storage = pm._state_storage_key("sk:unit-session")
+    assert storage in plugin._executing_storage_keys()
+    plugin.ctx.settings["levers"] = "approval_card todo_batch"
+    plugin.post_llm_call(**IDS)
+    assert "phase" not in state(plugin) and state(plugin).get("edit_review")
+    assert storage in plugin._executing_storage_keys()
+
+
+def test_no_lever_read_for_tools_outside_review(card, monkeypatch):
+    plugin, _, _ = card
+    plugin.command("off")
+    calls = []
+    real = plugin._levers
+    monkeypatch.setattr(plugin, "_levers", lambda: calls.append(1) or real())
+    assert plugin.pre_tool_call("read_file", {"path": "x"}) is None
+    assert plugin.pre_tool_call(*EDITS[0]) is None
+    assert calls == []

@@ -462,6 +462,16 @@ def _write_targets(tool_name: str, args: dict[str, Any]) -> list[str] | None:
 _LOCAL_PROMPT_PLATFORMS = frozenset({"", "cli", "terminal", "tui", "desktop", "local"})
 
 
+def _delegated_child() -> bool:
+    """delegate_task children auto-deny approvals, so edit review covers only the user's own session."""
+    try:
+        from agent.delegation_context import is_delegated_child_context
+
+        return bool(is_delegated_child_context())
+    except Exception:
+        return False
+
+
 def _edit_review_available() -> bool:
     """Missing/raising host probes never offer a review the host cannot prompt for."""
     try:
@@ -641,7 +651,8 @@ class PlanModePlugin:
     ) -> None:
         state = dict(state)
         self.ctx.state.set(storage_key, state)
-        self._mark_executing(storage_key, state.get("phase") == "executing")
+        # Review mode outlives automatic execution clears, so a session reset must still find it.
+        self._mark_executing(storage_key, state.get("phase") == "executing" or isinstance(state.get("edit_review"), dict))
         active_storage = self._active_storage_keys()
         if state.get("active"):
             if key_hint and state.get("owner_pid") == os.getpid():
@@ -1801,8 +1812,8 @@ class PlanModePlugin:
                     # User-requested edit review fails open without changing planning's write lock.
                     try:
                         review = state.get("edit_review")
-                        if ("approval_card" in self._levers() and tool_name in {"write_file", "patch"}
-                                and isinstance(review, dict) and review.get("key")):
+                        if (tool_name in {"write_file", "patch"} and isinstance(review, dict) and review.get("key")
+                                and "approval_card" in self._levers() and not _delegated_child()):
                             if not _edit_review_available():
                                 if not review.get("paused"):
                                     review["paused"] = True
@@ -2208,7 +2219,7 @@ class PlanModePlugin:
         """Preserve ledger delivery; only a denial for this plan's edit key adds feedback."""
         self._ledger.record_response(**kwargs)
         try:
-            if "approval_card" not in self._levers() or kwargs.get("choice") != "deny":
+            if kwargs.get("choice") != "deny" or "approval_card" not in self._levers() or _delegated_child():
                 return
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
             if not identity.key or identity.unsupported or identity.non_cli_without_key:
