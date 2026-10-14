@@ -23,6 +23,11 @@
   - file paths are quoted;
   - security problems that clearly come from Hermes itself go to Hermes' private route;
   - when the CLI is missing or fails, the paste fallback also covers a comment on the matching issue (#61).
+  - it adopts the community kit's v2 baseline (#64): the Hermes-or-plugin security route is decided from what the user
+    describes, an exposed key gets revoke-and-replace advice, "Where it happened" uses the bug form's options, logs
+    use `--since`, a closed-issue match is checked against the user's version, and the user approves the title and
+    text exactly as saved in the files `gh` posts, seeing them again after any change.
+- README Disclosure: `write_once` adds a ninth group of internal Hermes seams (the classic CLI's inline-diff path).
 
 ## 0.6.5 - 2026-10-14
 
