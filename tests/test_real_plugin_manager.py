@@ -1042,7 +1042,8 @@ def test_062_real_show_then_approve_changed_snapshot(real_submit_host):
     assert "Plan approved" in host.command("approve")
     current = plugin._load_state("sk:submit-session")
     assert current["approved_revision"] == 2
-    snapshot = path.parent / "approved" / "plan-rev2.md"
+    snapshot = path.parent / "approved" / f"plan-rev2-{current['submission']['digest'][:12]}.md"
+    assert current["approved_snapshot"] == str(snapshot)
     assert snapshot.read_text() == captured
     path.write_text("# Later unapproved change")
     notes = host.plugins.invoke_hook("pre_llm_call", session_id="submit-session")

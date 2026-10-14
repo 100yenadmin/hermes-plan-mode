@@ -967,22 +967,41 @@ class PlanModePlugin:
                 clarify = submission.get("clarify") or {}
                 self._open_asks.discard((clarify.get("nonce", ""), clarify.get("tool_call_id", "")))
 
+    @staticmethod
+    def _snapshot_name(stem: str, revision: int, digest: str, tag: str = "") -> str:
+        suffix = f"-rev{revision}-{digest[:12]}{tag}.md"
+        if len(suffix.encode("utf-8")) >= 255:
+            raise ValueError("the approved snapshot name is too long")
+        while stem and len((stem + suffix).encode("utf-8")) > 255:  # one path component on common filesystems
+            stem = stem[:-1]
+        return stem + suffix
+
     def _approve_submission(self, state: dict[str, Any], submission: dict, via: str | None = None, storage_key: str = "", review: dict | None = None) -> None:
         """The shared transition after a correlated human decision and digest check."""
         state.pop("approved_snapshot", None)  # set again below only for a reviewed replacement
         if review is not None:
             revision = int(state.get("revision") or 0) + 1
-            snapshot = Path(state["plans_dir"]) / "approved" / f"{Path(review['path']).stem}-rev{revision}.md"
-            if not _plans_dir_is_still_safe(state["plans_dir"]) or os.path.islink(snapshot.parent):
+            approved = Path(state["plans_dir"]) / "approved"
+            if not _plans_dir_is_still_safe(state["plans_dir"]) or os.path.islink(approved):
                 raise ValueError("the approved snapshot path is unsafe")
-            snapshot.parent.mkdir(exist_ok=True)
-            stream = snapshot.open("x", encoding="utf-8", newline="")  # exact captured text, no newline translation
-            try:
-                with stream:
-                    stream.write(review["text"])
-            except BaseException:
-                snapshot.unlink(missing_ok=True)  # a partial snapshot would block every retry of the exclusive open
-                raise
+            approved.mkdir(exist_ok=True)
+            for attempt in range(8):
+                # A taken name (another session, a reset) gets a random tag: an existing file is never reused or replaced.
+                tag = f"-{secrets.token_hex(3)}" if attempt else ""
+                snapshot = approved / self._snapshot_name(Path(review["path"]).stem, revision, review["digest"], tag)
+                try:
+                    stream = snapshot.open("x", encoding="utf-8", newline="")  # exact captured text, no newline translation
+                except FileExistsError:
+                    continue
+                try:
+                    with stream:
+                        stream.write(review["text"])
+                except BaseException:
+                    snapshot.unlink(missing_ok=True)  # only our own partial file; a retry then starts clean
+                    raise
+                break
+            else:
+                raise ValueError("no free approved snapshot name")
             submission.update(replaces_revision=review["revision"], revision=revision, path=review["path"],
                               digest=review["digest"], review_text=review["text"], snapshot_path=str(snapshot))
             state["revision"] = revision

@@ -49,18 +49,27 @@ hook, except writes to the plan file.
    all todos done, /planmode done or off ─► OFF
 ```
 
-A real run on the Hermes CLI (`/plan Add a power(a, b) function to calc.py with tests.`). These screenshots show the
-approval panel used by the classic profile:
+A real run on the Hermes CLI with the default lean profile (`/planmode on Add a subtract(a, b) function to calc.py
+with a test, and make divide raise ValueError on zero.`), after one clarifying question:
 
-![The CLI approval panel for plan rev 1, under the end of the plan the agent just showed](docs/media/cli-approval.png)
+![The approval card for plan rev 1 under the end of the plan: approve and auto-accept edits, approve and review each file edit, keep planning, or Other](docs/media/cli-card.png)
 
-After **Deny**, the agent asks what to change instead of giving up (excerpt):
+With **Approve, review each file edit**, each file write shows its path and a preview before it applies:
 
-![After a denial the agent asks what to change, with four suggested answers](docs/media/cli-deny-clarify.png)
+![A plan-mode edit review prompt for a patch to calc.py with Allow once, Allow for this session, Add to permanent allowlist and Deny](docs/media/cli-edit-review.png)
 
-After **Allow once** on rev 2, it implements in the same turn and keeps `todo_list` current (excerpt):
+The implementation then runs in the same turn (excerpt):
 
-![The approved plan runs with three todo items ticked off and a final summary](docs/media/cli-approve-implement.png)
+![The two approved patches applied and the final summary with both test commands passing](docs/media/cli-card-implement.png)
+
+To change the plan yourself, choose **Keep planning**, run `/planmode edit`, save your change, then `/planmode show`
+and `/planmode approve`. Approving a changed file before showing it is refused:
+
+![/planmode edit prints the plan path; approve before show is refused with a summary of the changed lines; show prints the full plan with the added section; approve then starts implementation](docs/media/cli-edit-approve.png)
+
+The classic profile (`plan_profile: classic`) approves through Hermes' own approval panel instead:
+
+![The classic CLI approval panel for plan rev 1, under the end of the plan the agent just showed](docs/media/cli-approval.png)
 
 ## What you see on each channel
 
@@ -139,7 +148,8 @@ host file in your editor and wait for the save. On Desktop, open the plan file f
 the markdown link in the agent's reply when it wrote the file itself, and use the preview's Edit and Save controls. Run `/planmode show [file]`, read the complete text, then
 `/planmode approve [file]`. A file changed since submission becomes the approved rev N+1; another save between show
 and approve requires showing it again. Implementation receives the captured text and a saved snapshot under
-`<plans_dir>/approved/`, so later edits to the working file do not gain approval.
+`<plans_dir>/approved/<stem>-rev<N>-<digest>.md` (a newly created file; a taken name gets a short random tag), so
+later edits to the working file do not gain approval.
 
 Files above 64 KiB do not arm approval. Chat platforms also do not arm edited-file approval because complete delivery
 is unverified: use **Keep planning**, **Other**, or `/planmode reject <feedback>` for the agent to submit a new revision.
@@ -620,15 +630,17 @@ Manual walkthrough in a disposable workspace (full surface-by-surface list in
 ## Disclosure
 
 Disclosure — plan-mode blocks mutating Hermes tools dispatched through `pre_tool_call` (not Codex app-server
-`exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan through Hermes' own
-approval prompt or `/planmode approve`. It reads eight groups of internal Hermes seams for session identity, workspace,
+`exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan: on its approval card
+(a `clarify` question only the plugin issues and checks), through Hermes' own approval prompt (classic profile and
+surfaces without a card), or with `/planmode approve`. It reads eight groups of internal Hermes seams for session identity, workspace,
 profile and `skills.inline_shell`, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
-files there, and keeps per-session state in plugin state. It adds a turn note while planning or executing, a
+files there, saves the approved text of an edited plan as a new file under `.hermes/plans/approved/`, and keeps
+per-session state in plugin state. It adds a turn note while planning or executing, a
 ≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. On TUI, Desktop and
 `hermes serve` sessions (lean profile, `plan_once`) it reads the agent's visible reply text while planning and saves
 the `<proposed_plan>` block from it as the plan file. When the user picks
-"Always" on a plan approval, Hermes core writes a `plugin_rule:plan-mode:…` entry to `command_allowlist` in
-`config.yaml`. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
+"Always" on a plan approval or a per-edit review, Hermes core writes a `plugin_rule:plan-mode:…` entry to
+`command_allowlist` in `config.yaml`; each key belongs to one plan revision, so the entry cannot approve another plan. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
 makes no network calls, launches no subprocesses and has no self-updater.
 
 <details>
