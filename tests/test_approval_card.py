@@ -135,6 +135,15 @@ def test_061_stale_card_answer_explains_refusal_in_same_turn(card):
                                         result=host_result(result)) is None
 
 
+def test_061_deleted_plan_card_answer_is_stale_in_same_turn(card):
+    plugin, path, result = card
+    path.unlink()
+    note = answer_card(plugin, result)
+    assert "plan file changed" in note and "approval did not apply" in note
+    assert state(plugin)["active"] and state(plugin)["submission"]["status"] == "stale"
+    assert "approved_path" not in state(plugin)
+
+
 @pytest.mark.parametrize("status", ["awaiting", "stale", "rejected"])
 def test_061_bare_approve_refuses_changed_submission(make_plugin, status):
     plugin = make_plugin("approval_card")

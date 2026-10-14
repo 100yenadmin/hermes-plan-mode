@@ -2069,7 +2069,11 @@ class PlanModePlugin:
                                 or not clarify.get("activation_id")
                                 or state.get("activation_id") != clarify["activation_id"]):
                             return
-                        if plan_digest(submission["path"])[0] != submission["digest"]:
+                        try:
+                            digest = plan_digest(submission["path"])[0]
+                        except (OSError, ValueError):
+                            digest = None  # a deleted or unreadable plan is stale, not silently left awaiting
+                        if digest != submission["digest"]:
                             submission["status"] = "stale"
                             state["pending_note"] = self._stale_note(submission["revision"])
                             if card:
