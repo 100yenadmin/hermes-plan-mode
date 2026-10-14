@@ -246,7 +246,7 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     def display(target, header=False):
         shown, inside = str(target), True
         try:
-            if cwd is not None and shown:
+            if cwd is not None and shown and not shown.startswith("~"):
                 # Resolve the parent directories, so a symlinked directory cannot hide an outside target, but keep
                 # the entry itself: a delete or move acts on a symlink, while a content write goes through it.
                 # Relative targets resolve from the session cwd, as the file tools do.
@@ -262,6 +262,8 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
                 inside = not Path(shown).is_absolute() or Path(shown).is_relative_to(Path(cwd))
             except (ValueError, TypeError):
                 inside = False
+        if cwd is not None and shown.startswith("~"):
+            inside = False  # the host expands "~" to a profile home that can lie anywhere: shown as given, counted
         if header and not inside:
             outside.append(shown)
         return " ".join(shown.split())

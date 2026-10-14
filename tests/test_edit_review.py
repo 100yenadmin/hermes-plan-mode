@@ -550,3 +550,14 @@ def test_long_names_cannot_hide_destructive_counts(reviewed, session_env, tmp_pa
     patch = f"*** Begin Patch\n{adds}\n*** Delete File: ../victim.py\n*** Move File: s.py -> t.py\n*** End Patch"
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
     assert len(text) <= limit and "1 delete, 1 move, 1 path outside the working directory)" in text
+
+
+@pytest.mark.parametrize("platform,limit", [("cli", 1000), ("telegram", 250)])
+def test_home_relative_target_counts_as_outside(reviewed, session_env, tmp_path, platform, limit):
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    deletes = "\n".join(f"*** Delete File: d{n}_" + "x" * 120 + ".py" for n in range(9))
+    patch = f"*** Begin Patch\n{deletes}\n*** Delete File: ~/victim.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert len(text) <= limit and "(+0/−0 lines, 10 deletes, 1 path outside the working directory)" in text
