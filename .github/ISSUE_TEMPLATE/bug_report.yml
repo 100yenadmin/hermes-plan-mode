@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. From the next release, your Hermes agent can draft it for you: ask it to "report a problem with Plan Mode".
+        Thanks for the report. Your Hermes agent can draft it for you: ask it to "report a problem with Plan Mode".
         **Security problems** (approval bypass, unapproved plans, plan writes outside the plans directory, or anything that exposes a secret) go to a [private advisory](https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new), not here.
         **Problems in Hermes itself** belong in [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent/issues).
   - type: textarea

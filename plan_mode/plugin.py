@@ -59,6 +59,9 @@ READ_ONLY_TOOLS = frozenset(
 )
 PLAN_WRITERS = frozenset({"write_file", "patch"})
 PLAN_MODE_TOOL = "plan_mode"
+REPORT_SKILL = "plan-mode-report-problem"
+REPORT_SKILL_DESCRIPTION = "Plan Mode: report a bug or problem"
+REPORT_SKILL_PATH = Path(__file__).resolve().parent.parent / "skills" / REPORT_SKILL / "SKILL.md"
 _TOOL_DESCRIPTION = (
     "Enter plan mode with action='on'. When the plan file is written and shown to the user, "
     "call action='submit' ALONE (not batched with other tool calls) to ask for approval. "
@@ -588,6 +591,14 @@ class PlanModePlugin:
                 register_section("plan-mode.hint", hint, position="after_memory", max_chars=200)
         except Exception:
             pass  # A cosmetic discovery hint must not prevent enforcement registration.
+        try:
+            # Hermes reads no frontmatter for plugin skills, so the name and description are passed here as well.
+            register_skill = getattr(self.ctx, "register_skill", None)
+            if callable(register_skill):
+                register_skill(REPORT_SKILL, REPORT_SKILL_PATH, description=REPORT_SKILL_DESCRIPTION,
+                               frontmatter={"name": REPORT_SKILL, "description": REPORT_SKILL_DESCRIPTION})
+        except Exception:
+            pass  # The report-a-problem skill is optional; it must not prevent enforcement registration.
 
     def _load_state(self, key: str) -> dict[str, Any]:
         return self._load_storage_state(_state_storage_key(key))
