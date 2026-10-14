@@ -232,6 +232,9 @@ def approval_text(text, path, revision, platform, summary="") -> str:
     return result[:max(0, limit - len(suffix))] + suffix[:limit]
 
 
+_PATCH_OPERATION = re.compile(r"\*\*\*\s*(Update|Add|Delete|Move)\s+File:")  # the host V4A parser's markers
+
+
 def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), session_key="", cwd=None) -> str:
     """Bounded file-edit preview; targets are extracted by the planning writer parser."""
     def relative(path):
@@ -241,10 +244,11 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     for target in targets:
         shown = str(target)
         try:
-            if cwd is not None and Path(target).is_absolute():
+            if cwd is not None:
                 # Resolve the parent directories, so a symlinked directory cannot hide an outside target, but keep
                 # the entry itself: a delete or move acts on a symlink, while a content write goes through it.
-                given = Path(target)
+                # Relative targets resolve from the session cwd, as the file tools do.
+                given = Path(target) if Path(target).is_absolute() else Path(cwd) / target
                 entry = (Path(os.path.realpath(given.parent)) / given.name if given.name not in ("", ".", "..")
                          else Path(os.path.realpath(given)))
                 shown = relative(entry)
@@ -256,19 +260,29 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     paths = " ".join(", ".join(display_paths).split()) or "(unknown path)"
     if tool_name == "write_file":
         lines = ["+" + line for line in str(args.get("content") or "").splitlines()]
+        added, removed = len(lines), 0
     elif str(args.get("mode") or "replace").strip().lower() == "patch":
-        lines = []
+        operations, files, changes = [], [], []
         for line in str(args.get("patch") or "").splitlines():
-            operation = line.lstrip("*").lstrip() if line.startswith("***") else ""
-            if operation.startswith(("Delete File:", "Move File:")):
-                lines.append(operation)  # deletes and moves carry no +/- lines but must stay visible
+            match = _PATCH_OPERATION.match(line)
+            if match and match[1] in ("Delete", "Move"):
+                # Deletes and moves carry no +/- lines, so they come first and cannot be cut by the line limit.
+                operations.append(f"{match[1]} File: {line[match.end():].strip()}")
+            elif match:
+                files.append(f"{match[1]} File: {line[match.end():].strip()}")
+                changes.append(files[-1])
             elif line.startswith(("+", "-")):
-                lines.append(line)
+                changes.append(line)
+        if len(files) < 2:  # a file name repeats the header unless the patch spans several files
+            changes = [line for line in changes if line not in files]
+        lines = operations + changes
+        added = sum(line.startswith("+") for line in changes)
+        removed = sum(line.startswith("-") for line in changes)
     else:
-        lines = (["-" + line for line in str(args.get("old_string") or "").splitlines()]
-                 + ["+" + line for line in str(args.get("new_string") or "").splitlines()])
-    added = sum(line.startswith("+") for line in lines)
-    removed = sum(line.startswith("-") for line in lines)
+        old = ["-" + line for line in str(args.get("old_string") or "").splitlines()]
+        new = ["+" + line for line in str(args.get("new_string") or "").splitlines()]
+        lines = old[:max(4, 8 - len(new))] + new  # a long removal still leaves room for the replacement
+        added, removed = len(new), len(old)
     # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
     counts = (f"{added} line{'' if added == 1 else 's'}" if tool_name == "write_file"
               else f"+{added}/−{removed} lines")

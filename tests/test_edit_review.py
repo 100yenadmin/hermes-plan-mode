@@ -28,7 +28,7 @@ EDITS = [
     (*EDITS[0], ["+first", "+second"], "(2 lines)"),
     ("patch", {"path": "parser.py", "old_string": "before\nold", "new_string": "after\nnew"},
      ["-before", "-old", "+after", "+new"], "(+2/−2 lines)"),
-    (*EDITS[2], ["-before", "+after", "+new"], "(+2/−1 lines)"),
+    (*EDITS[2], ["Update File: parser.py", "-before", "+after", "Add File: helper.py", "+new"], "(+2/−1 lines)"),
 ])
 def test_changed_line_preview(reviewed, session_env, platform, ui, tool, args, lines, count):
     plugin, _ = reviewed
@@ -456,3 +456,38 @@ def test_symlink_entry_shows_the_link_and_its_target(reviewed, session_env, tmp_
         args["path"] = path
     text = plugin.pre_tool_call(tool, args)["message"]
     assert f"{tool} alias.py → {(outside / 'victim.py').resolve()} (" in text
+
+
+def test_mixed_patch_shows_a_late_delete_first(reviewed, session_env):
+    plugin, _ = reviewed
+    body = "\n".join(f"+line {i}" for i in range(9))
+    patch = f"*** Begin Patch\n*** Update File: a.py\n{body}\n***Delete  File: old.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "(+9/−0 lines) — Delete File: old.py ⏎ +line 0" in text
+
+
+def test_multi_file_patch_keeps_file_boundaries(reviewed, session_env):
+    plugin, _ = reviewed
+    patch = "*** Begin Patch\n*** Update File: a.py\n-x\n+y\n*** Add File: b.py\n+z\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith("(+2/−1 lines) — Update File: a.py ⏎ -x ⏎ +y ⏎ Add File: b.py ⏎ +z")
+    single = plugin.pre_tool_call("patch", {"mode": "patch", "patch": "*** Update File: a.py\n-x\n+y"})["message"]
+    assert single.endswith("(+1/−1 lines) — -x ⏎ +y")
+
+
+def test_long_removal_leaves_room_for_the_replacement(reviewed, session_env):
+    plugin, _ = reviewed
+    old = "\n".join(f"old {i}" for i in range(10))
+    text = plugin.pre_tool_call("patch", {"path": "a.py", "old_string": old, "new_string": "new 1\nnew 2"})["message"]
+    assert "(+2/−10 lines)" in text and text.endswith("-old 5 ⏎ +new 1 ⏎ +new 2") and "-old 6" not in text
+
+
+def test_relative_target_through_a_symlink_shows_the_outside_path(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    cwd, outside = tmp_path / "workspace", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    (cwd / "link").symlink_to(outside)
+    session_env["TERMINAL_CWD"] = str(cwd)
+    text = plugin.pre_tool_call("write_file", {"path": "link/x.py", "content": "a"})["message"]
+    assert f"write_file {(outside / 'x.py').resolve()} (1 line)" in text
