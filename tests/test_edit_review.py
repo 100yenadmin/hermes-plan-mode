@@ -597,3 +597,11 @@ def test_a_long_removed_line_leaves_room_for_the_replacement(reviewed, session_e
     plugin, _ = reviewed
     text = plugin.pre_tool_call("patch", {"path": "a.py", "old_string": "o" * 2000, "new_string": "new"})["message"]
     assert len(text) <= 1000 and text.endswith("… ⏎ +new")
+
+
+def test_a_long_move_keeps_its_destination(reviewed, session_env):
+    plugin, _ = reviewed
+    source = "s" * 200 + ".py"
+    patch = f"*** Begin Patch\n*** Move File: {source} -> dest.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith(f"Move File: {source} -> dest.py")

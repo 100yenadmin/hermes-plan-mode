@@ -342,9 +342,9 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
         sample = (old[:max(4, 8 - len(new))] + new)[:8]  # a long removal still leaves room for the replacement
         added, removed = len(new), len(old)
     hidden = len(body) - len(sample)
-    width = max(40, limit // 6)  # one long line must not crowd out the rest of the preview
-    lines = [line if len(line) <= width else line[:width - 1] + "…"
-             for line in (_LINE_BREAKS.sub(" ", line) for line in operations + sample)]
+    width = max(40, limit // 6)  # one long content line must not crowd out the rest of the preview
+    lines = [_LINE_BREAKS.sub(" ", line) for line in operations] + [  # operations stay whole: a move keeps its destination
+        line if len(line) <= width else line[:width - 1] + "…" for line in (_LINE_BREAKS.sub(" ", x) for x in sample)]
     if hidden:
         lines.append(f"… {hidden} more line{'' if hidden == 1 else 's'}")
     # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
