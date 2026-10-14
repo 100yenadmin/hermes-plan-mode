@@ -95,6 +95,8 @@ _AGENT_NOTE_BRIDGE = (
 )
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
+_SESSION_INDEX_KEY = "session-index"
+_SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
                      "user_asked_process")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
@@ -629,9 +631,52 @@ class PlanModePlugin:
         values = current + [storage_key] if executing else [item for item in current if item != storage_key]
         self.ctx.state.set(_EXECUTING_INDEX_KEY, values[-256:])
 
+    def _session_storage_keys(self) -> list[str]:
+        value = self.ctx.state.get(_SESSION_INDEX_KEY, [])
+        if not isinstance(value, list):
+            return []
+        return [item for item in value[-256:] if isinstance(item, str) and item.startswith("session:")]
+
+    def _mark_session(self, storage_key: str, present: bool) -> None:
+        if not storage_key.startswith("session:"):
+            return
+        current = self._session_storage_keys()
+        if (current[-1:] == [storage_key]) if present else (storage_key not in current):
+            return  # already the most recent entry (or already absent): no write
+        values = [item for item in current if item != storage_key]
+        if present:
+            values.append(storage_key)
+        self.ctx.state.set(_SESSION_INDEX_KEY, values[-256:])
+
+    def _backfill_session_index(self) -> None:
+        """Index states that recorded a session id before 0.6.8 kept the session index (once per profile)."""
+        if self.ctx.state.get(_SESSION_BACKFILL_KEY):
+            return
+        path = getattr(self.ctx.state, "path", None)
+        found: list[str] = []
+        if path is not None:
+            try:
+                with open(path, encoding="utf-8-sig") as handle:
+                    data = json.load(handle)
+            except FileNotFoundError:
+                data = {}
+            except (OSError, ValueError):
+                return  # unreadable now: leave the marker unset and try again at the next reset
+            if isinstance(data, dict):
+                found = [key for key, value in data.items()
+                         if isinstance(key, str) and key.startswith("session:")
+                         and isinstance(value, dict) and value.get("session_id_hash")]
+        current = self._session_storage_keys()
+        if found:
+            # Older states go first, so entries indexed since the upgrade stay the most recent.
+            values = [key for key in found if key not in current] + current
+            self.ctx.state.set(_SESSION_INDEX_KEY, values[-256:])
+        self.ctx.state.set(_SESSION_BACKFILL_KEY, True)
+
     def _clear_storage_key(self, storage_key: str) -> None:
         self.ctx.state.set(storage_key, {})
         self._mark_executing(storage_key, False)
+        self._mark_session(storage_key, False)
         self._set_active_storage_keys(
             [item for item in self._active_storage_keys() if item != storage_key]
         )
@@ -802,6 +847,8 @@ class PlanModePlugin:
         if digest and state.get("session_id_hash") != digest:
             state["session_id_hash"] = digest
             self._save_state(key, state)
+        if digest:
+            self._mark_session(_state_storage_key(key), True)
 
     def _claim_state_for_current_process(
         self, key: str, state: dict[str, Any]
@@ -2482,10 +2529,11 @@ class PlanModePlugin:
                         self._clear_execution(state)
                     else:
                         parts.append(executing_pointer(state, commits=self._allow_commits(), levers=self._note_levers()))
+                    assert state_key is not None
                     digest = self._session_id_hash(kwargs.get("session_id"))
                     if digest:
                         state["session_id_hash"] = digest  # lets an unbound gateway reset find this state
-                    assert state_key is not None
+                        self._mark_session(_state_storage_key(state_key), True)
                     self._save_state(state_key, state)
                     self._sync_execution_family(_state_storage_key(state_key), state)
                 review = state.get("edit_review")
@@ -2603,7 +2651,10 @@ class PlanModePlugin:
             # ContextVar scope. Match the hashed old session id when possible;
             # never guess from active-session count because another session's
             # reset must not disable this one.
-            active_storage = list(dict.fromkeys(self._active_storage_keys() + self._executing_storage_keys()))
+            self._backfill_session_index()
+            active_storage = list(dict.fromkeys(
+                self._active_storage_keys() + self._executing_storage_keys() + self._session_storage_keys()
+            ))
             old_digest = self._session_id_hash(
                 kwargs.get("old_session_id")
             )

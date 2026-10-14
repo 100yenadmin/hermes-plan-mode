@@ -98,9 +98,10 @@ surfaces without a card.
   before the approval prompt by default. On those, and everywhere without a budget, the approval text carries the
   full plan, capped at about 3500 chars (about 1000 on WhatsApp Cloud) with a pointer to the file.
 - `/planmode show` prints one complete plan up to 64 KiB; larger files show a prefix and do not arm edited-plan approval.
-- **Exercised vs supported.** We have run plan mode end to end on the CLI, TUI, Desktop, `hermes serve` and Telegram
-  (approved by text; the buttons were not clicked). The other platforms in the table are supported through Hermes'
-  own approval and question UIs, but we have not exercised them.
+- **Exercised vs supported.** We have run plan mode end to end on the CLI, TUI, Desktop, `hermes serve` and Telegram.
+  On Telegram the approval card's buttons were clicked (0.6.7, two runs): Hermes shows each option's text in the
+  message and the buttons as `1`, `2`, `3` and `✏️ Other`. The other platforms in the table are supported through
+  Hermes' own approval and question UIs, but we have not exercised them.
 
 ## Install
 
