@@ -237,14 +237,12 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     display_paths = []
     for target in targets:
         shown = str(target)
-        if cwd is not None and Path(target).is_absolute():
-            try:
+        try:
+            if cwd is not None and Path(target).is_absolute():
                 real = Path(os.path.realpath(target))  # a symlink inside the cwd must not hide an outside target
-                shown = str(real.relative_to(Path(cwd)))
-            except ValueError:
-                shown = str(real)  # outside the session cwd: the resolved absolute path
-            except OSError:
-                pass
+                shown = str(real.relative_to(Path(cwd))) if real.is_relative_to(Path(cwd)) else str(real)
+        except (OSError, ValueError, TypeError):
+            pass  # an unresolvable path is shown as given
         display_paths.append(shown)
     paths = " ".join(", ".join(display_paths).split()) or "(unknown path)"
     if tool_name == "write_file":

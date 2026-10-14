@@ -424,3 +424,15 @@ def test_symlink_inside_cwd_shows_the_real_outside_path(reviewed, session_env, t
     session_env["TERMINAL_CWD"] = str(cwd)
     text = plugin.pre_tool_call("write_file", {"path": str(cwd / "link" / "x.py"), "content": "a"})["message"]
     assert f"write_file {(outside / 'x.py').resolve()} (1 line)" in text
+
+
+def test_unresolvable_target_still_prompts(reviewed, session_env, monkeypatch):
+    plugin, _ = reviewed
+    real = pm.os.path.realpath
+    def bad(path, *args, **kwargs):
+        if str(path) == "/abs/x.py":
+            raise ValueError("embedded null byte")
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(pm.os.path, "realpath", bad)
+    directive = plugin.pre_tool_call("write_file", {"path": "/abs/x.py", "content": "a"})
+    assert directive["action"] == "approve" and "write_file /abs/x.py (1 line)" in directive["message"]
