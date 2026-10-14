@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Extract every V4A patch target in linear time while preserving conservative checks for malformed and multiline headers.
+
 - Extend opt-in `approval_card` with per-plan review of each `write_file` / `patch` edit, including file-tool calls inside `execute_code`.
 
 - Add opt-in `approval_card`: exact plan approval choices, revision diffs, cancellation handling and full plan display up to 64 KB.
