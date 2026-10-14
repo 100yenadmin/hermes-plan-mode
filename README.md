@@ -649,13 +649,14 @@ Manual walkthrough in a disposable workspace (full surface-by-surface list in
 Disclosure — plan-mode blocks mutating Hermes tools dispatched through `pre_tool_call` (not Codex app-server
 `exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan: on its approval card
 (a `clarify` question only the plugin issues and checks), through Hermes' own approval prompt (classic profile and
-surfaces without a card), or with `/planmode approve`. It reads eight groups of internal Hermes seams for session identity, workspace,
-profile and `skills.inline_shell`, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
+surfaces without a card), or with `/planmode approve`. It reads nine groups of internal Hermes seams for session identity, workspace,
+profile, `skills.inline_shell` and the classic CLI's inline diff, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
 files there, saves the approved text of an edited plan as a new file under `.hermes/plans/approved/`, and keeps
 per-session state in plugin state. It adds a turn note while planning or executing, a
 ≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. When a turn ends while a submitted plan still awaits approval and no approval card was answered, it adds one line to that reply on any surface, whatever its length, saying how to approve (unless `footer` is off). On TUI, Desktop and
 `hermes serve` sessions (lean profile, `plan_once`) it reads the agent's visible reply text while planning and saves
-the `<proposed_plan>` block from it as the plan file. When the user picks
+the `<proposed_plan>` block from it as the plan file. On the interactive classic CLI (lean profile, `write_once`) it
+checks that Hermes printed a newly written plan file in full and then tells the agent not to retype it. When the user picks
 "Always" on a plan approval or a per-edit review, Hermes core writes a `plugin_rule:plan-mode:…` entry to
 `command_allowlist` in `config.yaml`; each key belongs to one plan revision, so the entry cannot approve another plan. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
 includes a report-a-problem skill: the agent drafts a bug report and files it to this repository with `gh` only after
@@ -685,6 +686,11 @@ Each is reached through a lazy, guarded import or a guarded attribute read.
    `agent.history_commentary`, `agent.agent_runtime_helpers.strip_think_blocks` and
    `agent.message_sanitization.coalesce_tool_call_id` to take only the visible reply text. Any of them missing or
    failing → the agent writes the plan file as without `plan_once`.
+9. `write_once` only: `ctx._manager._cli_ref` (the seam `ctx.dispatch_tool` uses) and its `_single_query_mode`; the
+   CLI agent's `tool_start_callback` and `tool_complete_callback`, which must be the CLI's own `_on_tool_start` and
+   `_on_tool_complete` (Hermes sets them only while `display.inline_diffs` is on); `TERMINAL_ENV`, which must be
+   local; and `agent.display._MAX_INLINE_DIFF_LINES`. Any of them missing or different → the agent shows the plan as
+   without `write_once`.
 
 Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `post_api_request`,
 `transform_llm_output`, `transform_tool_result`, `pre_approval_request`, `post_approval_response`,
