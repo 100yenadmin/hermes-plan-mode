@@ -1,17 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 - 2026-10-14
 
-- Show bounded changed-line edit previews with session-relative paths, one-line classic CLI prompts, and a separator after approval-card change summaries.
+- **Approval card (`approval_card`).** Now part of the default lean profile, after PROOF-060 (README).
+  - After the complete plan, one card asks: "Approve, auto-accept edits", "Approve, review each file edit" (when Hermes approvals are on), or "Keep planning". Other sends feedback, which starts a revision.
+  - A revision shows what changed since the last one ("Changed since rev 1: +6/−5 lines in Summary, …"). `/planmode show` prints the plan, up to 64 KB.
+  - Cancelling the card (Ctrl+C on the CLI, Skip on Desktop) leaves the plan unapproved. Typed `/planmode approve` still works and auto-accepts edits.
+- **Review each file edit.** Each `write_file` / `patch` call, including file-tool calls inside `execute_code`, gets an approval prompt. The prompt shows:
+  - cwd-relative paths and whole-edit counts;
+  - delete and move counts, with the operations listed first up to the prompt's length limit (1000 chars; 250 on
+    Telegram, Slack and Discord);
+  - a count of paths outside the working directory;
+  - up to eight changed lines.
 
-- Fix `/planmode on <task>`: the task now reaches the model on the next turn. Before, only the user saw it (#40).
-  A note queued by a slash command is delivered once and no longer replays after a TUI/Desktop cold resume.
+  On the classic CLI the prompt is one line, so the approval box stays intact. Once approves one edit; session / always auto-accept the rest of this plan. Shell commands, subagents and MCP tools are not covered.
+- Fix `/planmode on <task>`: the task now reaches the model on the next turn, and is delivered once (#40).
+- V4A patch targets are extracted in linear time (#39).
+- Large patches render their edit prompt quickly, and displayed paths keep their whitespace (#44).
 
-- Extract every V4A patch target in linear time while preserving conservative checks for malformed and multiline headers.
-
-- Extend opt-in `approval_card` with per-plan review of each `write_file` / `patch` edit, including file-tool calls inside `execute_code`.
-
-- Add opt-in `approval_card`: exact plan approval choices, revision diffs, cancellation handling and full plan display up to 64 KB.
+PROOF-060 (Hermes v0.21.6, gpt-6.1-sol medium, two small tasks, 4 runs per task per arm): approval correctness held
+with the card and with the approval directive; 8 of 8 verified in both; the approved revision addressed the feedback
+4/4 with the card vs 3/4 without; median wall time +9%. Not shown: other models, larger tasks, the TUI, chat-surface
+buttons and "review each file edit". To keep the old prompt, set `plan_profile: classic` or a `levers` list without
+`approval_card`.
 
 ## 0.4.7 - 2026-10-13
 

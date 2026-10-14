@@ -37,13 +37,13 @@ def test_profile_constants_and_selection(make_plugin):
                                        "reentry", "approved_text", "light_notes", "question_shape",
                                        "bridge_calls", "blocked_tools", "skill_policy",
                                        "test_commands", "choice_fidelity", "todo_inline",
-                                       "rename_scope", "test_plan_only"})
+                                       "rename_scope", "test_plan_only", "approval_card"})
     lean = make_plugin()
     lean.ctx.settings.clear()  # genuinely untouched config, including the override key
     assert lean._plan_profile() == "lean" and lean._plan_style() == "compact"
     assert lean._plan_skill() == "" and lean._levers() == pm.LEAN_LEVERS
     lean._levers().clear()  # the selector returns a mutable copy, never the shared profile
-    assert len(pm.LEAN_LEVERS) == 16
+    assert len(pm.LEAN_LEVERS) == 17
     assert {"rename_scope", "test_plan_only"} <= pm.LEAN_LEVERS  # S45: joined lean in 0.4.5
     assert not {"choice_record", "edit_batch", "brief_final"} & pm.LEAN_LEVERS  # opt-in
     assert "refactor_scope" in pm._LEVERS and "refactor_scope" not in pm.LEAN_LEVERS  # S43: opt-in only
@@ -78,6 +78,7 @@ def test_profile_override_precedence(make_plugin, monkeypatch, profile, style, s
     assert plugin._levers() == {"sticky"}
 
 
+@pytest.mark.usefixtures("directive_lean")
 @pytest.mark.parametrize("style", ["core", "compact"])
 @pytest.mark.parametrize("commits", [False, True])
 @pytest.mark.parametrize("skill", ["", "project-plan"])

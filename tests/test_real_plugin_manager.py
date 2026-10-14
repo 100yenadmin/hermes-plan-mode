@@ -16,7 +16,18 @@ import pytest
 from test_plan_mode import plan_profile
 
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _directive_lean_loaded(monkeypatch, home: Path) -> None:
+    """conftest.directive_lean for the plugin copy the real manager loaded (its own module, not plan_mode.plugin)."""
+    target = (home / "plugins" / "plan-mode" / "plan_mode" / "plugin.py").resolve()
+    loaded = [m for m in list(sys.modules.values())
+              if getattr(m, "__file__", None) and Path(m.__file__).resolve() == target]
+    assert loaded, "the real manager did not load the plugin copy"
+    for module in loaded:
+        monkeypatch.setattr(module, "LEAN_LEVERS", module.LEAN_LEVERS - {"approval_card"})
 
 
 def _copy_plugin(destination: Path) -> None:
@@ -902,7 +913,7 @@ def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatc
 
 
 @pytest.fixture
-def real_submit_host(tmp_path, monkeypatch, plan_profile):
+def real_submit_host(tmp_path, monkeypatch, plan_profile, request):
     pytest.importorskip("hermes_cli.plugins")
     approval = pytest.importorskip("tools.approval")
     if not callable(getattr(approval, "request_tool_approval", None)):
@@ -939,6 +950,8 @@ def real_submit_host(tmp_path, monkeypatch, plan_profile):
     try:
         plugins._reset_plugin_managers_for_tests()
         plugins.get_plugin_manager().discover_and_load()
+        if not request.node.get_closest_marker("default_card"):
+            _directive_lean_loaded(monkeypatch, home)  # these tests cover the directive path
         command = plugins.get_plugin_command_handler("planmode")
         assert command is not None
         assert "Plan mode is on" in command("on submit proof")
@@ -1271,3 +1284,14 @@ def test_real_plugin_manager_plan_profile(tmp_path, monkeypatch, settings, expec
         clear_session_vars(tokens)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)
+
+
+@pytest.mark.default_card
+@pytest.mark.parametrize("plan_profile", ["lean"])
+def test_real_default_lean_submit_asks_the_card(real_submit_host):
+    """0.6.0: approval_card is in the lean defaults, so a real-host submit asks the card, not the approval prompt."""
+    host = real_submit_host
+    host.callback(lambda *a, **kw: pytest.fail("the default lean submit must not use the approval prompt"))
+    result = json.loads(host.submit())
+    assert not result.get("approved") and "Approve, auto-accept edits" in json.dumps(result)
+    assert "awaiting" in host.command("status")

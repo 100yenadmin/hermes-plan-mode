@@ -140,9 +140,11 @@ _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the us
 # Lean applies only with compact style and no plan skill; classic, core and plan_skill keep 0.3.5 behaviour.
 # 0.4.5: rename_scope and test_plan_only joined lean after S45 (each met its bar; the T8 test guard held).
 # choice_record, edit_batch and brief_final stay opt-in (README, Experimental levers).
+# 0.6.0: approval_card joined lean after PROOF-060 (approval correctness, results and revision uptake held).
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
                          "light_notes", "question_shape", "bridge_calls", "blocked_tools", "skill_policy",
-                         "test_commands", "choice_fidelity", "todo_inline", "rename_scope", "test_plan_only"})
+                         "test_commands", "choice_fidelity", "todo_inline", "rename_scope", "test_plan_only",
+                         "approval_card"})
 PROFILE_DEFAULT = "lean"
 
 _PLAN_STYLES = frozenset({"compact", "core"})

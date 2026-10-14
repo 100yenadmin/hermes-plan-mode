@@ -4,8 +4,9 @@
 
 Claude Code / Codex-style plan mode for Hermes, on every interactive Hermes surface (CLI, TUI, Desktop and the
 messaging platforms), with no core changes. The agent explores with
-read-only tools, asks clarifying questions, writes a plan file and shows it to you. You approve it with Hermes' own
-approval prompt: buttons, a card, the CLI panel or `/approve`. Then the agent implements it in the same turn and
+read-only tools, asks clarifying questions, writes a plan file and shows it to you. You approve it on one card:
+approve and auto-accept edits, approve and review each file edit, or keep planning (Other sends feedback). The classic
+profile and surfaces without a card use Hermes' own approval prompt. Then the agent implements it in the same turn and
 tracks progress. Until you approve, the plugin blocks mutating tools dispatched through Hermes' `pre_tool_call`
 hook, except writes to the plan file.
 
@@ -20,11 +21,17 @@ hook, except writes to the plan file.
    recommended first.
 3. It writes the plan as Markdown under `<cwd>/.hermes/plans`.
 4. It shows the complete plan in its reply, then calls `plan_mode(action="submit")`.
-5. Hermes shows its normal approval prompt for plan revision N: buttons, a card, the CLI panel, or `/approve` text.
+5. With the default `lean` profile, plan mode asks one `clarify` card for plan revision N: "Approve, auto-accept
+   edits" (recommended), "Approve, review each file edit" (only when Hermes approvals are on) or "Keep planning".
+   `/planmode show` prints the plan (up to 64 KB, then a truncation notice). The classic profile, a custom `levers` list without `approval_card`, and
+   ACP, API server, cron and webhooks keep Hermes' own approval prompt: buttons, a card, the CLI panel or `/approve`.
 6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
-   `todo_list` (with the default `lean` profile, for plans of 4 or more steps).
-7. Deny: plan mode stays on. The plugin tells the agent that a denial is review feedback, so it asks what to change
-   (when no reason came with the denial), revises the plan and submits a complete new revision.
+   `todo_list` (with the default `lean` profile, for plans of 4 or more steps). With "review each file edit", every
+   `write_file` / `patch` gets Hermes' approval prompt first. Typed `/planmode approve` also works while the card is
+   open and selects auto-accept edits.
+7. Keep planning, or Other with feedback: plan mode stays on. The agent asks what to change (when no feedback came
+   with it), revises the plan and submits a complete new revision. Its card says what changed since the last one
+   ("Changed since rev 1: +6/−5 lines in Summary, Key changes, Test plan").
 
 ```text
   /plan <task>  ─┐
@@ -32,9 +39,9 @@ hook, except writes to the plan file.
   agent: on     ─┘        │
                           │  agent shows the plan, calls plan_mode(submit)
                           ▼
-                 Hermes approval prompt (rev N)
+   approval card (rev N): approve / review each edit / keep planning
                    │                       │
-           approve │                       │ deny ─► revise ─► submit rev N+1
+           approve │                       │ keep planning, Other ─► revise ─► submit rev N+1
                    ▼                       │ timeout ─► /planmode approve (typed)
         EXECUTING in the same turn         ▼
         todo_list progress            still PLANNING
@@ -42,7 +49,8 @@ hook, except writes to the plan file.
    all todos done, /planmode done or off ─► OFF
 ```
 
-A real run on the Hermes CLI (`/plan Add a power(a, b) function to calc.py with tests.`):
+A real run on the Hermes CLI (`/plan Add a power(a, b) function to calc.py with tests.`). These screenshots show the
+approval panel used by the classic profile:
 
 ![The CLI approval panel for plan rev 1, under the end of the plan the agent just showed](docs/media/cli-approval.png)
 
@@ -58,6 +66,10 @@ After **Allow once** on rev 2, it implements in the same turn and keeps `todo_li
 
 The plugin uses the approval and `clarify` UIs each Hermes surface already has; it only sizes the approval text per
 platform.
+
+Since 0.6.0 the lean default asks for plan approval with a `clarify` card, so the "Clarifying questions" column shows
+how it renders. The "Approval prompt" column applies to the per-edit review prompts, the classic profile, and
+surfaces without a card.
 
 | Surface | Approval prompt | Clarifying questions | Mode footer |
 |---|---|---|---|
@@ -140,7 +152,8 @@ does not, which happens when a tool selection was saved there without it. Add `p
 - `status`: the same text as `/planmode status`.
 - `off`: ends plan mode only when the agent entered it itself and has not submitted a plan yet. Once a plan is
   submitted, or when you entered plan mode, only `/planmode approve`, `reject` or `off` ends it.
-- `submit` (optional `path`, `summary`): asks you to approve the plan through Hermes' approval prompt. The agent
+- `submit` (optional `path`, `summary`): asks you to approve the plan, on the approval card or through Hermes'
+  approval prompt (see How it works). The agent
   should call it on its own, not batched with other tool calls.
 
 The tool cannot approve or reject a plan. Approval is your act, recorded by Hermes' approval hooks or the
@@ -202,6 +215,33 @@ the rest.
   Hermes 0.21.5 (v2026.9.24) or later with interim messages shown (and, for Codex models, commentary shown); otherwise,
   and on the CLI and chat platforms, the agent writes the plan file as before. In round 8 (2026-10-11, plugin 0.4.1)
   it was 22% faster (wall time 0.78×, 95% CI 0.73–0.85) with the same test results and judge scores.
+- **Approval card (since 0.6.0).** After showing the complete plan, the agent submits and plan mode asks one
+  `clarify` card: "Approve, auto-accept edits", "Approve, review each file edit" (when Hermes approvals are on) or
+  "Keep planning"; Other sends feedback and starts a revision. Review covers `write_file` and `patch`, including
+  file-tool calls inside `execute_code`, but not shell commands, subagents or MCP writers: once approves that edit,
+  session / always the rest of this plan. Each approval gets a fresh key, so always leaves one inert config entry that
+  cannot approve another plan. If approvals turn off, review pauses and edits apply without a prompt. WhatsApp Cloud
+  has no Other with 3 choices. To opt out, set `plan_profile: classic`, or a `levers` list without `approval_card` (it replaces the whole
+  set, so list the other lean levers you want; see Experimental levers).
+  - **PROOF-060** (2026-10-14, Hermes v0.21.6, gpt-6.1-sol medium; card vs the approval directive on two small tasks,
+    4 runs each per arm):
+    - Approval correctness held in both arms: one approval per scripted approve, never before it, and no writes
+      outside the plans directory before approval.
+    - 8 of 8 verified in both arms. The approved revision addressed the feedback 4/4 with the card vs 3/4 without.
+    - Reported, not gated (medians): wall time 122 s vs 112 s (+9%), planning 89.7 s vs 82.7 s, request to approval
+      25.0 s vs 22.4 s.
+    - Not shown: other models, larger tasks, the TUI, chat-surface buttons, and "review each file edit" (the bench
+      approves with auto-accept).
+  - **What the prompts look like.** The per-edit prompt is Hermes' own approval prompt, so the host chooses its frame:
+    the classic CLI shows it in the panel titled "⚠️ Dangerous Command" (once / session / always / deny), and
+    Desktop shows "Approval needed" with Reject, Always allow… (Allow this session) and Run. The text inside is
+    plan-mode's: the plan revision, the file and the changed lines.
+  - **Cancelling the card.** On the classic CLI, Ctrl+C cancels the card (Esc does nothing there); on Desktop, Skip.
+    Either way nothing is approved and nothing is written; ask the agent to show the card again when you are ready.
+  - **Exercised by real clicks (2026-10-14, gpt-6.1-sol, Hermes v0.21.6):** classic CLI and Desktop, every choice
+    (auto-accept, review each edit with once / deny / session, keep planning, Other feedback with the revision diff,
+    cancel and re-ask, `/planmode show`, and the review choice hidden under `/yolo`). Not yet exercised: the TUI and
+    chat platforms.
 - **Other changes.**
   - The approval result includes the approved plan text.
   - Re-entering plan mode points at your previous plan.
@@ -225,31 +265,20 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
 `light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
-`todo_inline`, `rename_scope` and `test_plan_only`, plus `plan_once` on TUI, Desktop and `hermes serve` sessions.
-`plan_skill` still opts into a skill's plan format. Eight more are measured but in no profile. To try one, or to turn
-`plan_once` off, set `levers` to the full list you want. It replaces the profile's set, including the automatic
-`plan_once`, so include the lean levers you want to keep:
+`todo_inline`, `rename_scope`, `test_plan_only` and `approval_card` (17 levers), plus `plan_once` on TUI, Desktop and
+`hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Eight more are measured but in no
+profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces the profile's
+set, including the automatic `plan_once`, so include the lean levers you want to keep:
 
 ```yaml
 plugins:
   entries:
     plan-mode:
       settings:
-        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,todo_inline,rename_scope,test_plan_only,edit_batch,brief_final"
+        levers: "lean_craft,todo_batch,codex_compact,sticky,reentry,approved_text,light_notes,question_shape,bridge_calls,blocked_tools,skill_policy,test_commands,choice_fidelity,todo_inline,rename_scope,test_plan_only,approval_card,edit_batch,brief_final"
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
-- **`approval_card` (opt-in).** After showing the complete plan verbatim, ask one approval card with “Approve, auto-accept edits” and “Keep planning”; Other supplies feedback. When Hermes approvals are on, it also offers “Approve, review each file edit”: review covers `write_file` and `patch`, including file-tool calls inside `execute_code`, but not shell commands, subagents or MCP writers. For each edit, once approves that edit; session / always auto-accept the rest of this plan. Each approval gets a fresh key, so always leaves one inert config entry that cannot approve another plan. If approvals turn off, review pauses and edits apply without a prompt. The card is used on CLI, TUI, Desktop and chat surfaces, with the existing approval prompt on ACP, API server, cron and webhooks. WhatsApp Cloud has no Other with 3 choices. Typed `/planmode approve` still works while a card is open and selects auto-accept edits.
-  - **What the prompts look like.** The per-edit prompt is Hermes' own approval prompt, so the host chooses its frame:
-    the classic CLI shows it in the panel titled "⚠️ Dangerous Command" (once / session / always / deny), and
-    Desktop shows "Approval needed" with Reject, Always allow… (Allow this session) and Run. The text inside is
-    plan-mode's: the plan revision, the file and the changed lines.
-  - **Cancelling the card.** On the classic CLI, Ctrl+C cancels the card (Esc does nothing there); on Desktop, Skip.
-    Either way nothing is approved and nothing is written; ask the agent to show the card again when you are ready.
-  - **Exercised by real clicks (2026-10-14, gpt-6.1-sol, Hermes v0.21.6):** classic CLI and Desktop, every choice
-    (auto-accept, review each edit with once / deny / session, keep planning, Other feedback with the revision diff,
-    cancel and re-ask, `/planmode show`, and the review choice hidden under `/yolo`). Not yet exercised: the TUI and
-    chat platforms.
 - **`exec_skill_guard` (opt-in).** While an approved plan is executing, it blocks `skill_view` of the planning, TDD
   and code-review process skills, so the agent follows the approved plan instead of a per-edit test loop. A user
   message that mentions TDD, test-first, red-green or code review while plan mode is on or the plan is executing
@@ -342,16 +371,16 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.4.5 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.6.0 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
-| Approval prompt after the plan | dialog | "Implement this plan?" | no | Hermes' approval prompt, every interactive surface |
+| Approval prompt after the plan | dialog | "Implement this plan?" | no | a `clarify` card (lean default) or Hermes' approval prompt, every interactive surface |
 | Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted |
-| Deny with feedback, revise | yes | yes | no | yes; a typed reason only via gateway `/deny <reason>`, otherwise the agent asks |
+| Deny with feedback, revise | yes | yes | no | yes; Other on the card, gateway `/deny <reason>`, otherwise the agent asks |
 | Implement after approval | same turn | one click, as a new turn | no | same turn via the prompt; typed approve may need a message |
 | Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list` + footer on chat platforms |
 | Agent may enter | yes | no | no | yes |
-| Autonomy choice / clear context at approval | yes | partial | no | no |
+| Autonomy choice / clear context at approval | yes | partial | no | auto-accept or review each edit; no clear context |
 
 ### Measured against Codex plan mode
 

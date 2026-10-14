@@ -570,6 +570,7 @@ def lean_tui(session_env, tmp_path, monkeypatch):
     return plugin
 
 
+@pytest.mark.usefixtures("directive_lean")
 @pytest.mark.parametrize("route", ["typed", "typed-open", "gate"])
 def test_default_saved_note_on_every_approval_route(lean_tui, session_env, route):
     # Hermes runs typed plugin commands with HERMES_UI_SESSION_ID="" (tui_gateway methods_tools), so the

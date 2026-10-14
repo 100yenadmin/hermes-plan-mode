@@ -311,6 +311,7 @@ def test_auto_approval_never_gates(card):
         assert plugin.pre_tool_call(tool, args) is None
 
 
+@pytest.mark.usefixtures("directive_lean")
 def test_lever_off_no_review_behavior(make_plugin):
     plugin = make_plugin()
     path = write_plan(plugin)

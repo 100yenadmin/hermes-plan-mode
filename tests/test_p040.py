@@ -11,6 +11,8 @@ from test_levers import make_plugin, write_plan
 from test_plan_mode import plan_profile, session_env
 from test_plan_once import capture, once, submit
 
+pytestmark = pytest.mark.usefixtures("directive_lean")  # the directive path; see conftest.directive_lean
+
 
 CAUSES = "(yolo, approvals.mode: off, or an unattended surface such as the API server or a webhook)"
 
