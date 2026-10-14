@@ -522,3 +522,18 @@ def test_operation_paths_are_shown_relative(reviewed, session_env, tmp_path):
              f"*** Move File: {tmp_path}/c.py -> {tmp_path}/d.py")
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
     assert text.endswith("— Move File: c.py -> d.py ⏎ Update File: a.py ⏎ +x ⏎ Update File: b.py ⏎ +y")
+
+
+@pytest.mark.parametrize("split", ["\n", "\n\n  \n", "\r\n   "])
+def test_split_move_is_one_move(reviewed, session_env, split):
+    plugin, _ = reviewed
+    patch = f"*** Begin Patch\n*** Move File: a.py{split}-> b.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith("(+0/−0 lines, 1 move) — Move File: a.py -> b.py")
+
+
+def test_local_platform_is_one_line(reviewed, session_env):
+    plugin, _ = reviewed
+    session_env["HERMES_SESSION_PLATFORM"] = "local"
+    text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "a\nb"})["message"]
+    assert "\n" not in text and text.endswith(" — +a ⏎ +b")

@@ -267,11 +267,22 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
         files, body = [], []
         # Split the way the host parser does (on newlines, dropping a trailing CR), so no operation line it applies
         # can be split apart here and missed.
-        for line in (part[:-1] if part.endswith("\r") else part for part in str(args.get("patch") or "").split("\n")):
+        raw = [part[:-1] if part.endswith("\r") else part for part in str(args.get("patch") or "").split("\n")]
+        index = 0
+        while index < len(raw):
+            line, index = raw[index], index + 1
             match = _PATCH_OPERATION.match(line)
             payload = line[match.end():].strip() if match else ""
             if match and match[1] == "Move":
                 cut = payload.find("->", 1)
+                if cut <= 0:
+                    # The host's path rewrite joins "*** Move File: a" with an arrow on a later line ("\n-> b").
+                    ahead = index
+                    while ahead < len(raw) and not raw[ahead].strip():
+                        ahead += 1
+                    if ahead < len(raw) and raw[ahead].lstrip().startswith("->"):
+                        payload, index = f"{payload} {raw[ahead].strip()}", ahead + 1
+                        cut = payload.find("->", 1)
                 moved = f"{display(payload[:cut].strip())} -> {display(payload[cut + 2:].strip())}" if cut > 0 else payload
                 operations.append(f"Move File: {moved}")
             elif match and match[1] == "Delete":
@@ -304,7 +315,7 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
         if number:
             counts += f", {number} {word}{'' if number == 1 else 's'}"
     header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths} ({counts})"
-    classic_cli = str(platform).strip().lower() in {"cli", "terminal", ""} and not str(session_key).startswith("ui:")
+    classic_cli = str(platform).strip().lower() in {"cli", "terminal", "local", ""} and not str(session_key).startswith("ui:")
     separator, joiner = (" — ", " ⏎ ") if classic_cli else ("\n", "\n")
     result = header + (separator + joiner.join(lines) if lines else "")
     limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
