@@ -639,7 +639,10 @@ class PlanModePlugin:
     def _mark_session(self, storage_key: str, present: bool) -> None:
         if not storage_key.startswith("session:"):
             return
-        values = [item for item in self._session_storage_keys() if item != storage_key]
+        current = self._session_storage_keys()
+        if (current[-1:] == [storage_key]) if present else (storage_key not in current):
+            return  # already the most recent entry (or already absent): no write
+        values = [item for item in current if item != storage_key]
         if present:
             values.append(storage_key)
         self.ctx.state.set(_SESSION_INDEX_KEY, values[-256:])

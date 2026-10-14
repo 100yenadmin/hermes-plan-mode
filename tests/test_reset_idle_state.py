@@ -125,3 +125,19 @@ def test_067_same_session_reentry_keeps_revision_and_previous_plan(idle_chat):
     assert state["revision"] == before["revision"] == 1
     assert state["previous_plan"] == before["submission"]["path"]
     assert state["plan_files"] == before["plan_files"]
+
+
+def test_067_session_index_skips_redundant_writes(idle_chat, monkeypatch):
+    plugin, _ = idle_chat
+    plugin._remember_session_id("sk:a", {}, "a")
+    plugin._remember_session_id("sk:b", {}, "b")
+    writes = []
+    real_set = plugin.ctx.state.set
+    monkeypatch.setattr(plugin.ctx.state, "set",
+                        lambda key, value: (writes.append(key), real_set(key, value))[1])
+    plugin._mark_session(pm._state_storage_key("sk:b"), True)   # already most recent
+    plugin._mark_session(pm._state_storage_key("sk:zz"), False)  # never indexed
+    assert "session-index" not in writes
+    plugin._mark_session(pm._state_storage_key("sk:a"), True)   # moves to the end
+    assert writes.count("session-index") == 1
+    assert plugin.ctx.state.get("session-index", [])[-1] == pm._state_storage_key("sk:a")
