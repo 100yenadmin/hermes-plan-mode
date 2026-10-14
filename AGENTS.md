@@ -13,6 +13,8 @@ Plan Mode is a standalone Hermes Agent plugin that enforces read-only planning u
 - `plan_mode/plugin.py`: session state, commands, tool enforcement and hooks.
 - `plan_mode/approval.py`: approval ledger, plan review and approval text.
 - `plan_mode/render.py`: planning instructions and display text.
+- `skills/plan-mode-report-problem/SKILL.md`: the report-a-problem skill, registered with `ctx.register_skill`. Its
+  `###` headings must match the labels in `.github/ISSUE_TEMPLATE/bug_report.yml` (a test checks this).
 - `tests/` and `pytest.ini`: isolated fixtures and pytest configuration.
 - `.github/workflows/ci.yml`: unit tests and real-Hermes compatibility checks.
 - `README.md` and `docs/manual-test.md`: behavior, limitations and manual checks.

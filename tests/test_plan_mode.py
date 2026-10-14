@@ -33,6 +33,7 @@ class FakeContext:
         self.hooks = {}
         self.tools = {}
         self.sections = {}
+        self.skills = {}
         self.command_hints = {}
         self.injected = []
         self.inject_result = True
@@ -49,6 +50,9 @@ class FakeContext:
 
     def register_system_prompt_section(self, id, content, **kwargs):
         self.sections[id] = {"content": content, **kwargs}
+
+    def register_skill(self, name, path, description="", frontmatter=None):
+        self.skills[name] = {"path": path, "description": description, "frontmatter": frontmatter}
 
     def inject_message(self, content, **kwargs):
         self.injected.append((content, kwargs))
@@ -98,6 +102,7 @@ def test_registers_exact_surface(plugin, plan_profile):
         "post_api_request",
     }
     assert set(plugin.ctx.hooks) == expected_hooks
+    assert set(plugin.ctx.skills) == {"plan-mode-report-problem"}
 
 
 @pytest.mark.parametrize("plan_profile", ["classic"])

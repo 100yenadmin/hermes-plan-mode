@@ -647,7 +647,8 @@ per-session state in plugin state. It adds a turn note while planning or executi
 the `<proposed_plan>` block from it as the plan file. When the user picks
 "Always" on a plan approval or a per-edit review, Hermes core writes a `plugin_rule:plan-mode:…` entry to
 `command_allowlist` in `config.yaml`; each key belongs to one plan revision, so the entry cannot approve another plan. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
-makes no network calls, launches no subprocesses and has no self-updater.
+includes a report-a-problem skill: the agent drafts a bug report and files it to this repository with `gh` only after
+the user approves the draft. The plugin itself makes no network calls, launches no subprocesses and has no self-updater.
 
 <details>
 <summary>Internal Hermes seams read</summary>
@@ -677,7 +678,7 @@ Each is reached through a lazy, guarded import or a guarded attribute read.
 Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `post_api_request`,
 `transform_llm_output`, `transform_tool_result`, `pre_approval_request`, `post_approval_response`,
 `on_session_reset`, `on_session_finalize`. Public context APIs:
-`ctx.state`, `ctx.inject_message`, `ctx.register_system_prompt_section`.
+`ctx.state`, `ctx.inject_message`, `ctx.register_system_prompt_section`, `ctx.register_skill`.
 
 </details>
 
@@ -685,7 +686,10 @@ Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_
 
 Run `/planmode status` in the affected session to check mode, phase and the plans directory.
 The agent can read the same state with `plan_mode(action="status")`.
-From the next release, ask your Hermes agent to "report a problem with Plan Mode"; review its draft before filing.
+Ask your Hermes agent to "report a problem with Plan Mode". It uses the plugin's `plan-mode-report-problem` skill:
+it checks status, drafts the report, shows it to you and files nothing without your yes. Hermes 0.21.6 and newer list
+the skill for the agent; on older Hermes, ask it to load the `plan-mode:plan-mode-report-problem` skill by name.
+While plan mode is on, shell commands are blocked, so the agent gives you the draft and the form link instead of filing.
 Use the [bug report form](https://github.com/100yenadmin/hermes-plan-mode/issues/new?template=bug_report.yml) and include plugin/Hermes versions and the affected surface.
 For log excerpts, try `hermes logs -n 300 | grep -iE 'plan[-_]mode'`, and `hermes logs errors` for warnings. Hermes names this plugin `plan-mode` and its tool `plan_mode` in its logs; the plugin has no logger of its own, so expect only a few lines.
 Remove secrets, private message text and private paths before sharing diagnostics or logs.
