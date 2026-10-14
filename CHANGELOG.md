@@ -3,7 +3,9 @@
 ## 0.6.3 - 2026-10-14
 
 - Approved snapshots carry a short digest of the reviewed text in their name (`<stem>-rev<N>-<digest>.md`), so two
-  sessions approving the same plan name no longer block each other; an identical existing snapshot is reused (#52).
+  sessions approving the same plan name no longer block each other (#52). A name that is already taken gets a short
+  random tag; plan-mode never reuses, follows or replaces an existing file there, and long plan names are trimmed to
+  fit one 255-byte file name.
 
 ## 0.6.2 - 2026-10-14
 

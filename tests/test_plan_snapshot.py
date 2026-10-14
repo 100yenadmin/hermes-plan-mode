@@ -204,66 +204,55 @@ def test_two_sessions_share_snapshot_names_safely(make_plugin, session_env, iden
         assert snapshot.read_bytes() == text.encode("utf-8")
         snapshots.append(snapshot)
         texts.append(text)
-    assert (snapshots[0] == snapshots[1]) == identical
-    assert len(list(path.parent.joinpath("approved").glob("*.md"))) == (1 if identical else 2)
+    assert snapshots[0] != snapshots[1]  # each approval owns a file it created; identical text is never shared
+    assert len(list(path.parent.joinpath("approved").glob("*.md"))) == 2
     for snapshot, text in zip(snapshots, texts):
-        assert snapshot.read_bytes() == text.encode("utf-8")
+        assert snapshot.read_bytes() == text.encode("utf-8") and snapshot.stat().st_nlink == 1
 
 
-@pytest.mark.parametrize("symlink", [False, True], ids=["different-regular-file", "matching-symlink"])
-def test_existing_snapshot_refusal_preserves_files(make_plugin, session_env, symlink):
+@pytest.mark.parametrize("existing", ["different-regular-file", "matching-symlink", "hard-link-to-plan"])
+def test_an_existing_file_at_the_snapshot_name_is_never_reused(make_plugin, session_env, existing):
     plugin, path = prepared(make_plugin, session_env)
     text = "# Revised\nPreserve café.\n"
     path.write_text(text, encoding="utf-8")
     plugin.command("show")
-    before = copy.deepcopy(state(plugin))
-    snapshot = path.parent / "approved" / f"{path.stem}-rev2-{before['review']['digest'][:12]}.md"
-    snapshot.parent.mkdir()
-    target = path.with_name("existing.md") if symlink else snapshot
-    original = text.encode("utf-8") if symlink else b"different existing bytes"
-    target.write_bytes(original)
-    if symlink:
-        snapshot.symlink_to(target)
-    assert "snapshot could not be saved" in plugin.command("approve")
-    assert state(plugin) == before
-    assert target.read_bytes() == original
-    if symlink:
-        assert snapshot.is_symlink() and snapshot.readlink() == target
+    taken = path.parent / "approved" / pm.PlanModePlugin._snapshot_name(path.stem, 2, state(plugin)["review"]["digest"])
+    taken.parent.mkdir()
+    target = path.with_name("existing.md")
+    if existing == "different-regular-file":
+        target = taken
+        taken.write_bytes(b"different existing bytes")
+    elif existing == "matching-symlink":
+        target.write_bytes(text.encode("utf-8"))
+        taken.symlink_to(target)
     else:
-        assert snapshot.is_file() and not snapshot.is_symlink()
-
-
-def test_hard_linked_snapshot_candidate_is_refused(make_plugin, session_env):
-    plugin, path = prepared(make_plugin, session_env)
-    text = "# Revised\nPreserve café.\n"
-    path.write_text(text, encoding="utf-8")
-    plugin.command("show")
-    before = copy.deepcopy(state(plugin))
-    snapshot = path.parent / "approved" / pm.PlanModePlugin._snapshot_name(path.stem, 2, before["review"]["digest"])
-    snapshot.parent.mkdir()
-    os.link(path, snapshot)  # matching bytes, but a later edit of the plan would change the "approved" text
-    assert "snapshot could not be saved" in plugin.command("approve")
-    assert state(plugin) == before
-    assert path.read_bytes() == snapshot.read_bytes() == text.encode("utf-8") and snapshot.stat().st_nlink == 2
-
-
-@pytest.mark.parametrize("quirk", ["short-reads", "no-O_NONBLOCK"])
-def test_identical_snapshot_reuse_survives_platform_quirks(make_plugin, session_env, monkeypatch, quirk):
-    plugin, path = prepared(make_plugin, session_env)
-    text = "# Revised\n" + "z" * 50 + "\n"
-    path.write_text(text, encoding="utf-8")
-    plugin.command("show")
-    snapshot = path.parent / "approved" / pm.PlanModePlugin._snapshot_name(path.stem, 2, state(plugin)["review"]["digest"])
-    snapshot.parent.mkdir()
-    snapshot.write_bytes(text.encode("utf-8"))
-    if quirk == "short-reads":
-        real_read = os.read
-        monkeypatch.setattr(pm.os, "read", lambda fd, n: real_read(fd, min(n, 7)))
-    else:
-        monkeypatch.delattr(pm.os, "O_NONBLOCK", raising=False)  # Windows has no O_NONBLOCK
+        target = path
+        os.link(path, taken)  # a later edit of the plan would change this name's content
+    original = target.read_bytes()
     assert "Plan approved" in plugin.command("approve")
-    assert state(plugin)["approved_snapshot"] == str(snapshot)
-    assert snapshot.read_bytes() == text.encode("utf-8")
+    snapshot = Path(state(plugin)["approved_snapshot"])
+    assert snapshot != taken and snapshot.parent == taken.parent
+    assert snapshot.name.startswith(taken.name[:-len(".md")] + "-")
+    assert snapshot.read_bytes() == text.encode("utf-8") and snapshot.stat().st_nlink == 1 and not snapshot.is_symlink()
+    assert target.read_bytes() == original
+    if existing == "matching-symlink":
+        assert taken.is_symlink() and taken.readlink() == target
+
+
+def test_snapshot_names_exhausted_keeps_approval_pending(make_plugin, session_env, monkeypatch):
+    plugin, path = prepared(make_plugin, session_env)
+    path.write_text("# Revised\nKeep.\n", encoding="utf-8")
+    plugin.command("show")
+    before = copy.deepcopy(state(plugin))
+    digest = before["review"]["digest"]
+    monkeypatch.setattr(pm.secrets, "token_hex", lambda n: "abcdef")
+    approved = path.parent / "approved"
+    approved.mkdir()
+    for tag in ("", "-abcdef"):
+        (approved / pm.PlanModePlugin._snapshot_name(path.stem, 2, digest, tag)).write_bytes(b"taken")
+    assert "snapshot could not be saved" in plugin.command("approve")
+    assert state(plugin) == before
+    assert sorted(p.read_bytes() for p in approved.iterdir()) == [b"taken", b"taken"]
 
 
 def test_long_plan_names_keep_a_valid_snapshot_name(make_plugin, session_env):
@@ -282,6 +271,9 @@ def test_snapshot_name_is_bounded_in_bytes():
     name = pm.PlanModePlugin._snapshot_name("é" * 200, 12, "a" * 64)
     assert len(name.encode("utf-8")) <= 255 and name.endswith("-rev12-aaaaaaaaaaaa.md")
     assert pm.PlanModePlugin._snapshot_name("parser", 2, "b" * 64) == "parser-rev2-bbbbbbbbbbbb.md"
+    assert pm.PlanModePlugin._snapshot_name("parser", 2, "b" * 64, "-0a1b2c") == "parser-rev2-bbbbbbbbbbbb-0a1b2c.md"
+    with pytest.raises(ValueError):
+        pm.PlanModePlugin._snapshot_name("x", 10 ** 240, "a" * 64)
 
 
 @pytest.mark.parametrize("levers", ["", "approval_card"])

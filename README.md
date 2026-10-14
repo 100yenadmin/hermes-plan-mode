@@ -139,7 +139,8 @@ host file in your editor and wait for the save. On Desktop, open the plan file f
 the markdown link in the agent's reply when it wrote the file itself, and use the preview's Edit and Save controls. Run `/planmode show [file]`, read the complete text, then
 `/planmode approve [file]`. A file changed since submission becomes the approved rev N+1; another save between show
 and approve requires showing it again. Implementation receives the captured text and a saved snapshot under
-`<plans_dir>/approved/<stem>-rev<N>-<digest>.md`, so later edits to the working file do not gain approval.
+`<plans_dir>/approved/<stem>-rev<N>-<digest>.md` (a newly created file; a taken name gets a short random tag), so
+later edits to the working file do not gain approval.
 
 Files above 64 KiB do not arm approval. Chat platforms also do not arm edited-file approval because complete delivery
 is unverified: use **Keep planning**, **Other**, or `/planmode reject <feedback>` for the agent to submit a new revision.
