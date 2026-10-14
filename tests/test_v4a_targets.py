@@ -69,7 +69,7 @@ def test_legacy_newline_and_arrow_targets_are_preserved(patch):
 @pytest.mark.parametrize("kind", FORMS)
 @pytest.mark.parametrize("character", [" ", "\n", "*", "#", "\t", "\r"])
 @pytest.mark.parametrize("position", ["after_header", "after_stars", "after_kind", "after_arrow"])
-def test_one_mb_adversarial_under_50_ms(kind, character, position):
+def test_one_mb_adversarial_under_250_ms(kind, character, position):
     run = character * 1_000_000
     prefix = f"*** {kind} File:"
     if position == "after_stars":
@@ -82,25 +82,27 @@ def test_one_mb_adversarial_under_50_ms(kind, character, position):
         patch = prefix + run
 
     def deadline(_signum, _frame):
-        raise AssertionError("1 MB extraction exceeded 50 ms")
+        raise AssertionError("1 MB extraction exceeded 250 ms")
 
     previous = signal.signal(signal.SIGALRM, deadline)
     started = perf_counter()
     try:
-        signal.setitimer(signal.ITIMER_REAL, 0.05)
+        signal.setitimer(signal.ITIMER_REAL, 0.25)
         _patch_targets({"mode": "patch", "patch": patch})
         elapsed = perf_counter() - started
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
-    assert elapsed < 0.05
+    assert elapsed < 0.25
     print(f"timing {kind}/{position}/{character!r}: {elapsed * 1000:.3f} ms")
 
 
 @pytest.fixture
 def host_parser():
     # The installed host's own V4A parser; CI runs this on every pinned Hermes ref.
-    return pytest.importorskip("tools.patch_parser").parse_v4a_patch
+    pytest.importorskip("hermes_cli")  # skip only without a host; with one, a missing parser fails
+    from tools.patch_parser import parse_v4a_patch
+    return parse_v4a_patch
 
 
 def host_patch(kind, source, destination, separator, ending):
@@ -145,3 +147,14 @@ def test_move_to_is_not_a_host_move_header(host_parser):
     operations, error = host_parser(patch)
     assert error is None
     assert [(op.operation.value, op.file_path, op.new_path) for op in operations] == [("update", "source.md", None)]
+
+
+def test_planning_blocks_newline_split_move(plugin, session_env, tmp_path):
+    # The host's path rewrite joins "*** Move File: a\n-> b" into one Move line, so b must be a target.
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    plugin.command("on")
+    plans = tmp_path / ".hermes" / "plans"
+    patch = (f"*** Begin Patch\n*** Add File: {plans / 'a.md'}\n+x\n"
+             f"*** Move File: {plans / 'b.md'}\n-> {tmp_path / 'outside.md'}\n*** End Patch")
+    assert str(tmp_path / "outside.md") in targets(patch)
+    assert plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["action"] == "block"

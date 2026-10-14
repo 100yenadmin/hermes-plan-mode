@@ -460,8 +460,8 @@ def _patch_targets(args: dict[str, Any]) -> list[str] | None:
         end = line_end(start)
         arrow = patch.find("->", start + 1, end)
         if arrow < 0 and end > start:
-            # Legacy \s* before the arrow could cross a newline. The host cannot
-            # apply that form, but retaining its targets avoids narrowing checks.
+            # An arrow on the next line still counts: the host's path rewrite joins
+            # "*** Move File: a\n-> b" into one Move line before it parses the patch.
             after_space = _V4A_SPACE_RE.match(patch, end).end()
             if patch.startswith("->", after_space):
                 arrow = after_space
