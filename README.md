@@ -640,7 +640,7 @@ surfaces without a card), or with `/planmode approve`. It reads eight groups of 
 profile and `skills.inline_shell`, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
 files there, saves the approved text of an edited plan as a new file under `.hermes/plans/approved/`, and keeps
 per-session state in plugin state. It adds a turn note while planning or executing, a
-≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. On TUI, Desktop and
+≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. When a turn ends while a submitted plan still awaits approval and no approval card was answered, it adds one line to that reply on any surface, whatever its length, saying how to approve. On TUI, Desktop and
 `hermes serve` sessions (lean profile, `plan_once`) it reads the agent's visible reply text while planning and saves
 the `<proposed_plan>` block from it as the plan file. When the user picks
 "Always" on a plan approval or a per-edit review, Hermes core writes a `plugin_rule:plan-mode:…` entry to
