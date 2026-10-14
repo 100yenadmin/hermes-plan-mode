@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Clear finished plan state on an unbound gateway session reset, so a new chat session starts at revision 1
+  without inheriting the previous plan (#67). Same-session re-entry still keeps its plan history.
+
 ## 0.6.7 - 2026-10-14
 
 - **`edit_batch` joins the default lean profile (#26, #30).** After approval, the agent edits each file in one call
