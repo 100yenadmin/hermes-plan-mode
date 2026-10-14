@@ -4,7 +4,6 @@ from pathlib import Path
 import re
 
 import pytest
-import yaml
 
 from plan_mode import plugin as plugin_mod
 from plan_mode.plugin import PlanModePlugin, REPORT_SKILL, REPORT_SKILL_DESCRIPTION, REPORT_SKILL_PATH
@@ -30,6 +29,7 @@ def test_registers_the_report_skill_with_name_description_and_frontmatter(sessio
 
 
 def test_skill_file_frontmatter_matches_the_registration():
+    yaml = pytest.importorskip("yaml")  # the hermes-compat jobs install no PyYAML; the plain test job does
     match = re.match(r"---\n(.*?)\n---\n", _skill_text(), re.S)
     assert match
     assert yaml.safe_load(match.group(1)) == {"name": REPORT_SKILL, "description": REPORT_SKILL_DESCRIPTION}
@@ -47,6 +47,7 @@ def test_skill_registration_fails_open(session_env, capability):
 
 
 def test_skill_headings_match_the_bug_form():
+    yaml = pytest.importorskip("yaml")
     headings = re.findall(r"^### (.+)$", _skill_text(), re.M)
     form = yaml.safe_load(BUG_FORM.read_text(encoding="utf-8"))
     labels = [item["attributes"]["label"] for item in form["body"]
