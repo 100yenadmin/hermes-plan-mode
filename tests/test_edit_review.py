@@ -561,3 +561,21 @@ def test_home_relative_target_counts_as_outside(reviewed, session_env, tmp_path,
     patch = f"*** Begin Patch\n{deletes}\n*** Delete File: ~/victim.py\n*** End Patch"
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
     assert len(text) <= limit and "(+0/−0 lines, 10 deletes, 1 path outside the working directory)" in text
+
+
+def test_displayed_paths_keep_their_whitespace(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    patch = "*** Begin Patch\n*** Delete File: a  b.py\n*** Delete File: c\td.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "patch a  b.py, c\td.py (+0/−0 lines, 2 deletes) — Delete File: a  b.py ⏎ Delete File: c\td.py" in text
+
+
+def test_large_patch_preview_is_fast(reviewed, session_env, tmp_path):
+    import time
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    patch = "*** Begin Patch\n" + "\n".join(f"*** Delete File: sub/d{n}.py" for n in range(10000)) + "\n*** End Patch"
+    start = time.perf_counter()
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert time.perf_counter() - start < 5 and "10000 deletes" in text and len(text) <= 1000
