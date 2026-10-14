@@ -23,7 +23,7 @@ hook, except writes to the plan file.
 4. It shows the complete plan in its reply, then calls `plan_mode(action="submit")`.
 5. With the default `lean` profile, plan mode asks one `clarify` card for plan revision N: "Approve, auto-accept
    edits" (recommended), "Approve, review each file edit" (only when Hermes approvals are on) or "Keep planning".
-   `/planmode show` prints the full plan. The classic profile, a custom `levers` list without `approval_card`, and
+   `/planmode show` prints the plan (up to 64 KB, then a truncation notice). The classic profile, a custom `levers` list without `approval_card`, and
    ACP, API server, cron and webhooks keep Hermes' own approval prompt: buttons, a card, the CLI panel or `/approve`.
 6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
    `todo_list` (with the default `lean` profile, for plans of 4 or more steps). With "review each file edit", every

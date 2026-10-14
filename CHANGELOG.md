@@ -4,11 +4,12 @@
 
 - **Approval card (`approval_card`).** Now part of the default lean profile, after PROOF-060 (README).
   - After the complete plan, one card asks: "Approve, auto-accept edits", "Approve, review each file edit" (when Hermes approvals are on), or "Keep planning". Other sends feedback, which starts a revision.
-  - A revision shows what changed since the last one ("Changed since rev 1: +6/−5 lines in Summary, …"). `/planmode show` prints the full plan.
+  - A revision shows what changed since the last one ("Changed since rev 1: +6/−5 lines in Summary, …"). `/planmode show` prints the plan, up to 64 KB.
   - Cancelling the card (Ctrl+C on the CLI, Skip on Desktop) leaves the plan unapproved. Typed `/planmode approve` still works and auto-accepts edits.
 - **Review each file edit.** Each `write_file` / `patch` call, including file-tool calls inside `execute_code`, gets an approval prompt. The prompt shows:
   - cwd-relative paths and whole-edit counts;
-  - every delete and move;
+  - delete and move counts, with the operations listed first up to the prompt's length limit (1000 chars; 250 on
+    Telegram, Slack and Discord);
   - a count of paths outside the working directory;
   - up to eight changed lines.
 
