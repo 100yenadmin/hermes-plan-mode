@@ -231,6 +231,21 @@ def approval_text(text, path, revision, platform, summary="") -> str:
     return result[:max(0, limit - len(suffix))] + suffix[:limit]
 
 
+def edit_review_text(tool_name, args, platform, *, revision=0, targets=()) -> str:
+    """Bounded file-edit preview; targets are extracted by the planning writer parser."""
+    paths = " ".join(", ".join(targets).split()) or "(unknown path)"
+    header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths}"
+    if tool_name == "write_file":
+        preview = str(args.get("content") or "")
+    elif str(args.get("mode") or "replace").strip().lower() == "patch":
+        preview = str(args.get("patch") or "")
+    else:
+        preview = str(args.get("old_string") or "") + " → " + str(args.get("new_string") or "")
+    result = header + ("\n" + "\n".join(preview.splitlines()[:8]) if preview else "")
+    limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
+    return result if len(result) <= limit else result[:limit - 1] + "…"
+
+
 class DecisionLedger:
     """Bounded, single-use decisions. Observer callbacks do no I/O and never raise."""
 

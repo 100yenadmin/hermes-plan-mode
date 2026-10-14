@@ -25,7 +25,7 @@ from typing import Any, Callable
 import uuid
 
 from .approval import (
-    DecisionLedger, approval_text, clarify_answer, gate_bypassed,
+    DecisionLedger, approval_text, clarify_answer, edit_review_text, gate_bypassed,
     is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
 from .render import (
@@ -95,7 +95,7 @@ _EXECUTING_INDEX_KEY = "executing-index"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_at", "executing_turns", "progress",
                      "user_asked_process")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
-_FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open",)
+_FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _NO_CLARIFY_PLATFORMS = frozenset({"acp", "api_server", "cron", "webhook", "msgraph_webhook"})
@@ -462,6 +462,16 @@ def _write_targets(tool_name: str, args: dict[str, Any]) -> list[str] | None:
 _LOCAL_PROMPT_PLATFORMS = frozenset({"", "cli", "terminal", "tui", "desktop", "local"})
 
 
+def _edit_review_available() -> bool:
+    """Missing/raising host probes never offer a review the host cannot prompt for."""
+    try:
+        from tools.approval import is_approval_bypass_active
+
+        return callable(is_approval_bypass_active) and is_approval_bypass_active() is False
+    except Exception:
+        return False
+
+
 class PlanModePlugin:
     """State machine and dispatch guard registered by the plugin."""
 
@@ -520,7 +530,7 @@ class PlanModePlugin:
         self.ctx.register_hook("post_llm_call", self.post_llm_call)
         self.ctx.register_hook("transform_tool_result", self.transform_tool_result)
         self.ctx.register_hook("pre_approval_request", self._ledger.record_presented)
-        self.ctx.register_hook("post_approval_response", self._ledger.record_response)
+        self.ctx.register_hook("post_approval_response", self.post_approval_response)
         self.ctx.register_hook("on_session_finalize", self.on_session_finalize)
         self.ctx.register_hook("on_session_reset", self.on_session_reset)
         try:
@@ -908,6 +918,7 @@ class PlanModePlugin:
     def _approve_submission(self, state: dict[str, Any], submission: dict, via: str | None = None, storage_key: str = "") -> None:
         """The shared transition after a correlated human decision and digest check."""
         state["active"] = False
+        state.pop("edit_review", None)
         for field in ("activation_id", "entered_by", "agent_activation_id"):
             state.pop(field, None)
         state.update(phase="executing", approved_path=submission["path"],
@@ -963,15 +974,19 @@ class PlanModePlugin:
             if card or gate_bypassed(entry):
                 nonce = secrets.token_hex(4)
                 approve, keep = f"Approve plan rev {revision}", "Keep planning"
+                choices = [approve, keep]
                 question = (f"Approve plan rev {revision} ({os.path.basename(path)}) and start implementing it? "
                             f"[plan-mode {nonce}]")
                 if card:
                     approve = "Approve, auto-accept edits"
+                    choices = [approve, keep]
+                    if self._card_path(storage_key) and _edit_review_available():
+                        choices.insert(1, "Approve, review each file edit")
                     summary = submission.get("change_summary", "")
                     question = (f"Approve plan rev {revision} ({os.path.basename(path)})? "
                                 f"{summary + ' ' if summary else ''}Full plan: /planmode show [plan-mode {nonce}]")
                 submission["clarify"] = {
-                    "nonce": nonce, "question": question, "choices": [approve, keep],
+                    "nonce": nonce, "question": question, "choices": choices,
                     "tool_call_id": "", "activation_id": state.get("activation_id"),
                 }
                 message = (
@@ -982,15 +997,15 @@ class PlanModePlugin:
                      "Hermes approved this call automatically on this host (yolo, approvals.mode: off, or an unattended surface such as the API server or a webhook), "
                      f"so no human has approved plan rev {revision} yet. Plan mode stays on. "
                      "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: ") +
-                    f"question={question} and choices={[approve, keep]} "
+                    f"question={question} and choices={choices} "
                     "(these exact strings, this order, not multi-select). "
                     + (_APPROVAL_ASK if "approval_ask" in self._levers() else "") +
-                    f"If the user picks {approve}, plan mode turns off automatically; implement the plan in this turn: {self._execute_hint()} "
+                    f"If the user picks {'either approval choice' if len(choices) == 3 else approve}, plan mode turns off automatically; implement the plan in this turn: {self._execute_hint()} "
                     f"If they pick {keep} or answer otherwise, ask what to change and revise. "
                     "If clarify is unavailable, ask the user to run /planmode approve."
                 )
                 self._save_command_state(raw_key, storage_key, state)
-                return {"message": message, "clarify": {"question": question, "choices": [approve, keep]}}
+                return {"message": message, "clarify": {"question": question, "choices": choices}}
             message = (f"No human approval was recorded for plan rev {revision}: this host approved the call "
                        "automatically (yolo, approvals.mode: off, or an unattended surface such as the API server or a webhook) or does not route plugin approvals. "
                        "Plan mode stays on. Show the plan and ask the user to run /planmode approve "
@@ -1169,8 +1184,9 @@ class PlanModePlugin:
                 return plan_text(path, text, revision, status)
 
             if action == "done":
-                if state.get("phase") != "executing":
+                if state.get("phase") != "executing" and not ("approval_card" in self._levers() and state.get("edit_review")):
                     return "There is no executing plan to finish."
+                state.pop("edit_review", None)
                 self._clear_execution(state)
                 # Neither a still-open approval card nor a queued note may say "implement it now" after done.
                 state.pop("approved_while_open", None)
@@ -1224,6 +1240,7 @@ class PlanModePlugin:
                     self._forget_submission(state, command_storage_key)
                 submission.pop("clarify", None)
                 state["active"] = False
+                state.pop("edit_review", None)
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
                 state["pending_note"] = (
@@ -1298,6 +1315,7 @@ class PlanModePlugin:
                 self._forget_submission(state, command_storage_key)
                 state.pop("submission", None)
                 state.pop("approved_while_open", None)
+                state.pop("edit_review", None)
                 self._clear_execution(state)
                 self._save_command_state(identity.key, command_storage_key, state)
                 self._sync_execution_family(command_storage_key, state)
@@ -1780,6 +1798,24 @@ class PlanModePlugin:
                 state_key, state = self._state_for_hook(identity)
                 if not state.get("active"):
                     self._active_keys.discard(identity.key)
+                    # User-requested edit review fails open without changing planning's write lock.
+                    try:
+                        review = state.get("edit_review")
+                        if ("approval_card" in self._levers() and tool_name in {"write_file", "patch"}
+                                and isinstance(review, dict) and review.get("key")):
+                            if not _edit_review_available():
+                                if not review.get("paused"):
+                                    review["paused"] = True
+                                    self._save_state(state_key, state)
+                                    self._sync_execution_family(_state_storage_key(state_key), state)
+                                return None
+                            reader = _session_reader()
+                            platform = (reader("HERMES_SESSION_PLATFORM", "") if reader else "") or kwargs.get("platform", "")
+                            return {"action": "approve", "rule_key": review["key"],
+                                    "message": edit_review_text(tool_name, call_args, platform, revision=review.get("rev", 0),
+                                                              targets=_write_targets(tool_name, call_args) or [])}
+                    except Exception:
+                        return None
                     # This optional speed guard fails open, independently of planning's safety checks.
                     try:
                         if (tool_name == "skill_view" and state.get("phase") == "executing"
@@ -1930,7 +1966,9 @@ class PlanModePlugin:
                             return
                     if not answer:
                         return
-                    if answer.removesuffix(" (Recommended)") == clarify["choices"][0]:
+                    answer_label = answer.removesuffix(" (Recommended)")
+                    review_choice = (clarify["choices"][1] if card and len(clarify["choices"]) == 3 else None)
+                    if answer_label == clarify["choices"][0] or (review_choice is not None and answer_label == review_choice):
                         if (not state.get("active") or submission.get("status") != "awaiting"
                                 or not clarify.get("activation_id")
                                 or state.get("activation_id") != clarify["activation_id"]):
@@ -1940,6 +1978,9 @@ class PlanModePlugin:
                             state["pending_note"] = self._stale_note(submission["revision"])
                         else:
                             self._approve_submission(state, submission, via="card" if card else "clarify", storage_key=_state_storage_key(state_key))
+                            if review_choice is not None and answer_label == review_choice:
+                                state["edit_review"] = {"key": "plan-mode-edit:" + secrets.token_hex(8),
+                                                        "path": submission["path"], "rev": submission["revision"]}
                             if (card or "approved_text" in self._levers() or "lean_craft" in self._note_levers()
                                     or {"bridge_calls", "skill_policy", "edit_batch", "brief_final"} & self._note_levers()
                                     or self._saved_plan_note(submission)):
@@ -1953,7 +1994,7 @@ class PlanModePlugin:
                         if "light_notes" in self._levers():
                             state.pop("light_note_seen", None)
                         state["pending_note"] = self._rejection_note(submission["revision"])
-                        if answer != clarify["choices"][1]:
+                        if answer != clarify["choices"][-1]:
                             state["pending_note"] += f' Feedback: "{answer[:2000 if card else 280]}"'
                         submission.pop("clarify", None)
                     self._save_command_state(identity.key, _state_storage_key(state_key), state)
@@ -1966,11 +2007,12 @@ class PlanModePlugin:
                     if not identity.key or identity.unsupported or identity.non_cli_without_key:
                         return
                     state_key, state = self._state_for_hook(identity)
-                    if state.get("phase") == "executing":
+                    if state.get("phase") == "executing" or ("approval_card" in self._levers() and state.get("edit_review")):
                         progress = todo_progress(kwargs.get("result"))
                         if progress is not None:
                             state["progress"] = progress
                             if progress["total"] > 0 and progress["completed"] + progress["cancelled"] == progress["total"]:
+                                state.pop("edit_review", None)
                                 self._clear_execution(state)
                             assert state_key is not None
                             self._save_state(state_key, state)
@@ -2140,6 +2182,19 @@ class PlanModePlugin:
                     assert state_key is not None
                     self._save_state(state_key, state)
                     self._sync_execution_family(_state_storage_key(state_key), state)
+                review = state.get("edit_review")
+                if not state.get("active") and "approval_card" in self._levers() and isinstance(review, dict):
+                    changed = False
+                    if review.get("paused") and not review.get("paused_note_seen"):
+                        parts.append("Edit review is paused: Hermes approvals are off (yolo or approvals.mode off), so edits apply without a prompt.")
+                        review["paused_note_seen"] = True
+                        changed = True
+                    if review.pop("denied", False):
+                        parts.append("The user denied an edit; ask what to change before retrying it.")
+                        changed = True
+                    if changed:
+                        self._save_state(state_key, state)
+                        self._sync_execution_family(_state_storage_key(state_key), state)
                 return {"context": "\n\n".join(parts)} if parts else None
         except Exception as exc:
             return {
@@ -2148,6 +2203,26 @@ class PlanModePlugin:
                     f"({type(exc).__name__}); if plan mode is on, its tool checks still fail closed."
                 )
             }
+
+    def post_approval_response(self, **kwargs: Any) -> None:
+        """Preserve ledger delivery; only a denial for this plan's edit key adds feedback."""
+        self._ledger.record_response(**kwargs)
+        try:
+            if "approval_card" not in self._levers() or kwargs.get("choice") != "deny":
+                return
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if not identity.key or identity.unsupported or identity.non_cli_without_key:
+                return
+            with self._lock:
+                key, state = self._state_for_hook(identity)
+                review = state.get("edit_review")
+                if (key and isinstance(review, dict) and review.get("key")
+                        and kwargs.get("pattern_key") == "plugin_rule:" + review["key"]):
+                    review["denied"] = True
+                    self._save_state(key, state)
+                    self._sync_execution_family(_state_storage_key(key), state)
+        except Exception:
+            return
 
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:

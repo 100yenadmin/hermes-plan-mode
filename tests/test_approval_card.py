@@ -44,6 +44,12 @@ def answer_card(plugin, card, answer=APPROVE, outcome="submitted", **response):
     return json.loads(transformed)["plan_mode_approval"] if transformed else ""
 
 
+@pytest.fixture(autouse=True)
+def no_review_offer(monkeypatch):
+    """PR-A's cards are the two-choice form; PR-B's review choice depends on the host approval probe (tests/test_edit_review.py)."""
+    monkeypatch.setattr(pm, "_edit_review_available", lambda: False)
+
+
 @pytest.fixture
 def card(make_plugin, session_env):
     session_env["HERMES_SESSION_PLATFORM"] = "cli"

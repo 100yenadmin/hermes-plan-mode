@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Extend opt-in `approval_card` with per-plan review of each `write_file` / `patch` edit, including file-tool calls inside `execute_code`.
+
 - Add opt-in `approval_card`: exact plan approval choices, revision diffs, cancellation handling and full plan display up to 64 KB.
 
 ## 0.4.7 - 2026-10-13
