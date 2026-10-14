@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import shlex
 
 import pytest
 
@@ -96,12 +97,57 @@ def test_real_plugin_manager_registers_the_report_skill(tmp_path, monkeypatch):
         reset_hermes_home_override(home_token)
 
 
-def test_model_written_text_never_becomes_shell_source():
-    """The title and the search words are read from files by command substitution (its output is not re-parsed).
-    Typing model text into the command would let quotes or `$()` escape."""
-    text = _skill_text()
-    gh_lines = [line for line in text.splitlines() if "gh issue" in line]
-    assert any('--title "$(cat <title file>)" --body-file <draft file>' in line for line in gh_lines)
-    assert any('--search "$(cat <search file>)"' in line for line in gh_lines)
-    assert not any(re.search(r"--(title|search) ['\"]<", line) for line in gh_lines)
+_FILE_SUBST = re.compile(r"\$\(cat '<[a-z ]+ file>'\)")
+_FILE_PATH = re.compile(r"<[a-z ]+ file>")
 
+
+def _unsafe_gh_arguments(line: str) -> list[str]:
+    """Values of --title/--search/--body-file in the `gh issue` command on this line that are not read from a file.
+
+    shlex removes one level of quoting, so the safe forms arrive as `$(cat '<x file>')` and `<x file>`; anything
+    else (typed text, an unquoted path, a substitution other than reading the file) is reported."""
+    command = line[line.index("gh issue"):].split("`")[0]
+    words = shlex.split(command)
+    unsafe = []
+    pairs = list(zip(words, words[1:]))
+    pairs += [tuple(word.split("=", 1)) for word in words if word.startswith("--") and "=" in word]
+    for flag, value in pairs:
+        if flag in ("--title", "--search") and not _FILE_SUBST.fullmatch(value):
+            unsafe.append(f"{flag} {value}")
+        elif flag == "--body-file" and not _FILE_PATH.fullmatch(value):
+            unsafe.append(f"{flag} {value}")
+    return unsafe
+
+
+def test_unsafe_gh_argument_check_catches_inline_values():
+    assert _unsafe_gh_arguments('gh issue list -R o/r --search "plan mode $(command)"') == [
+        "--search plan mode $(command)"
+    ]
+    assert _unsafe_gh_arguments("gh issue create -R o/r --title 'Plan Mode stalls' --body-file '<draft file>'") == [
+        "--title Plan Mode stalls"
+    ]
+    assert _unsafe_gh_arguments("gh issue comment 7 -R o/r --body-file <draft file>") == ["--body-file <draft"]
+    assert _unsafe_gh_arguments('gh issue create -R o/r --title="x $(id)" --body-file=notes.md') == [
+        "--title x $(id)", "--body-file notes.md"
+    ]
+    assert _unsafe_gh_arguments("gh issue list -R o/r --search \"$(cat '<search file>')\"") == []
+    assert _unsafe_gh_arguments("gh issue list -R o/r --search=\"$(cat '<search file>')\"") == []
+
+
+@pytest.mark.parametrize("path", [REPORT_SKILL_PATH, REPO_ROOT / "AGENTS.md"], ids=["skill", "agents"])
+def test_model_written_text_never_becomes_shell_source(path):
+    """Titles, search words and drafts are read from files: command substitution output is not re-parsed, and a
+    quoted path keeps its spaces. Typing model text into the command would let quotes or `$()` escape."""
+    gh_lines = [line for line in path.read_text(encoding="utf-8").splitlines() if "gh issue" in line]
+    assert gh_lines
+    assert [arg for line in gh_lines for arg in _unsafe_gh_arguments(line)] == []
+    assert any("--search \"$(cat '<search file>')\"" in line for line in gh_lines)
+    if path == REPORT_SKILL_PATH:
+        assert any("--title \"$(cat '<title file>')\" --body-file '<draft file>'" in line for line in gh_lines)
+        assert any("gh issue comment" in line and "--body-file '<draft file>'" in line for line in gh_lines)
+
+
+def test_skill_routes_hermes_security_problems_and_offers_a_comment_fallback():
+    text = _skill_text()
+    assert "https://github.com/NousResearch/hermes-agent/security" in text
+    assert "as a comment on the matching issue (give its link)" in text

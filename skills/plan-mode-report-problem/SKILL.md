@@ -16,6 +16,7 @@ While Plan Mode is on in this session, it blocks shell commands and file writes 
 Security problems include a side-effecting tool running while Plan Mode should block it, a plan approved without the user, or plan files written outside the fixed plans directory.
 For any of these, or anything that exposes a secret, skip the public issue. Give the user the private reporting form and stop:
 https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new
+If what the user has already seen clearly places it in Hermes itself rather than this plugin, give Hermes' private security route instead: https://github.com/NousResearch/hermes-agent/security
 
 ## 2. Use a designated support channel if the deployment has one
 
@@ -52,7 +53,7 @@ With a signed-in GitHub CLI, save two or three key words to their own file (with
 exactly this form:
 
 ```
-gh issue list -R 100yenadmin/hermes-plan-mode --state all --search "$(cat <search file>)"
+gh issue list -R 100yenadmin/hermes-plan-mode --state all --search "$(cat '<search file>')"
 ```
 
 The shell reads the words from the file and passes them unchanged. Never type the search words themselves into the command.
@@ -88,14 +89,14 @@ An earlier "report it", "just fix it" or an ambiguous reply does not approve thi
 - New issue, with a signed-in GitHub CLI, run exactly this form:
 
   ```
-  gh issue create -R 100yenadmin/hermes-plan-mode --title "$(cat <title file>)" --body-file <draft file>
+  gh issue create -R 100yenadmin/hermes-plan-mode --title "$(cat '<title file>')" --body-file '<draft file>'
   ```
 
   The shell reads the title from the file and passes it unchanged, quotes and all. Never type the title itself into
   the command.
   A maintainer of this repository also adds `--label bug,triage-pending,agent-drafted`.
-- Comment on a matching issue: `gh issue comment <number> -R 100yenadmin/hermes-plan-mode --body-file <draft file>`
-- No CLI, no file tools, or the command failed: give the user the draft and the form link so they can paste it themselves:
+- Comment on a matching issue: `gh issue comment <number> -R 100yenadmin/hermes-plan-mode --body-file '<draft file>'`
+- No CLI, no file tools, or the command failed: give the user the draft so they can paste it themselves, as a comment on the matching issue (give its link) or, for a new report, into the form:
   https://github.com/100yenadmin/hermes-plan-mode/issues/new?template=bug_report.yml
 
 Share the resulting link. If the user says no, keep the draft so they can file it later. Maintainers may ask follow-up questions on the issue.
