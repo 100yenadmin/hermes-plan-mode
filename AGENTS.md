@@ -45,7 +45,7 @@ point them at a real Hermes home.
 
 ## Filing issues
 
-- Search first: `gh issue list -R 100yenadmin/hermes-plan-mode --state all --search "<key words>"`.
+- Search first: save the key words to a file, then run `gh issue list -R 100yenadmin/hermes-plan-mode --state all --search "$(cat '<search file>')"`. Never type model-written text into a command.
 - Use the bug form headings: What happened, What you expected, Steps to reproduce, Plugin version, Hermes version, Where it happened, Operating system, Diagnostics, Relevant log lines.
 - Maintainers filing from the CLI always pass labels: `--label bug,triage-pending` (or `triaged` once triaged), plus `agent-drafted` when an agent wrote it.
 
