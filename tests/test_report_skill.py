@@ -55,11 +55,12 @@ def test_skill_headings_match_the_bug_form():
     assert headings == labels
 
 
-def test_skill_has_no_inline_shell_and_points_at_this_repo():
+def test_skill_has_no_inline_shell_and_files_only_to_this_repo():
     text = _skill_text()
     assert "!`" not in text  # Hermes inline-shell syntax: viewing the skill must never run a command.
-    repos = set(re.findall(r"github\.com/([\w.-]+/[\w.-]+)", text)) | set(re.findall(r"-R ([\w.-]+/[\w.-]+)", text))
-    assert repos == {"100yenadmin/hermes-plan-mode"}
+    assert set(re.findall(r"-R ([\w.-]+/[\w.-]+)", text)) == {"100yenadmin/hermes-plan-mode"}  # every gh call
+    links = set(re.findall(r"github\.com/([\w.-]+/[\w.-]+)", text))
+    assert links == {"100yenadmin/hermes-plan-mode", "NousResearch/hermes-agent"}  # Hermes bugs are only pointed to
     assert "https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new" in text
     assert "Only a yes after the user has seen it does." in text
 
