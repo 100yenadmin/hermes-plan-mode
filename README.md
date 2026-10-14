@@ -630,15 +630,17 @@ Manual walkthrough in a disposable workspace (full surface-by-surface list in
 ## Disclosure
 
 Disclosure — plan-mode blocks mutating Hermes tools dispatched through `pre_tool_call` (not Codex app-server
-`exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan through Hermes' own
-approval prompt or `/planmode approve`. It reads eight groups of internal Hermes seams for session identity, workspace,
+`exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan: on its approval card
+(a `clarify` question only the plugin issues and checks), through Hermes' own approval prompt (classic profile and
+surfaces without a card), or with `/planmode approve`. It reads eight groups of internal Hermes seams for session identity, workspace,
 profile and `skills.inline_shell`, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
-files there, and keeps per-session state in plugin state. It adds a turn note while planning or executing, a
+files there, saves the approved text of an edited plan as a new file under `.hermes/plans/approved/`, and keeps
+per-session state in plugin state. It adds a turn note while planning or executing, a
 ≤200-char system-prompt hint, and a one-line footer to short replies on chat platforms. On TUI, Desktop and
 `hermes serve` sessions (lean profile, `plan_once`) it reads the agent's visible reply text while planning and saves
 the `<proposed_plan>` block from it as the plan file. When the user picks
-"Always" on a plan approval, Hermes core writes a `plugin_rule:plan-mode:…` entry to `command_allowlist` in
-`config.yaml`. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
+"Always" on a plan approval or a per-edit review, Hermes core writes a `plugin_rule:plan-mode:…` entry to
+`command_allowlist` in `config.yaml`; each key belongs to one plan revision, so the entry cannot approve another plan. With `allow_gateway_injection: true` it queues one message to start work after a typed approval. It
 makes no network calls, launches no subprocesses and has no self-updater.
 
 <details>
