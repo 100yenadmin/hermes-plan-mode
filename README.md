@@ -239,6 +239,7 @@ plugins:
 ```
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
+- **`approval_card` (opt-in).** After showing the complete plan verbatim, ask one approval card with “Approve, auto-accept edits” and “Keep planning”; Other supplies feedback. It is used on CLI, TUI, Desktop and chat surfaces, with the existing approval prompt on ACP, API server, cron and webhooks. WhatsApp Cloud has no Other with 3 choices. Typed `/planmode approve` still works while a card is open.
 - **`exec_skill_guard` (opt-in).** While an approved plan is executing, it blocks `skill_view` of the planning, TDD
   and code-review process skills, so the agent follows the approved plan instead of a per-edit test loop. A user
   message that mentions TDD, test-first, red-green or code review while plan mode is on or the plan is executing
