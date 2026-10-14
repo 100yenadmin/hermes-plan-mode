@@ -126,7 +126,7 @@ def plan_file_stamp(now=None) -> str:
 
 
 def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=True,
-                  levers=frozenset(), previous_plan="", platform="", reply_plan=False) -> str:
+                  levers=frozenset(), previous_plan="", platform="", reply_plan=False, card_path=False) -> str:
     stamp = plan_file_stamp(now)
     target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
     compact = CODEX_COMPACT_PLAN if "codex_compact" in levers else COMPACT_PLAN
@@ -165,7 +165,7 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         note = note.replace("\n2. ", " " + CHOICE_FIDELITY + "\n2. ", 1)
     if "choice_record" in levers:
         note = note.replace("\n2. ", " " + CHOICE_RECORD + "\n2. ", 1)
-    if "plan_once" in levers and str(platform).strip().lower() == "mattermost":
+    if not card_path and "plan_once" in levers and str(platform).strip().lower() == "mattermost":
         note = note.replace(
             '3. Show the complete plan in your reply, then call',
             '3. If the plan is at most 3,000 characters, show only a 3–5 line summary plus the path in your reply; '
@@ -184,6 +184,11 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
             'The plugin saves only the text between the tags as the plan file; do not write the plan file yourself. '
             'Approval starts implementation in this same turn.'
         ) + note[end:]
+    if card_path:
+        note = note.replace("3. Show the complete plan in your reply, then call",
+                            "3. Show the complete plan file verbatim, never a summary, then call")
+        note = note.replace("3. In that same response, call",
+                            "3. Show the complete plan file verbatim, never a summary. In that same response, call")
     if "bridge_calls" in levers:
         # Every step-3 variant carries this parenthetical; tests assert the swap happened in each one.
         note = note.replace('(if plan_mode is not loaded, find it with tool_search "plan_mode")', BRIDGE_SUBMIT)
@@ -246,7 +251,9 @@ def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
     return result
 
 
-def plan_text(path: str, text: str, revision, status: str) -> str:
+def plan_text(path: str, text: str, revision, status: str, cap: int | None = None) -> str:
+    if cap is not None:
+        return f"Plan: {path} (rev {revision}, {status})\n\n" + text[:cap]
     result = f"Plan: {path} (rev {revision}, {status})\n\n" + text
     if len(result) <= 3500:
         return result

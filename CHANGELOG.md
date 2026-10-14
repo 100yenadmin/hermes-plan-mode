@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add opt-in `approval_card`: exact plan approval choices, revision diffs, cancellation handling and full plan display up to 64 KB.
+
 ## 0.4.7 - 2026-10-13
 
 - New opt-in lever `exec_skill_guard`: while an approved plan is executing, block loading the TDD, planning and
