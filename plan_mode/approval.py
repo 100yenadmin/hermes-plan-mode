@@ -321,8 +321,9 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
                     if ahead < len(raw) and raw[ahead].lstrip().startswith("->"):
                         payload, index = f"{payload} {raw[ahead].strip()}", ahead + 1
                         cut = payload.find("->", 1)
-                moved = f"{display(payload[:cut].strip())} -> {display(payload[cut + 2:].strip())}" if cut > 0 else payload
-                operations.append(f"Move File: {moved}")
+                # Fit the pair once the header's length is known (#46); an arrowless move stays as given.
+                operations.append((display(payload[:cut].strip()), display(payload[cut + 2:].strip())) if cut > 0
+                                  else f"Move File: {payload}")
             elif match and match[1] == "Delete":
                 operations.append(f"Delete File: {display(payload)}")
             elif match:
@@ -342,15 +343,10 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
         sample = (old[:max(4, 8 - len(new))] + new)[:8]  # a long removal still leaves room for the replacement
         added, removed = len(new), len(old)
     hidden = len(body) - len(sample)
-    width = max(40, limit // 6)  # one long content line must not crowd out the rest of the preview
-    lines = [_LINE_BREAKS.sub(" ", line) for line in operations] + [  # operations stay whole: a move keeps its destination
-        line if len(line) <= width else line[:width - 1] + "…" for line in (_LINE_BREAKS.sub(" ", x) for x in sample)]
-    if hidden:
-        lines.append(f"… {hidden} more line{'' if hidden == 1 else 's'}")
     # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
     counts = (f"{added} line{'' if added == 1 else 's'}" if tool_name == "write_file"
               else f"+{added}/−{removed} lines")
-    deletes = sum(operation.startswith("Delete") for operation in operations)
+    deletes = sum(isinstance(operation, str) and operation.startswith("Delete") for operation in operations)
     for number, word in ((deletes, "delete"), (len(operations) - deletes, "move"), (len(outside), "path")):
         if number:
             counts += f", {number} {word}{'' if number == 1 else 's'}"
@@ -359,6 +355,22 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths} ({counts})"
     classic_cli = str(platform).strip().lower() in {"cli", "terminal", "local", ""} and not str(session_key).startswith("ui:")
     separator, joiner = (" — ", " ⏎ ") if classic_cli else ("\n", "\n")
+    room = limit - len(header) - len(separator) - len("Move File:  -> ")
+
+    def tail(text, size):
+        return text if len(text) <= size else "…" + text[len(text) - size + 1:]
+
+    def move(source, destination):  # both sides keep their tails within the remaining prompt budget (#46)
+        if len(source) + len(destination) <= room:
+            return f"Move File: {source} -> {destination}"
+        destination = tail(destination, max(room - 12, 12))
+        return f"Move File: {tail(source, max(room - len(destination), 12))} -> {destination}"
+
+    width = max(40, limit // 6)  # one long content line must not crowd out the rest of the preview
+    lines = [_LINE_BREAKS.sub(" ", line if isinstance(line, str) else move(*line)) for line in operations] + [
+        line if len(line) <= width else line[:width - 1] + "…" for line in (_LINE_BREAKS.sub(" ", x) for x in sample)]
+    if hidden:
+        lines.append(f"… {hidden} more line{'' if hidden == 1 else 's'}")
     result = header + (separator + joiner.join(lines) if lines else "")
     return result if len(result) <= limit else result[:limit - 1] + "…"
 

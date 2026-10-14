@@ -606,3 +606,41 @@ def test_a_long_move_keeps_its_destination(reviewed, session_env):
     patch = f"*** Begin Patch\n*** Move File: {source} -> dest.py\n*** End Patch"
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
     assert text.endswith(f"Move File: {source} -> dest.py")
+
+
+@pytest.mark.parametrize("platform,limit", [("telegram", 250), ("slack", 250), ("discord", 250), ("cli", 1000)])
+@pytest.mark.parametrize("destination", ["dest.py", "../outside/dest.py"])
+def test_a_long_move_source_keeps_its_destination_on_chat(reviewed, session_env, tmp_path, platform, limit, destination):
+    plugin, _ = reviewed
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    session_env["TERMINAL_CWD"] = str(cwd)
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    source = "s" * 147 + ".py"  # 150 characters (#46)
+    patch = f"*** Begin Patch\n*** Move File: {source} -> {destination}\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    shown = destination if destination == "dest.py" else str((tmp_path / "outside" / "dest.py").resolve())
+    header = text.split("Move File: ")[0]
+    assert len(text) <= limit and len(header.split(" patch ")[1].split(" (")[0]) <= limit // 4  # both caps hold
+    assert "1 move" in header and (destination == "dest.py" or "1 path outside the working directory)" in header)
+    source_shown, destination_shown = text.split("\nMove File: " if platform != "cli" else " — Move File: ")[1].split(" -> ")
+    assert source.endswith(source_shown.lstrip("…")) and source_shown.endswith("s.py")  # the source keeps its tail
+    assert shown.endswith(destination_shown.lstrip("…")) and destination_shown.endswith("/dest.py" if "/" in shown else "dest.py")
+    assert destination_shown == shown or len(destination_shown) >= 30  # whole, or a readable tail
+
+
+@pytest.mark.parametrize("platform,separator", [("cli", " — "), ("desktop", "\n")])
+def test_061_fitting_move_is_unchanged_with_short_source(platform, separator):
+    from plan_mode.approval import edit_review_text
+
+    # An almost-full prompt still fits both complete paths; reserving 12 chars for s.py would truncate it.
+    prefix = "Plan-mode edit review (plan rev 1): patch "
+    counts = " (+0/−0 lines, 1 move)"
+    destination_size = 998 - len(prefix) - 250 - len(counts) - len(separator) - len("Move File: s.py -> ")
+    destination = "d" * (destination_size - 3) + ".py"
+    patch = f"*** Begin Patch\n*** Move File: s.py -> {destination}\n*** End Patch"
+    text = edit_review_text("patch", {"mode": "patch", "patch": patch}, platform,
+                            revision=1, targets=("s.py", destination), cwd="/workspace")
+    expected = prefix + ("s.py, " + destination)[:249] + "…" + counts + separator + f"Move File: s.py -> {destination}"
+    assert len(expected) == 998
+    assert text == expected

@@ -1518,7 +1518,10 @@ def test_u1_yolo_fallback_typed_approval_pins_revision_and_injects(plugin, submi
     plugin.pre_tool_call("write_file", {"path": str(newer)})
     newer.write_text("# Newer", encoding="utf-8")
     reply = plugin.command("approve")
-    assert str(submitted_plan) in reply and str(newer) not in reply
+    assert str(newer) in reply and "never submitted" in reply
+    assert plugin._load_state("sk:unit-session")["active"]
+    # The user can still approve the reviewed submission explicitly.
+    reply = plugin.command(f"approve {submitted_plan.name}")
     assert reply.endswith("Starting implementation now.")
     assert plugin.ctx.injected == [(f"Implement the approved plan at {submitted_plan}.", {"session_key": "unit-session"})]
     assert plugin._load_state("sk:unit-session")["approved_revision"] == 1
@@ -1956,7 +1959,8 @@ def test_v033_config_schema_declares_the_flat_settings():
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
     assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools",
-                           "plan_style", "allow_commits", "plan_skill", "plan_profile"}
+                           "plan_style", "allow_commits", "plan_skill", "plan_profile", "approval_card"}
+    assert schema["approval_card"] == {**schema["approval_card"], "type": "bool", "default": True, "label": "Approval card"}
     assert schema["plan_profile"]["type"] == schema["plan_style"]["type"] == "str"
     assert schema["plan_profile"]["choices"] == ["lean", "classic"]
     assert schema["plan_profile"]["default"] == plugin_mod.PROFILE_DEFAULT == "lean"
@@ -2079,7 +2083,6 @@ def _second_plan(plugin, tmp_path):
 
 @pytest.mark.parametrize("card", ["approve", "deny", "timeout"])
 def test_u1_typed_approve_while_card_open_targets_the_submission(plugin, submitted_plan, tmp_path, card):
-    _second_plan(plugin, tmp_path)
     directive = _submit(plugin, path=str(submitted_plan))
     assert plugin._ledger.is_inflight(directive["rule_key"])
     assert "Plan approved" in plugin.command("approve")

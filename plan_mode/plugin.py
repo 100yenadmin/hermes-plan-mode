@@ -1259,16 +1259,29 @@ class PlanModePlugin:
                     return "Plan mode is not on for this session."
                 files = self._plan_files(state)
                 submission = state.get("submission") or {}
-                pinned = not remainder and submission.get("status") in {"pending", "awaiting"}
+                pinned = not remainder and bool(submission) and submission.get("status") != "approved"
                 card_open = pinned and self._ledger.is_inflight(submission.get("rule_key"))
                 if pinned:
+                    if submission.get("path") not in files:
+                        return (f"Plan approval was refused: the submitted plan rev {submission.get('revision')}, "
+                                f"{submission.get('path')}, is no longer a tracked plan file (deleted or moved). "
+                                "Ask the agent to submit the plan again, or use /planmode approve <file> after reviewing it with /planmode show.")
+                    if files[-1] != submission.get("path"):
+                        return (f"Plan approval was refused: the newest tracked plan, {files[-1]}, was never submitted. "
+                                "Ask the agent to submit it, or use /planmode approve <file> after reviewing it with /planmode show.")
+                    text = None
                     try:
-                        unchanged = plan_digest(submission["path"])[0] == submission["digest"]
+                        digest, text = plan_digest(submission["path"])
+                        unchanged = digest == submission["digest"]
                     except (OSError, ValueError):
                         unchanged = False
                     if not unchanged:
+                        baseline = self._card_baselines.get(command_storage_key)
+                        summary = (self._card_diff(baseline, text)[0] if text is not None and baseline
+                                   and baseline.get("revision") == submission.get("revision") else "")
                         return (f"Plan rev {submission['revision']} changed after it was submitted. "
-                                "Review it with /planmode status, then approve a file explicitly or ask the agent to resubmit.")
+                                + (summary + ". " if summary else "")
+                                + "Review it with /planmode show, then ask the agent to resubmit or use /planmode approve <file>.")
                 if not files:
                     return (
                         "Plan approval was refused: this session has no tracked plan file. "
@@ -1467,9 +1480,16 @@ class PlanModePlugin:
             if not lean:
                 return set()
             # plan_once was measured on tui_gateway sessions only (rounds 7 and 8), so it joins lean only there.
-            return set(LEAN_LEVERS) | ({"plan_once"} if _tui_ui_session_id() else set())
-        names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
-        return set(_LEVERS) if "all" in names else names & _LEVERS
+            levers = set(LEAN_LEVERS) | ({"plan_once"} if _tui_ui_session_id() else set())
+        else:
+            names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
+            levers = set(_LEVERS) if "all" in names else names & _LEVERS
+        # The Settings switch wins over both the profile and custom lever overrides.
+        # YAML 1.1 reads a bare off/no as False; accept the quoted allow_commits off-words too.
+        card = self._config("approval_card", True)
+        if card is False or (isinstance(card, str) and card.strip().lower() in {"false", "off", "no", "0"}):
+            levers.discard("approval_card")
+        return levers
 
     def _note_levers(self) -> set[str]:
         levers = self._levers()
@@ -2049,9 +2069,19 @@ class PlanModePlugin:
                                 or not clarify.get("activation_id")
                                 or state.get("activation_id") != clarify["activation_id"]):
                             return
-                        if plan_digest(submission["path"])[0] != submission["digest"]:
+                        try:
+                            digest = plan_digest(submission["path"])[0]
+                        except (OSError, ValueError):
+                            digest = None  # a deleted or unreadable plan is stale, not silently left awaiting
+                        if digest != submission["digest"]:
                             submission["status"] = "stale"
                             state["pending_note"] = self._stale_note(submission["revision"])
+                            if card:
+                                self._clarify_notes[(state_key, call_id)] = (
+                                    kwargs.get("result"), "The plan file changed after the approval card was asked, so the approval did not apply. "
+                                    "Plan mode is still on; show the current plan and submit it again.")
+                                while len(self._clarify_notes) > 256:
+                                    self._clarify_notes.pop(next(iter(self._clarify_notes)))
                         else:
                             self._approve_submission(state, submission, via="card" if card else "clarify", storage_key=_state_storage_key(state_key))
                             if review_choice is not None and answer_label == review_choice:

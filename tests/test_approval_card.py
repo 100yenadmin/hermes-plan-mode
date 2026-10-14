@@ -123,6 +123,94 @@ def test_changed_digest_never_approved(card):
     assert not plugin._open_asks
 
 
+def test_061_stale_card_answer_explains_refusal_in_same_turn(card):
+    plugin, path, result = card
+    path.write_text("# Changed\n")
+    note = answer_card(plugin, result)
+    assert "plan file changed" in note and "approval did not apply" in note
+    assert "Plan mode is still on" in note and "show the current plan and submit it again" in note
+    assert state(plugin)["active"] and state(plugin)["submission"]["status"] == "stale"
+    assert "approved_path" not in state(plugin)
+    assert plugin.transform_tool_result("clarify", ask_args(result), tool_call_id="ask",
+                                        result=host_result(result)) is None
+
+
+def test_061_deleted_plan_card_answer_is_stale_in_same_turn(card):
+    plugin, path, result = card
+    path.unlink()
+    note = answer_card(plugin, result)
+    assert "plan file changed" in note and "approval did not apply" in note
+    assert state(plugin)["active"] and state(plugin)["submission"]["status"] == "stale"
+    assert "approved_path" not in state(plugin)
+
+
+@pytest.mark.parametrize("status", ["awaiting", "stale", "rejected"])
+def test_061_bare_approve_refuses_changed_submission(make_plugin, status):
+    plugin = make_plugin("approval_card")
+    path = write_plan(plugin, "# Plan\n\n## Steps\n1. Inspect\n")
+    result = submit(plugin, path)
+    if status == "rejected":
+        answer_card(plugin, result, KEEP)
+    path.write_text("# Plan\n\n## Steps\n1. Implement\n2. Verify\n")
+    if status == "stale":
+        answer_card(plugin, result)
+    before = copy.deepcopy(state(plugin))
+    reply = plugin.command("approve")
+    assert "Plan rev 1 changed after it was submitted" in reply
+    assert "+2/−1 lines in Steps" in reply
+    assert "/planmode show" in reply and "/planmode status" not in reply
+    assert "resubmit" in reply and "/planmode approve <file>" in reply
+    assert state(plugin) == before and "approved_path" not in state(plugin)
+    assert "Plan approved" in plugin.command(f"approve {path.name}")
+
+
+def test_061_rejected_unchanged_submission_can_be_approved(card):
+    plugin, path, result = card
+    answer_card(plugin, result, KEEP)
+    assert "Plan approved" in plugin.command("approve")
+    assert state(plugin)["approved_revision"] == 1 and state(plugin)["approved_path"] == str(path)
+    assert state(plugin)["submission"]["status"] == "approved" and state(plugin)["phase"] == "executing"
+
+
+@pytest.mark.parametrize("status", ["awaiting", "rejected"])
+def test_061_bare_approve_refuses_newest_unsubmitted_plan(card, status):
+    plugin, path, result = card
+    if status == "rejected":
+        answer_card(plugin, result, KEEP)
+    newer = path.with_name("newer.md")
+    assert plugin.pre_tool_call("write_file", {"path": str(newer)}) is None
+    newer.write_text("# Never submitted\n")
+    before = copy.deepcopy(state(plugin))
+    reply = plugin.command("approve")
+    assert str(newer) in reply and "never submitted" in reply
+    assert "/planmode show" in reply and "/planmode approve <file>" in reply and "submit" in reply
+    assert state(plugin) == before and "approved_path" not in state(plugin)
+    assert "Plan approved" in plugin.command(f"approve {newer.name}")
+
+
+def test_061_bare_approve_names_a_missing_submission(card):
+    plugin, path, result = card
+    older = path.with_name("older.md")
+    assert plugin.pre_tool_call("write_file", {"path": str(older)}) is None
+    older.write_text("# Older plan\n")
+    assert plugin.pre_tool_call("write_file", {"path": str(path)}) is None  # the submitted file is the newest again
+    path.unlink()
+    before = copy.deepcopy(state(plugin))
+    reply = plugin.command("approve")
+    assert "no longer" in reply and str(path) in reply and "never submitted" not in reply
+    assert state(plugin) == before and "approved_path" not in state(plugin)
+
+
+def test_061_bare_approve_refuses_unreadable_rejected_submission(card, monkeypatch):
+    plugin, _, result = card
+    answer_card(plugin, result, KEEP)
+    before = copy.deepcopy(state(plugin))
+    monkeypatch.setattr(pm, "plan_digest", lambda path: (_ for _ in ()).throw(OSError("unreadable")))
+    reply = plugin.command("approve")
+    assert "Plan rev 1 changed after it was submitted" in reply and "/planmode show" in reply
+    assert state(plugin) == before and "approved_path" not in state(plugin)
+
+
 @pytest.mark.parametrize("outcome", ["cancelled", "timed_out", "undelivered"])
 def test_outcome_overrides_partial_approval_and_allows_reask(card, outcome):
     plugin, _, result = card
@@ -481,3 +569,39 @@ def test_agent_entered_note_follows_session_platform(make_plugin, session_env, h
     plugin.pre_llm_call(platform=hook)
     message = json.loads(plugin.tool({"action": "on", "task": "parser"}))["message"]
     assert ("verbatim, never a summary" in message) is card_note
+
+
+@pytest.mark.parametrize("off", [False, "off", " No ", "false", "0"])
+@pytest.mark.parametrize("levers", ["", "all", "approval_card plan_once"])
+def test_card_switch_off_removes_only_the_card(make_plugin, off, levers):
+    on = make_plugin(levers)._levers()
+    assert "approval_card" in on
+    assert make_plugin(levers, approval_card=off)._levers() == on - {"approval_card"}
+    assert make_plugin(levers, **{"plan_mode.approval_card": off})._levers() == on - {"approval_card"}  # legacy nested
+
+
+@pytest.mark.parametrize("on", [True, "on", "auto", 1, None])
+def test_card_switch_default_and_unknown_values_keep_the_card(make_plugin, on):
+    assert make_plugin(approval_card=on)._levers() == pm.LEAN_LEVERS
+
+
+def test_card_switch_off_uses_hermes_approval_prompt(make_plugin, session_env):
+    session_env["HERMES_SESSION_PLATFORM"] = "cli"
+    plugin = make_plugin(approval_card=False)
+    path = write_plan(plugin)
+    gate = plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
+    assert gate["action"] == "approve" and gate["rule_key"]  # the directive path, as with the classic profile
+    assert "approval_card" not in plugin._levers() and "lean_craft" in plugin._levers()
+
+
+@pytest.mark.parametrize("override", ["all", "approval_card plan_once"])
+def test_061_card_switch_off_wins_over_environment(make_plugin, monkeypatch, override):
+    plugin = make_plugin(approval_card="off")
+    monkeypatch.setenv("PLAN_MODE_LEVERS", override)
+    assert "approval_card" not in plugin._levers() and "plan_once" in plugin._levers()
+
+
+def test_061_card_switch_flat_value_wins_and_classic_stays_classic(make_plugin):
+    plugin = make_plugin(approval_card=True, **{"plan_mode.approval_card": False})
+    assert "approval_card" in plugin._levers()
+    assert make_plugin(plan_profile="classic", approval_card=True)._levers() == set()
