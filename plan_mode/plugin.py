@@ -969,17 +969,31 @@ class PlanModePlugin:
                 self._open_asks.discard((clarify.get("nonce", ""), clarify.get("tool_call_id", "")))
 
     @staticmethod
+    def _snapshot_name(stem: str, revision: int, digest: str) -> str:
+        suffix = f"-rev{revision}-{digest[:12]}.md"
+        while stem and len((stem + suffix).encode("utf-8")) > 255:  # one path component on common filesystems
+            stem = stem[:-1]
+        return stem + suffix
+
+    @staticmethod
     def _reuse_snapshot(snapshot: Path, text: str) -> None:
         expected = text.encode("utf-8")
         try:
             if not stat.S_ISREG(os.lstat(snapshot).st_mode):
                 raise ValueError("the existing approved snapshot is not a regular file")
-            fd = os.open(snapshot, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK)
+            fd = os.open(snapshot, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
             try:
                 info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_size > len(expected):
+                # A second link (to the working plan, say) would let later edits change the approved text.
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > len(expected):
                     raise ValueError("the existing approved snapshot is not reusable")
-                if os.read(fd, len(expected) + 1) != expected:
+                data = b""
+                while len(data) <= len(expected):  # os.read may return fewer bytes than asked
+                    chunk = os.read(fd, len(expected) + 1 - len(data))
+                    if not chunk:
+                        break
+                    data += chunk
+                if data != expected:
                     raise ValueError("the existing approved snapshot has different bytes")
             finally:
                 os.close(fd)
@@ -991,7 +1005,7 @@ class PlanModePlugin:
         state.pop("approved_snapshot", None)  # set again below only for a reviewed replacement
         if review is not None:
             revision = int(state.get("revision") or 0) + 1
-            snapshot = Path(state["plans_dir"]) / "approved" / f"{Path(review['path']).stem}-rev{revision}-{review['digest'][:12]}.md"
+            snapshot = Path(state["plans_dir"]) / "approved" / self._snapshot_name(Path(review["path"]).stem, revision, review["digest"])
             if not _plans_dir_is_still_safe(state["plans_dir"]) or os.path.islink(snapshot.parent):
                 raise ValueError("the approved snapshot path is unsafe")
             snapshot.parent.mkdir(exist_ok=True)

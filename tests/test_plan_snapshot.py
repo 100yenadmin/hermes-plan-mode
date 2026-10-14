@@ -3,6 +3,7 @@ import builtins
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -230,6 +231,57 @@ def test_existing_snapshot_refusal_preserves_files(make_plugin, session_env, sym
         assert snapshot.is_symlink() and snapshot.readlink() == target
     else:
         assert snapshot.is_file() and not snapshot.is_symlink()
+
+
+def test_hard_linked_snapshot_candidate_is_refused(make_plugin, session_env):
+    plugin, path = prepared(make_plugin, session_env)
+    text = "# Revised\nPreserve café.\n"
+    path.write_text(text, encoding="utf-8")
+    plugin.command("show")
+    before = copy.deepcopy(state(plugin))
+    snapshot = path.parent / "approved" / pm.PlanModePlugin._snapshot_name(path.stem, 2, before["review"]["digest"])
+    snapshot.parent.mkdir()
+    os.link(path, snapshot)  # matching bytes, but a later edit of the plan would change the "approved" text
+    assert "snapshot could not be saved" in plugin.command("approve")
+    assert state(plugin) == before
+    assert path.read_bytes() == snapshot.read_bytes() == text.encode("utf-8") and snapshot.stat().st_nlink == 2
+
+
+@pytest.mark.parametrize("quirk", ["short-reads", "no-O_NONBLOCK"])
+def test_identical_snapshot_reuse_survives_platform_quirks(make_plugin, session_env, monkeypatch, quirk):
+    plugin, path = prepared(make_plugin, session_env)
+    text = "# Revised\n" + "z" * 50 + "\n"
+    path.write_text(text, encoding="utf-8")
+    plugin.command("show")
+    snapshot = path.parent / "approved" / pm.PlanModePlugin._snapshot_name(path.stem, 2, state(plugin)["review"]["digest"])
+    snapshot.parent.mkdir()
+    snapshot.write_bytes(text.encode("utf-8"))
+    if quirk == "short-reads":
+        real_read = os.read
+        monkeypatch.setattr(pm.os, "read", lambda fd, n: real_read(fd, min(n, 7)))
+    else:
+        monkeypatch.delattr(pm.os, "O_NONBLOCK", raising=False)  # Windows has no O_NONBLOCK
+    assert "Plan approved" in plugin.command("approve")
+    assert state(plugin)["approved_snapshot"] == str(snapshot)
+    assert snapshot.read_bytes() == text.encode("utf-8")
+
+
+def test_long_plan_names_keep_a_valid_snapshot_name(make_plugin, session_env):
+    plugin, a = prepared(make_plugin, session_env)
+    long = a.with_name("p" * 245 + ".md")  # fits one 255-byte component; with the digest suffix it would not
+    track(plugin, long, "# Long name plan\n")
+    plugin.command(f"show {long}")
+    assert "Plan approved" in plugin.command(f"approve {long}")
+    snapshot = Path(state(plugin)["approved_snapshot"])
+    assert len(snapshot.name.encode("utf-8")) <= 255
+    assert snapshot.name.endswith(f"-rev2-{state(plugin)['submission']['digest'][:12]}.md")
+    assert snapshot.read_text(encoding="utf-8") == "# Long name plan\n"
+
+
+def test_snapshot_name_is_bounded_in_bytes():
+    name = pm.PlanModePlugin._snapshot_name("é" * 200, 12, "a" * 64)
+    assert len(name.encode("utf-8")) <= 255 and name.endswith("-rev12-aaaaaaaaaaaa.md")
+    assert pm.PlanModePlugin._snapshot_name("parser", 2, "b" * 64) == "parser-rev2-bbbbbbbbbbbb.md"
 
 
 @pytest.mark.parametrize("levers", ["", "approval_card"])
