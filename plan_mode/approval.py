@@ -231,17 +231,34 @@ def approval_text(text, path, revision, platform, summary="") -> str:
     return result[:max(0, limit - len(suffix))] + suffix[:limit]
 
 
-def edit_review_text(tool_name, args, platform, *, revision=0, targets=()) -> str:
+def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), session_key="", cwd=None) -> str:
     """Bounded file-edit preview; targets are extracted by the planning writer parser."""
-    paths = " ".join(", ".join(targets).split()) or "(unknown path)"
-    header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths}"
+    display_paths = []
+    for target in targets:
+        path = Path(target)
+        if cwd is not None and path.is_absolute():
+            try:
+                path = path.relative_to(Path(cwd))
+            except ValueError:
+                pass  # Targets outside the session cwd retain their absolute path.
+        display_paths.append(str(path))
+    paths = " ".join(", ".join(display_paths).split()) or "(unknown path)"
     if tool_name == "write_file":
-        preview = str(args.get("content") or "")
+        lines = ["+" + line for line in str(args.get("content") or "").splitlines()]
     elif str(args.get("mode") or "replace").strip().lower() == "patch":
-        preview = str(args.get("patch") or "")
+        lines = [line for line in str(args.get("patch") or "").splitlines() if line.startswith(("+", "-"))]
     else:
-        preview = str(args.get("old_string") or "") + " → " + str(args.get("new_string") or "")
-    result = header + ("\n" + "\n".join(preview.splitlines()[:8]) if preview else "")
+        lines = (["-" + line for line in str(args.get("old_string") or "").splitlines()]
+                 + ["+" + line for line in str(args.get("new_string") or "").splitlines()])
+    added = sum(line.startswith("+") for line in lines)
+    removed = sum(line.startswith("-") for line in lines)
+    # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
+    counts = (f"{added} line{'' if added == 1 else 's'}" if tool_name == "write_file"
+              else f"+{added}/−{removed} lines")
+    header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths} ({counts})"
+    classic_cli = str(platform).strip().lower() in {"cli", ""} and not str(session_key).startswith("ui:")
+    separator, joiner = (" — ", " ⏎ ") if classic_cli else ("\n", "\n")
+    result = header + (separator + joiner.join(lines[:8]) if lines else "")
     limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
     return result if len(result) <= limit else result[:limit - 1] + "…"
 

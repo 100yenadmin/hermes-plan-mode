@@ -22,6 +22,54 @@ EDITS = [
 ]
 
 
+@pytest.mark.parametrize("platform", ["cli", "", "telegram"])
+@pytest.mark.parametrize("ui", [False, True])
+@pytest.mark.parametrize("tool,args,lines,count", [
+    (*EDITS[0], ["+first", "+second"], "(2 lines)"),
+    ("patch", {"path": "parser.py", "old_string": "before\nold", "new_string": "after\nnew"},
+     ["-before", "-old", "+after", "+new"], "(+2/−2 lines)"),
+    (*EDITS[2], ["-before", "+after", "+new"], "(+2/−1 lines)"),
+])
+def test_changed_line_preview(reviewed, session_env, platform, ui, tool, args, lines, count):
+    plugin, _ = reviewed
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    if ui:
+        plugin._save_state("ui:preview-tab", state(plugin))
+        session_env["HERMES_UI_SESSION_ID"] = "preview-tab"
+    text = plugin.pre_tool_call(tool, args)["message"]
+    assert count in text
+    if not ui and platform in {"cli", ""}:
+        assert "\n" not in text
+        assert text.endswith(" — " + " ⏎ ".join(lines))
+    else:
+        assert text.splitlines()[1:] == lines
+
+
+@pytest.mark.parametrize("runtime_cwd", [False, True])
+@pytest.mark.parametrize("outside", [False, True])
+def test_preview_session_relative_path(reviewed, session_env, monkeypatch, tmp_path, runtime_cwd, outside):
+    plugin, _ = reviewed
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    session_env["TERMINAL_CWD"] = str(cwd)
+    if runtime_cwd:
+        session_env["TERMINAL_CWD"] = str(tmp_path)
+        monkeypatch.setattr(pm, "_runtime_cwd_reader", lambda: lambda: cwd)
+    target = (tmp_path if outside else cwd) / "parser.py"
+    text = plugin.pre_tool_call("write_file", {"path": str(target), "content": "first"})["message"]
+    expected = str(target) if outside else "parser.py"
+    assert f"write_file {expected} (1 line)" in text
+
+
+def test_preview_counts_whole_edit_and_shows_eight_lines(reviewed, session_env):
+    plugin, _ = reviewed
+    plugin._save_state("ui:preview-tab", state(plugin))
+    session_env["HERMES_UI_SESSION_ID"] = "preview-tab"
+    text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "\n".join(map(str, range(12)))})["message"]
+    assert "(12 lines)" in text
+    assert text.splitlines()[1:] == [f"+{n}" for n in range(8)]
+
+
 @pytest.fixture(autouse=True)
 def probe(monkeypatch):
     """A host seam without config, auth, or approval-policy reads."""

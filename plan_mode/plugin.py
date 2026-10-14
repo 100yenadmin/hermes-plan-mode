@@ -851,7 +851,7 @@ class PlanModePlugin:
                 return cli_key, cli_state
         return identity.key, self._load_state(identity.key) if identity.key else {}
 
-    def _fixed_plans_dir(self) -> str:
+    def _session_cwd(self) -> str:
         cwd_reader = _runtime_cwd_reader()
         raw = str(cwd_reader() if cwd_reader else "").strip()
         reader = _session_reader()
@@ -859,7 +859,10 @@ class PlanModePlugin:
             raw = str(reader("TERMINAL_CWD", "") if reader else "").strip()
         if not raw or not os.path.isabs(raw) or not os.path.isdir(raw):
             raw = os.getcwd()
-        base = os.path.realpath(raw)
+        return os.path.realpath(raw)
+
+    def _fixed_plans_dir(self) -> str:
+        base = self._session_cwd()
         hermes_path = os.path.join(base, ".hermes")
         plan_path = os.path.join(hermes_path, "plans")
         if os.path.islink(hermes_path) or os.path.islink(plan_path):
@@ -1031,7 +1034,7 @@ class PlanModePlugin:
                         choices.insert(1, "Approve, review each file edit")
                     summary = submission.get("change_summary", "")
                     question = (f"Approve plan rev {revision} ({os.path.basename(path)})? "
-                                f"{summary + ' ' if summary else ''}Full plan: /planmode show [plan-mode {nonce}]")
+                                f"{summary + '. ' if summary else ''}Full plan: /planmode show [plan-mode {nonce}]")
                 submission["clarify"] = {
                     "nonce": nonce, "question": question, "choices": choices,
                     "tool_call_id": "", "activation_id": state.get("activation_id"),
@@ -1883,7 +1886,8 @@ class PlanModePlugin:
                             platform = (reader("HERMES_SESSION_PLATFORM", "") if reader else "") or kwargs.get("platform", "")
                             return {"action": "approve", "rule_key": review["key"],
                                     "message": edit_review_text(tool_name, call_args, platform, revision=review.get("rev", 0),
-                                                              targets=_write_targets(tool_name, call_args) or [])}
+                                                              targets=_write_targets(tool_name, call_args) or [],
+                                                              session_key=identity.key, cwd=self._session_cwd())}
                     except Exception:
                         return None
                     # This optional speed guard fails open, independently of planning's safety checks.
