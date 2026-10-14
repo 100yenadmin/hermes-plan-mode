@@ -396,3 +396,31 @@ def test_no_lever_read_for_tools_outside_review(card, monkeypatch):
     assert plugin.pre_tool_call("read_file", {"path": "x"}) is None
     assert plugin.pre_tool_call(*EDITS[0]) is None
     assert calls == []
+
+
+@pytest.mark.parametrize("patch,shown", [
+    ("*** Begin Patch\n*** Delete File: old.py\n*** End Patch", "Delete File: old.py"),
+    ("*** Begin Patch\n*** Move File: a.py -> b.py\n*** End Patch", "Move File: a.py -> b.py"),
+])
+def test_preview_shows_deletes_and_moves(reviewed, session_env, patch, shown):
+    plugin, _ = reviewed
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "(+0/−0 lines)" in text and text.endswith(" — " + shown)
+
+
+def test_terminal_platform_is_one_line(reviewed, session_env):
+    plugin, _ = reviewed
+    session_env["HERMES_SESSION_PLATFORM"] = "terminal"
+    text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "a\nb"})["message"]
+    assert "\n" not in text and text.endswith(" — +a ⏎ +b")
+
+
+def test_symlink_inside_cwd_shows_the_real_outside_path(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    cwd, outside = tmp_path / "workspace", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    (cwd / "link").symlink_to(outside)
+    session_env["TERMINAL_CWD"] = str(cwd)
+    text = plugin.pre_tool_call("write_file", {"path": str(cwd / "link" / "x.py"), "content": "a"})["message"]
+    assert f"write_file {(outside / 'x.py').resolve()} (1 line)" in text

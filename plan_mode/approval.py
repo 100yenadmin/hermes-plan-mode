@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import threading
@@ -235,18 +236,27 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     """Bounded file-edit preview; targets are extracted by the planning writer parser."""
     display_paths = []
     for target in targets:
-        path = Path(target)
-        if cwd is not None and path.is_absolute():
+        shown = str(target)
+        if cwd is not None and Path(target).is_absolute():
             try:
-                path = path.relative_to(Path(cwd))
+                real = Path(os.path.realpath(target))  # a symlink inside the cwd must not hide an outside target
+                shown = str(real.relative_to(Path(cwd)))
             except ValueError:
-                pass  # Targets outside the session cwd retain their absolute path.
-        display_paths.append(str(path))
+                shown = str(real)  # outside the session cwd: the resolved absolute path
+            except OSError:
+                pass
+        display_paths.append(shown)
     paths = " ".join(", ".join(display_paths).split()) or "(unknown path)"
     if tool_name == "write_file":
         lines = ["+" + line for line in str(args.get("content") or "").splitlines()]
     elif str(args.get("mode") or "replace").strip().lower() == "patch":
-        lines = [line for line in str(args.get("patch") or "").splitlines() if line.startswith(("+", "-"))]
+        lines = []
+        for line in str(args.get("patch") or "").splitlines():
+            operation = line.lstrip("*").lstrip() if line.startswith("***") else ""
+            if operation.startswith(("Delete File:", "Move File:")):
+                lines.append(operation)  # deletes and moves carry no +/- lines but must stay visible
+            elif line.startswith(("+", "-")):
+                lines.append(line)
     else:
         lines = (["-" + line for line in str(args.get("old_string") or "").splitlines()]
                  + ["+" + line for line in str(args.get("new_string") or "").splitlines()])
@@ -256,7 +266,7 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     counts = (f"{added} line{'' if added == 1 else 's'}" if tool_name == "write_file"
               else f"+{added}/−{removed} lines")
     header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths} ({counts})"
-    classic_cli = str(platform).strip().lower() in {"cli", ""} and not str(session_key).startswith("ui:")
+    classic_cli = str(platform).strip().lower() in {"cli", "terminal", ""} and not str(session_key).startswith("ui:")
     separator, joiner = (" — ", " ⏎ ") if classic_cli else ("\n", "\n")
     result = header + (separator + joiner.join(lines[:8]) if lines else "")
     limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
