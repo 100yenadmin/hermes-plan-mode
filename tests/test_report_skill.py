@@ -63,7 +63,8 @@ def test_skill_has_no_inline_shell_and_files_only_to_this_repo():
     links = set(re.findall(r"github\.com/([\w.-]+/[\w.-]+)", text))
     assert links == {"100yenadmin/hermes-plan-mode", "NousResearch/hermes-agent"}  # Hermes bugs are only pointed to
     assert "https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new" in text
-    assert "Only a yes after the user has seen it does." in text
+    assert "a yes to the secrets question alone" in text  # step 7 asks two questions; a bare yes may answer only one
+    assert "Only an explicit yes to publishing, given after the user has seen this text, does." in text
 
 
 def test_real_plugin_manager_registers_the_report_skill(tmp_path, monkeypatch):
