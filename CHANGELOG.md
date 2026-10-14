@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.2 - 2026-10-14
+
+- Local `/planmode show [file]` displays one complete plan up to 64 KiB and captures its review. Typed approval of a
+  changed or explicitly named unsubmitted file requires that same activation, path and current digest, while idle.
+- A reviewed replacement becomes approved rev N+1 once. Implementation receives the complete captured text and an
+  approved snapshot path, even with `approved_text` off; later edits to the working file do not change that approval.
+- Add `/planmode edit [file]` with external-editor save → show → approve instructions, and ask TUI/Desktop plan
+  replies to include a markdown file link. Chat and oversized displays do not arm edited-plan approval.
+- Keep-planning feedback reports saved-file changes in the live card result and next planning turn, asking the agent
+  to read and preserve them before submitting a complete new revision.
+
 ## 0.6.1 - 2026-10-14
 
 - Bare `/planmode approve` refuses changed submissions (#48) even after a denial or stale answer, and refuses a newer file

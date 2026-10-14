@@ -86,7 +86,7 @@ surfaces without a card.
 - Mattermost and several other platforms (for example Signal, WhatsApp Cloud and SMS) do not send the agent's in-progress text
   before the approval prompt by default. On those, and everywhere without a budget, the approval text carries the
   full plan, capped at about 3500 chars (about 1000 on WhatsApp Cloud) with a pointer to the file.
-- `/planmode show` prints up to 3500 chars of the plan; the plan file holds the rest.
+- `/planmode show` prints one complete plan up to 64 KiB; larger files show a prefix and do not arm edited-plan approval.
 - **Exercised vs supported.** We have run plan mode end to end on the CLI, TUI, Desktop, `hermes serve` and Telegram
   (approved by text; the buttons were not clicked). The other platforms in the table are supported through Hermes'
   own approval and question UIs, but we have not exercised them.
@@ -109,8 +109,9 @@ plugin.
 | `/plan <task>` | Core Hermes plan prompt. With this plugin it also turns on enforced plan mode for the session (CLI, gateway, TUI and Desktop all send core's prompt). |
 | `/planmode on [task]` | Fixes an absolute plans directory for this session and turns enforcement on. |
 | `/planmode status` | Mode, phase (`planning`, `awaiting approval (rev N)`, `executing (rev N: <path>)`, `off`), the plans directory, plan files and the last submission. |
-| `/planmode show [file]` | Prints the plan (the submitted one, else the newest) capped at 3500 chars. Read-only. |
-| `/planmode approve [file]` | Typed approval. Approves the submitted revision if one is waiting for an answer, else the newest plan file. |
+| `/planmode show [file]` | Displays the submitted plan (else the newest), or a named tracked file, up to 64 KiB. Complete local display records the exact reviewed text for edited-plan approval. |
+| `/planmode edit [file]` | Gives the absolute tracked plan path and instructions to edit, save, show and approve it. Does not launch an editor. |
+| `/planmode approve [file]` | Approves an unchanged submitted revision, or a changed/named new file after a matching complete local `show`. A reviewed replacement becomes rev N+1 once. |
 | `/planmode reject [feedback]` | Keeps plan mode on and gives the feedback to the agent on its next turn. |
 | `/planmode done` | Ends the executing phase (stops the progress pointer and footer). No approval effect. |
 | `/planmode off` | Turns plan mode off without approving anything. |
@@ -118,8 +119,9 @@ plugin.
 Plan files use `<cwd>/.hermes/plans/YYYY-MM-DD_HHMMSS-<slug>.md`; the planning note hands the model the current
 timestamp. Writes must use absolute paths under that directory; relative paths are rejected.
 
-Typed `/planmode approve` without a file checks that the submitted revision is unchanged on disk; with an explicit
-file it approves that file, as in v0.2. On the messaging gateway, plugin commands run only between turns. After a
+Typed `/planmode approve` keeps the submitted target; if a newer tracked file was never submitted, name it explicitly
+after reviewing it. Explicit approval of an unsubmitted file also needs its own `show`. On the messaging gateway,
+plugin commands run only between turns. After a
 typed approval the plugin asks Hermes to start the work at once:
 
 - CLI: works.
@@ -129,6 +131,20 @@ typed approval the plugin asks Hermes to start the work at once:
 When you type it while the approval prompt is still open, approving that prompt continues the waiting turn with the implementation. Denying the prompt or letting it time out does not cancel your typed approval: the work then starts in the next turn (queued where injection is available, otherwise with your next message). `/planmode done` before then cancels it.
 
 Otherwise the reply says "Send any message to start", and your next message starts implementation.
+
+### Editing a plan before approving
+
+On classic CLI, TUI and Desktop, finish or dismiss any open approval first, then run `/planmode edit [file]`. Edit the
+host file in your editor and wait for the save. On Desktop, open the plan file from the markdown link in the agent's
+plan reply and use the preview's Edit and Save controls. Run `/planmode show [file]`, read the complete text, then
+`/planmode approve [file]`. A file changed since submission becomes the approved rev N+1; another save between show
+and approve requires showing it again. Implementation receives the captured text and a saved snapshot under
+`<plans_dir>/approved/`, so later edits to the working file do not gain approval.
+
+Files above 64 KiB do not arm approval. Chat platforms also do not arm edited-file approval because complete delivery
+is unverified: use **Keep planning**, **Other**, or `/planmode reject <feedback>` for the agent to submit a new revision.
+Those revision notes ask the agent to read and preserve any changes already saved to the file. This is external-file
+editing with exact approval on local surfaces; it does not provide an editor inside the approval dialog.
 
 **Telegram command menu.** Telegram's bot menu holds 60 entries by default (core commands first, then plugin
 commands, then skills), so `/planmode` may be hidden on busy profiles. Typing it still works and `/commands` lists
@@ -509,16 +525,17 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Deny reasons exist only on gateway text `/deny <reason>`.** Buttons, the CLI panel and the TUI/Desktop card deny
   without a reason. The agent then asks what to change. Core also tells the model "Do NOT retry" on any denial; the
   plugin's turn note tells it that a plan denial is review feedback.
-- **An edited plan invalidates its approval.** The plugin hashes the plan at submit. If the file changes before the
-  approval lands, or before a typed `/planmode approve` without an explicit file, it refuses, even after a denial or
-  stale answer. When the card's submitted text is available, the refusal includes a bounded change summary. Review
-  the current plan with `/planmode show`, then ask the agent to resubmit or use `/planmode approve <file>` after reviewing it.
+- **An edited plan needs a fresh review.** The plugin hashes the plan at submit. A card/prompt approval refuses if the
+  file changed; typed approval of an edited or explicitly named unsubmitted file requires a complete local
+  `/planmode show [file]` followed by a matching activation, path and fresh digest. The same captured text is approved
+  and saved as a snapshot, independently of the `approved_text` lever. A summary or truncated display never arms it.
+  When the card's submitted text is available, the refusal includes a bounded change summary.
   If the newest tracked file differs from the submitted file, bare approve names it and refuses because it was never
   submitted; ask the agent to submit it or review it with `/planmode show` and approve it explicitly. An unchanged
   submitted revision can still be approved after a denial or timeout.
 - **One prompt at a time.** A second submit while an approval prompt is open is blocked. A typed `/planmode approve`
   while the prompt is still open approves the unchanged submitted revision when it is still the newest tracked file,
-  and the prompt's later answer changes nothing.
+  and the prompt's later answer changes nothing. Revised-plan approval requires finishing or dismissing that prompt first.
 - **`/plan` marker.** The plugin detects core's `/plan` prompt in the user's message. A user who types that text only
   restricts their own session; the model cannot author the user's message. If activation is refused (no session
   identity, profile mismatch), `/plan` stays prompt-only for that turn. If the hook times out, Hermes continues the
@@ -535,7 +552,7 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Plan-root race.** The plugin revalidates `.hermes` and `.hermes/plans` before each plan write, but does not own
   Hermes' eventual file open. Do not let other processes change the plan root during plan mode.
 - **TUI profile scope.** If the TUI resolves the command in a different profile than the session, the plugin refuses
-  `on`, `off`, `approve`, `reject`, `done` and `show`. Two live sessions sharing one session key in one TUI backend cannot be told
+  `on`, `off`, `approve`, `reject`, `done`, `show` and `edit`. Two live sessions sharing one session key in one TUI backend cannot be told
   apart; keep session keys unique per profile.
 - **Session-key edge cases.** With `compression.in_place: false`, `/planmode on` then `/compress` before any agent
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new

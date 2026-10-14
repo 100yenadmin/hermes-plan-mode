@@ -161,6 +161,8 @@ def test_061_bare_approve_refuses_changed_submission(make_plugin, status):
     assert "/planmode show" in reply and "/planmode status" not in reply
     assert "resubmit" in reply and "/planmode approve <file>" in reply
     assert state(plugin) == before and "approved_path" not in state(plugin)
+    assert "Plan approved" not in plugin.command(f"approve {path.name}")
+    plugin.command(f"show {path.name}")
     assert "Plan approved" in plugin.command(f"approve {path.name}")
 
 
@@ -185,6 +187,8 @@ def test_061_bare_approve_refuses_newest_unsubmitted_plan(card, status):
     assert str(newer) in reply and "never submitted" in reply
     assert "/planmode show" in reply and "/planmode approve <file>" in reply and "submit" in reply
     assert state(plugin) == before and "approved_path" not in state(plugin)
+    assert "Plan approved" not in plugin.command(f"approve {newer.name}")
+    plugin.command(f"show {newer.name}")
     assert "Plan approved" in plugin.command(f"approve {newer.name}")
 
 
@@ -460,12 +464,12 @@ def test_show_card_plan(make_plugin, size):
 
 
 @pytest.mark.usefixtures("directive_lean")
-def test_show_off_unchanged(make_plugin):
+def test_show_directive_complete(make_plugin):
     plugin = make_plugin()
     path = write_plan(plugin, "x" * 10000)
     shown = plugin.command("show")
-    assert shown == render.plan_text(str(path), "x" * 3501, 0, "planning")
-    assert len(shown) == 3500
+    assert shown == render.plan_text(str(path), "x" * 10000, 0, "planning", cap=65536)
+    assert state(plugin)["review"]["text"] == "x" * 10000
 
 
 @pytest.mark.parametrize("enabled", [False, True])

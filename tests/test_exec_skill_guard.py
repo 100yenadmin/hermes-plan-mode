@@ -95,6 +95,7 @@ def test_builtin_wrapper_only_matches_task(make_plugin, task, asked, enforce):
 def test_pending_notes_do_not_count_as_request(make_plugin, user_text, asked):
     plugin = make_plugin("exec_skill_guard skill_policy lean_craft")
     path = write_plan(plugin)
+    plugin.command(f"show {path}")
     assert "Plan approved" in plugin.command(f"approve {path}")
     pending = plugin._load_state("sk:unit-session")["pending_note"]
     assert "TDD" in pending
