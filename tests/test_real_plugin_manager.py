@@ -15,6 +15,8 @@ import pytest
 
 from test_plan_mode import plan_profile
 
+pytestmark = pytest.mark.usefixtures("directive_lean")  # the directive path; see conftest.directive_lean
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

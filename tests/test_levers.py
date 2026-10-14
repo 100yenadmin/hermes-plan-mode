@@ -12,6 +12,8 @@ from plan_mode import render
 from plan_mode.approval import approval_text
 from test_plan_mode import FakeContext, session_env
 
+pytestmark = pytest.mark.usefixtures("directive_lean")  # the directive path; see conftest.directive_lean
+
 
 LEVER_NAMES = {
     "plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",

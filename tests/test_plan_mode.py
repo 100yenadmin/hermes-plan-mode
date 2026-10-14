@@ -11,6 +11,8 @@ import pytest
 from plan_mode import plugin as plugin_mod
 from plan_mode.plugin import PlanModePlugin, _path_is_inside
 
+pytestmark = pytest.mark.usefixtures("directive_lean")  # the directive path; see conftest.directive_lean
+
 
 class MemoryState:
     def __init__(self):

@@ -9,6 +9,8 @@ from plan_mode import render
 from test_levers import approve_gate, make_plugin, write_plan
 from test_plan_mode import _BUILTIN_PROMPT, session_env
 
+pytestmark = pytest.mark.usefixtures("directive_lean")  # the directive path; see conftest.directive_lean
+
 
 @pytest.fixture
 def executing(make_plugin):

@@ -371,6 +371,7 @@ def test_show_card_plan(make_plugin, size):
         assert f"…(truncated: showing 65536 of {size} bytes; full file: {path})" in shown
 
 
+@pytest.mark.usefixtures("directive_lean")
 def test_show_off_unchanged(make_plugin):
     plugin = make_plugin()
     path = write_plan(plugin, "x" * 10000)
@@ -405,6 +406,7 @@ def test_typed_decision_ignores_late_result(card, action):
     assert (state(plugin).get("phase") == "executing") is action.startswith("approve")
 
 
+@pytest.mark.usefixtures("directive_lean")
 def test_lever_registration(make_plugin):
     assert "approval_card" in pm._LEVERS
     assert "approval_card" not in pm.LEAN_LEVERS
@@ -412,6 +414,7 @@ def test_lever_registration(make_plugin):
     assert pm._NO_CLARIFY_PLATFORMS == NO_CLARIFY
 
 
+@pytest.mark.usefixtures("directive_lean")
 def test_off_card_result_while_directive_pending_matches_base(make_plugin):
     plugin = make_plugin()
     path = write_plan(plugin)
