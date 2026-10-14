@@ -25,6 +25,7 @@ hook, except writes to the plan file.
    edits" (recommended), "Approve, review each file edit" (only when Hermes approvals are on) or "Keep planning".
    `/planmode show` prints the plan (up to 64 KB, then a truncation notice). The classic profile, a custom `levers` list without `approval_card`, and
    ACP, API server, cron and webhooks keep Hermes' own approval prompt: buttons, a card, the CLI panel or `/approve`.
+   If a turn ends while the plan still awaits approval and no card was answered, the reply ends with a line saying how to approve.
 6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
    `todo_list` (with the default `lean` profile, for plans of 4 or more steps). With "review each file edit", every
    `write_file` / `patch` gets Hermes' approval prompt first. Typed `/planmode approve` also works while the card is
@@ -553,6 +554,8 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 
 ## Known limitations
 
+- **The agent can skip the approval card** when you say not to ask questions
+  ([#19](https://github.com/100yenadmin/hermes-plan-mode/issues/19)); the turn-end `/planmode approve` pointer is the fallback.
 - **Codex app-server runtime.** Hermes' Codex app-server executes native `exec` and `applyPatch` outside
   `pre_tool_call`. Plan mode does not enforce them. Use a normal Hermes tool runtime when enforcement matters.
 - **TUI `/background` and `btw`** side agents run under their own task id with no public link to the parent session.
@@ -586,7 +589,8 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   plan-shaped approval wording.
 - **Footer limits.** Chat platforms only: never CLI, TUI, Desktop (also not for a chat session resumed in Desktop),
   API server, webhook, cron or delegate subagents. Only on replies of 1800 chars or fewer, because adding a footer to
-  a longer streamed reply could re-send part of it.
+  a longer streamed reply could re-send part of it. The approval pointer applies on every resolved surface regardless
+  of reply length or the footer setting, so on a long streamed chat reply it may re-send that reply's last part.
 - **Other output transforms.** Hermes runs every plugin's `transform_llm_output` but uses only the first returned
   text. While the footer shows, another plugin's transformed reply (for example a redactor's) may be discarded; set
   `plan_mode.footer: off` if you rely on one.

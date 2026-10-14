@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.4 - 2026-10-14
+
+- When a turn ends while a submitted plan still awaits approval and no approval card was answered, the reply now ends
+  with one line saying how to approve: `⏸ Plan rev N is waiting for your approval: type /planmode approve to approve
+  it, or say what to change.` It applies on every surface (#19). On Hermes 0.21.6 `hermes serve` with approvals off,
+  gpt-6.1-sol skipped the card in 6 of 6 runs when the task said "do not ask questions" (3 of them with the
+  `approval_ask` lever), and in 0 of 2 without that phrase; on the classic CLI it asked in 3 of 3. The line changes no
+  approval decision.
+- Bound approved snapshot names to 255 filesystem bytes, including non-UTF-8 names, so surrogate-escaped plan
+  names no longer refuse edited-plan approval (#54).
+
 ## 0.6.3 - 2026-10-14
 
 - Approved snapshots carry a short digest of the reviewed text in their name (`<stem>-rev<N>-<digest>.md`), so two
