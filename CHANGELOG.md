@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.6.8 - 2026-10-15
 
-- Clear finished plan state on an unbound gateway session reset, so a new chat session starts at revision 1
-  without inheriting the previous plan (#67). Same-session re-entry still keeps its plan history.
+- **`/new` on chat platforms now starts plan mode clean (#67).** Before, after a plan had finished executing, the next
+  `/plan` in a new session continued that plan's revision number and pointed the agent at the old plan. An unbound
+  gateway reset now also finds finished plans (a bounded index of the 256 most recent sessions). Same-session
+  re-entry still keeps its plan history; approval logic and rule keys are unchanged.
+- README: the approval card's buttons were clicked on Telegram (two runs on a Hermes v0.21.7 gateway, #31).
 
 ## 0.6.7 - 2026-10-14
 
