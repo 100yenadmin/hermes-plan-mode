@@ -62,11 +62,17 @@ def test_card_submission(card):
     assert state(plugin)["submission"]["status"] == "awaiting"
 
 
-@pytest.mark.parametrize("platform", sorted(NO_CLARIFY))
-def test_unattended_directive_matches_off(make_plugin, session_env, monkeypatch, platform):
-    session_env["HERMES_SESSION_PLATFORM"] = platform.upper()
+@pytest.mark.parametrize("platform,hook,cron", [
+    ("", "acp", False), ("", "cron", False), ("", "", True),
+    ("api_server", "", False), ("webhook", "", False), ("msgraph_webhook", "", False),
+])
+def test_unattended_directive_matches_off(make_plugin, session_env, monkeypatch, platform, hook, cron):
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    if cron:
+        session_env["HERMES_CRON_SESSION"] = "1"
     plugin = make_plugin("approval_card")
     path = write_plan(plugin)
+    plugin.pre_llm_call(platform=hook)
     monkeypatch.setattr(pm, "make_rule_key", lambda *args: "plan-mode:fixed")
     before = copy.deepcopy(state(plugin))
     on = plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
@@ -153,7 +159,7 @@ def test_feedback_cap(card, length):
 def test_live_registry_blocks_second_ask_and_submission(card):
     plugin, path, result = card
     assert plugin.pre_tool_call("clarify", ask_args(result), tool_call_id="live") is None
-    assert "live" in plugin._open_asks
+    assert (state(plugin)["submission"]["clarify"]["nonce"], "live") in plugin._open_asks
     assert plugin.pre_tool_call("clarify", ask_args(result), tool_call_id="second")["action"] == "block"
     blocked = plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)
     assert blocked["action"] == "block" and "open approval card first" in blocked["message"]
@@ -170,7 +176,7 @@ def test_restart_accepts_dead_ask(card, action):
     if action == "reask":
         assert plugin.pre_tool_call("clarify", ask_args(result), tool_call_id="new") is None
         assert state(plugin)["submission"]["clarify"]["tool_call_id"] == "new"
-        assert plugin._open_asks == {"new"}
+        assert plugin._open_asks == {(state(plugin)["submission"]["clarify"]["nonce"], "new")}
     else:
         assert "rev 2" in submit(plugin, path)["clarify"]["question"]
 
@@ -187,6 +193,19 @@ def test_revision_diff(card):
     assert 0 < len(submission["diff_excerpt"]) <= 2000
     assert submission["diff_excerpt"] in second["message"]
     assert "@@" in submission["diff_excerpt"]
+
+
+def test_diff_computes_opcodes_once(card, monkeypatch):
+    plugin, path, _ = card
+    calls = []
+    original = pm.difflib.SequenceMatcher.get_opcodes
+    def counted(matcher):
+        calls.append(matcher)
+        return original(matcher)
+    monkeypatch.setattr(pm.difflib.SequenceMatcher, "get_opcodes", counted)
+    path.write_text("# Revised\n")
+    submit(plugin, path)
+    assert len(calls) == 1
 
 
 def test_diff_excerpt_truncated_at_line_boundary(card):
@@ -210,15 +229,126 @@ def test_oversized_baseline_has_no_diff(make_plugin, large_first):
         assert "card_baseline" not in state(plugin)
 
 
-@pytest.mark.parametrize("ending", ["approve", "off", "reset"])
+@pytest.mark.parametrize("ending", ["approve", "card", "off", "on", "reset"])
 def test_baseline_cleared(card, ending):
-    plugin, _, _ = card
-    assert "card_baseline" in state(plugin)
+    plugin, _, result = card
+    key = pm._state_storage_key("sk:unit-session")
+    assert key in plugin._card_baselines
     if ending == "reset":
         plugin.on_session_reset()
+    elif ending == "card":
+        answer_card(plugin, result)
     else:
         plugin.command(ending)
     assert "card_baseline" not in state(plugin)
+    assert key not in plugin._card_baselines
+
+
+def test_baseline_never_saved_or_copied_to_linked_state(card):
+    plugin, path, _ = card
+    current = state(plugin)
+    alias = pm._state_storage_key("sk:linked-session")
+    current["command_session_storage_keys"] = [alias]
+    plugin._save_state("sk:unit-session", current)
+    path.write_text("# Revised\n")
+    submit(plugin, path)
+    assert all("card_baseline" not in saved for saved in plugin.ctx.state.values.values()
+               if isinstance(saved, dict))
+    assert plugin._card_baselines[pm._state_storage_key("sk:unit-session")]["text"] == "# Revised\n"
+
+
+def test_baseline_global_bound(make_plugin, session_env):
+    plugin = make_plugin("approval_card")
+    for index in range(40):
+        session_env["HERMES_SESSION_KEY"] = f"bounded-{index}"
+        submit(plugin, write_plan(plugin))
+    assert len(plugin._card_baselines) == 32
+    assert list(plugin._card_baselines) == [pm._state_storage_key(f"sk:bounded-{i}") for i in range(8, 40)]
+    assert all(len(entry["text"].encode("utf-8")) <= 65536 for entry in plugin._card_baselines.values())
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_unknown_outcome_and_legacy_missing_outcome(card, missing):
+    plugin, _, result = card
+    args = ask_args(result)
+    assert plugin.pre_tool_call("clarify", args, tool_call_id="outcome") is None
+    payload = json.loads(host_result(result, outcome="interrupted"))
+    if missing:
+        payload.pop("outcome")
+    value = json.dumps(payload)
+    plugin.post_tool_call("clarify", args, tool_call_id="outcome", status="ok", result=value)
+    current = state(plugin)
+    assert (current.get("phase") == "executing") is missing
+    assert not plugin._open_asks
+    if not missing:
+        assert current["active"] and current["submission"]["status"] == "awaiting"
+        note = json.loads(plugin.transform_tool_result("clarify", args, tool_call_id="outcome", result=value))
+        assert "did not answer" in note["plan_mode_approval"]
+        assert plugin.pre_tool_call("clarify", args, tool_call_id="fresh") is None
+
+
+@pytest.mark.parametrize("short", [False, True])
+def test_awaiting_reminder_preserves_long_card(card, short):
+    plugin, _, result = card
+    current = state(plugin)
+    question = "q" * 292
+    current["submission"]["clarify"]["question"] = question
+    current["light_note_seen"] = short
+    plugin.ctx.settings["levers"] = "approval_card light_notes"
+    plugin._save_state("sk:unit-session", current)
+    note = plugin.pre_llm_call()["context"]
+    assert f"question={question}, choices={result['clarify']['choices']}," in note
+
+
+@pytest.mark.parametrize("large_first", [False, True])
+def test_long_plan_skips_diff_but_updates_baseline(make_plugin, large_first):
+    plugin = make_plugin("approval_card")
+    path = write_plan(plugin, "a\n" * 3000 if large_first else "# Small\n")
+    submit(plugin, path)
+    text = "# Small\n" if large_first else "b\n" * 3000
+    path.write_text(text)
+    second = submit(plugin, path)
+    assert "Changed since" not in second["clarify"]["question"]
+    assert not state(plugin)["submission"].get("diff_excerpt")
+    assert plugin._card_baselines[pm._state_storage_key("sk:unit-session")]["text"] == text
+
+
+def test_reused_call_id_in_other_session_does_not_block_reask(card, session_env):
+    plugin, _, first = card
+    assert plugin.pre_tool_call("clarify", ask_args(first), tool_call_id="call_0") is None
+    session_env["HERMES_SESSION_KEY"] = "second-session"
+    second = submit(plugin, write_plan(plugin))
+    # A persisted ask from an earlier process, while A still has a live call_0.
+    current = plugin._load_state("sk:second-session")
+    current["submission"]["clarify"]["tool_call_id"] = "call_0"
+    plugin._save_state("sk:second-session", current)
+    assert plugin.pre_tool_call("clarify", ask_args(second), tool_call_id="fresh") is None
+    nonce = current["submission"]["clarify"]["nonce"]
+    assert (nonce, "fresh") in plugin._open_asks
+
+
+@pytest.mark.parametrize("ending", ["off", "resubmit"])
+def test_forget_submission_discards_open_ask(card, ending):
+    plugin, path, result = card
+    assert plugin.pre_tool_call("clarify", ask_args(result), tool_call_id="open") is None
+    assert plugin._open_asks
+    if ending == "off":
+        plugin.command("off")
+    else:
+        # Exercise replacement admission directly: public resubmit correctly blocks a live ask.
+        assert plugin._prepare_submission("sk:unit-session", state(plugin), {"path": str(path)}, "replace") is None
+    assert not plugin._open_asks
+
+
+def test_clarify_error_discards_id_and_allows_reask(card):
+    plugin, _, result = card
+    args = ask_args(result)
+    assert plugin.pre_tool_call("clarify", args, tool_call_id="failed") is None
+    plugin.post_tool_call("clarify", args, tool_call_id="failed", status="error", result=host_result(result))
+    current = state(plugin)
+    assert current["active"] and current["submission"]["status"] == "awaiting"
+    assert not plugin._open_asks and not current["submission"]["clarify"]["tool_call_id"]
+    assert plugin.pre_tool_call("clarify", args, tool_call_id="fresh") is None
 
 
 @pytest.mark.parametrize("size", [10000, 100000])

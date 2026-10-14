@@ -9,6 +9,7 @@ the plugin load on older Hermes versions and refuse activation cleanly.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import difflib
@@ -472,7 +473,9 @@ class PlanModePlugin:
         # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
-        self._open_asks: set[str] = set()
+        self._open_asks: set[tuple[str, str]] = set()
+        self._card_baselines: OrderedDict[str, dict] = OrderedDict()
+        self._hook_platforms: OrderedDict[str, str] = OrderedDict()
         self._reply_captures: dict[tuple[str, str], tuple[Any, str, bool, str, str]] = {}
         manager_home = getattr(getattr(ctx, "_manager", None), "home_path", None)
         self._registration_profile = self._profile_name_for_home(manager_home)
@@ -892,15 +895,17 @@ class PlanModePlugin:
             )
         return json.dumps(message if isinstance(message, dict) else {"message": message}, ensure_ascii=False)
 
-    def _forget_submission(self, state: dict[str, Any]) -> None:
+    def _forget_submission(self, state: dict[str, Any], storage_key: str = "") -> None:
+        if "approval_card" in self._levers() and storage_key:
+            self._card_baselines.pop(storage_key, None)
         submission = state.get("submission")
         if isinstance(submission, dict):
             self._ledger.take(submission.get("rule_key"))
             if "approval_card" in self._levers() and submission.get("card"):
-                self._open_asks.discard((submission.get("clarify") or {}).get("tool_call_id", ""))
+                clarify = submission.get("clarify") or {}
+                self._open_asks.discard((clarify.get("nonce", ""), clarify.get("tool_call_id", "")))
 
-    @staticmethod
-    def _approve_submission(state: dict[str, Any], submission: dict, via: str | None = None) -> None:
+    def _approve_submission(self, state: dict[str, Any], submission: dict, via: str | None = None, storage_key: str = "") -> None:
         """The shared transition after a correlated human decision and digest check."""
         state["active"] = False
         for field in ("activation_id", "entered_by", "agent_activation_id"):
@@ -912,7 +917,7 @@ class PlanModePlugin:
             submission["approved_via"] = via
         submission.pop("clarify", None)
         if submission.get("card"):
-            state.pop("card_baseline", None)
+            self._card_baselines.pop(storage_key, None)
 
     @staticmethod
     def _stale_note(revision) -> str:
@@ -1069,7 +1074,7 @@ class PlanModePlugin:
                     plans_dir = self._fixed_plans_dir()
                 except (OSError, ValueError) as exc:
                     return f"Plan mode activation was refused: {exc}."
-                self._forget_submission(state)
+                self._forget_submission(state, command_storage_key)
                 preserved = {
                     key: state[key]
                     for key in (
@@ -1141,7 +1146,7 @@ class PlanModePlugin:
                 if path not in files:
                     return "Plan display was refused: the requested file was not written by this session."
                 try:
-                    card = self._card_path()
+                    card = self._card_path(command_storage_key)
                     if card:
                         with open(path, "rb") as stream:
                             data = stream.read(65537)
@@ -1216,8 +1221,7 @@ class PlanModePlugin:
                 else:
                     approved_path = files[-1]
                 if "approval_card" in self._levers() and submission.get("card"):
-                    self._open_asks.discard((submission.get("clarify") or {}).get("tool_call_id", ""))
-                    state.pop("card_baseline", None)
+                    self._forget_submission(state, command_storage_key)
                 submission.pop("clarify", None)
                 state["active"] = False
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
@@ -1265,7 +1269,7 @@ class PlanModePlugin:
                     state.pop("light_note_seen", None)
                 submission = state.get("submission") or {}
                 if "approval_card" in self._levers() and submission.get("card"):
-                    self._open_asks.discard((submission.get("clarify") or {}).get("tool_call_id", ""))
+                    self._forget_submission(state)
                 submission.pop("clarify", None)
                 if submission.get("status") in {"pending", "awaiting"}:
                     submission["status"] = "rejected"
@@ -1291,9 +1295,7 @@ class PlanModePlugin:
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
                 state["pending_note"] = ""
-                self._forget_submission(state)
-                if "approval_card" in self._levers():
-                    state.pop("card_baseline", None)
+                self._forget_submission(state, command_storage_key)
                 state.pop("submission", None)
                 state.pop("approved_while_open", None)
                 self._clear_execution(state)
@@ -1389,7 +1391,7 @@ class PlanModePlugin:
             levers.discard("blocked_tools")  # the note must not call a tool the operator allowed blocked
         return levers
 
-    def _planning_note(self, state: dict, platform: str = "") -> str:
+    def _planning_note(self, state: dict, platform: str = "", storage_key: str = "") -> str:
         previous, plans_dir = state.get("previous_plan"), state.get("plans_dir")
         if not (isinstance(previous, str) and isinstance(plans_dir, str)
                 and _plans_dir_is_still_safe(plans_dir) and _path_is_inside(previous, plans_dir)
@@ -1397,19 +1399,24 @@ class PlanModePlugin:
             previous = ""
         return planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
                              commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform,
-                             reply_plan="plan_once" in self._levers() and _plan_once_visible(), card_path=self._card_path())
+                             reply_plan="plan_once" in self._levers() and _plan_once_visible(), card_path=self._card_path(storage_key))
 
-    def _card_path(self) -> bool:
+    def _card_path(self, storage_key: str = "") -> bool:
         reader = _session_reader()
         platform = reader("HERMES_SESSION_PLATFORM", "") if reader else ""
-        return "approval_card" in self._levers() and str(platform).strip().lower() not in _NO_CLARIFY_PLATFORMS
+        return ("approval_card" in self._levers() and not _cron_session_is_active()
+                and str(platform).strip().lower() not in _NO_CLARIFY_PLATFORMS
+                and self._hook_platforms.get(storage_key, "") not in _NO_CLARIFY_PLATFORMS)
 
     @staticmethod
     def _card_diff(baseline: dict, text: str) -> tuple[str, str]:
         before, after = baseline["text"].splitlines(), text.splitlines()
+        if max(len(before), len(after)) > 2000:
+            return "", ""
         added = removed = 0
         headings = []
-        changes = difflib.SequenceMatcher(None, before, after).get_opcodes()
+        groups = list(difflib.SequenceMatcher(None, before, after).get_grouped_opcodes(1))
+        changes = [change for group in groups for change in group]
         for lines, side in ((before, 0), (after, 1)):
             changed = set()
             for tag, a, b, c, d in changes:
@@ -1428,7 +1435,18 @@ class PlanModePlugin:
         summary = f"Changed since rev {baseline['revision']}: +{added}/−{removed} lines"
         if headings:
             summary += " in " + ", ".join(headings[:3])
-        diff = "\n".join(difflib.unified_diff(before, after, n=1, lineterm=""))
+        def span(start, end):
+            size = end - start
+            return str(start + 1) if size == 1 else f"{start + bool(size)},{size}"
+        lines = ["--- ", "+++ "] if groups else []
+        for group in groups:
+            lines.append(f"@@ -{span(group[0][1], group[-1][2])} +{span(group[0][3], group[-1][4])} @@")
+            for tag, a, b, c, d in group:
+                if tag != "insert":
+                    lines.extend((" " if tag == "equal" else "-") + line for line in before[a:b])
+                if tag in {"replace", "insert"}:
+                    lines.extend("+" + line for line in after[c:d])
+        diff = "\n".join(lines)
         if len(diff) > 2000:
             diff = diff[:1998].rsplit("\n", 1)[0] + "\n…"
         return summary[:300], diff
@@ -1700,14 +1718,17 @@ class PlanModePlugin:
             "revision": revision, "digest": digest, "path": path, "rule_key": rule_key,
             "tool_call_id": tool_call_id or None, "status": "pending", "submitted_at": _utc_now(),
         }
-        if self._card_path():
+        storage_key = _state_storage_key(state_key)
+        if self._card_path(storage_key):
             state["submission"]["card"] = True
-            baseline = state.pop("card_baseline", None)
+            baseline = self._card_baselines.pop(storage_key, None)
             if len(text.encode("utf-8")) <= 65536:
                 if baseline:
                     summary, excerpt = self._card_diff(baseline, text)
                     state["submission"].update(change_summary=summary, diff_excerpt=excerpt)
-                state["card_baseline"] = {"text": text, "revision": revision}
+                self._card_baselines[storage_key] = {"text": text, "revision": revision}
+                while len(self._card_baselines) > 32:
+                    self._card_baselines.popitem(last=False)
         if "plan_once" in self._levers() and path in state.get("plugin_saved_plans", []):
             state["submission"]["plugin_saved"] = True
         # Submitting asks the user, so from here only the user's approve, reject or off ends plan mode.
@@ -1778,7 +1799,8 @@ class PlanModePlugin:
                     submission = state.get("submission") or {}
                     if ("approval_card" in self._levers() and submission.get("card")
                             and submission.get("status") == "awaiting"
-                            and (submission.get("clarify") or {}).get("tool_call_id") in self._open_asks):
+                            and ((submission.get("clarify") or {}).get("nonce", ""),
+                                 (submission.get("clarify") or {}).get("tool_call_id", "")) in self._open_asks):
                         return _block_message(PLAN_MODE_TOOL, "Answer the open approval card first.")
                     capture = self._reply_captures.get((state_key, str(kwargs.get("tool_call_id") or "")))
                     if ("plan_once" in self._levers() and not call_args.get("path")
@@ -1818,11 +1840,11 @@ class PlanModePlugin:
                     call_id = str(kwargs.get("tool_call_id") or "")
                     card = submission.get("card") and "approval_card" in self._levers()
                     live = clarify.get("tool_call_id")
-                    if not call_id or (live and live != call_id and (not card or live in self._open_asks)):
+                    if not call_id or (live and live != call_id and (not card or (clarify["nonce"], live) in self._open_asks)):
                         return blocked
                     clarify["tool_call_id"] = call_id
                     if card:
-                        self._open_asks.add(call_id)
+                        self._open_asks.add((clarify["nonce"], call_id))
                     self._save_state(state_key, state)
                     return None
                 if (
@@ -1888,7 +1910,7 @@ class PlanModePlugin:
                     card = submission.get("card") and "approval_card" in self._levers()
                     clarify["tool_call_id"] = ""
                     if card:
-                        self._open_asks.discard(call_id)
+                        self._open_asks.discard((clarify["nonce"], call_id))
                     assert state_key is not None
                     self._save_state(state_key, state)
                     if kwargs.get("status") != "ok":
@@ -1900,7 +1922,7 @@ class PlanModePlugin:
                         except (TypeError, ValueError):
                             value = {}
                         outcome = value.get("outcome") if isinstance(value, dict) else None
-                        if outcome in {"cancelled", "timed_out", "undelivered"} or not answer:
+                        if (outcome is not None and outcome != "submitted") or not answer:
                             self._clarify_notes[(state_key, call_id)] = (
                                 kwargs.get("result"), "The user did not answer the approval card. Stop and wait for the user.")
                             while len(self._clarify_notes) > 256:
@@ -1917,7 +1939,7 @@ class PlanModePlugin:
                             submission["status"] = "stale"
                             state["pending_note"] = self._stale_note(submission["revision"])
                         else:
-                            self._approve_submission(state, submission, via="card" if card else "clarify")
+                            self._approve_submission(state, submission, via="card" if card else "clarify", storage_key=_state_storage_key(state_key))
                             if (card or "approved_text" in self._levers() or "lean_craft" in self._note_levers()
                                     or {"bridge_calls", "skill_policy", "edit_batch", "brief_final"} & self._note_levers()
                                     or self._saved_plan_note(submission)):
@@ -2036,6 +2058,10 @@ class PlanModePlugin:
 
             with self._lock:
                 state_key, state = self._state_for_hook(identity)
+                if "approval_card" in self._levers() and state_key:
+                    self._hook_platforms[_state_storage_key(state_key)] = str(kwargs.get("platform") or "").strip().lower()
+                    while len(self._hook_platforms) > 1024:
+                        self._hook_platforms.popitem(last=False)
                 message = kwargs.get("user_message")
                 builtin = (self._config("enforce_builtin_plan", True) is not False
                            and isinstance(message, str) and "[/plan — plan mode]" in message
@@ -2081,7 +2107,7 @@ class PlanModePlugin:
                     self._remember_session_id(state_key, state, kwargs.get("session_id"))
                     short = "light_notes" in self._levers() and state.get("light_note_seen")
                     note = (light_note(state.get("plans_dir"), levers=self._note_levers()) if short
-                            else self._planning_note(state, identity.surface))
+                            else self._planning_note(state, identity.surface, _state_storage_key(state_key)))
                     if "light_notes" in self._levers():
                         state["light_note_seen"] = True
                         self._save_state(state_key, state)
@@ -2095,10 +2121,11 @@ class PlanModePlugin:
                         awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
                                     f"question={clarify['question']}, choices={clarify['choices']}, "
                                     "or the user can run /planmode approve.")
+                        awaiting = awaiting if "approval_card" in self._levers() and submission.get("card") else awaiting[:399]
                         if short:
-                            parts.append(awaiting[:399])
+                            parts.append(awaiting)
                         else:
-                            note += "\n" + awaiting[:399]
+                            note += "\n" + awaiting
                     parts.append(note)
                 elif state.get("phase") == "executing":
                     state["executing_turns"] = int(state.get("executing_turns") or 0) + 1
@@ -2147,7 +2174,7 @@ class PlanModePlugin:
             if platform in {"cli", "terminal"}:
                 cli_key = f"cli:{os.getpid()}"
                 cli_storage = _state_storage_key(cli_key)
-                self._forget_submission(self._load_storage_state(cli_storage))
+                self._forget_submission(self._load_storage_state(cli_storage), cli_storage)
                 self._clear_state_family(
                     cli_storage, self._load_storage_state(cli_storage)
                 )
@@ -2161,7 +2188,7 @@ class PlanModePlugin:
                 else:
                     storage_key = _state_storage_key(identity.key)
                     state = self._load_storage_state(storage_key)
-                self._forget_submission(state)
+                self._forget_submission(state, storage_key)
                 self._clear_state_family(storage_key, state)
                 return
 
@@ -2188,7 +2215,7 @@ class PlanModePlugin:
                         matches[family_key] = state
             if len(matches) == 1:
                 storage_key, state = next(iter(matches.items()))
-                self._forget_submission(state)
+                self._forget_submission(state, storage_key)
                 self._clear_state_family(storage_key, state)
 
     def on_session_finalize(self, **kwargs: Any) -> None:
