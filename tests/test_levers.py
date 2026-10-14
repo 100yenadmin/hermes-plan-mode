@@ -693,13 +693,15 @@ def test_044_execution_order(make_plugin):
 
 @pytest.mark.parametrize("commits", [False, True])
 def test_045_default_lean(make_plugin, commits):
-    """0.4.5 default: the two planning levers render; the execution levers stay off, so the execute hint is 0.4.3's."""
+    """Default lean: the two 0.4.5 planning levers render, and edit_batch (lean since EB-2, #26) appends its execution
+    line to 0.4.3's execute hint; brief_final stays off."""
     cases = json.loads(NOTES_043.read_text())
     plugin = make_plugin(allow_commits=commits)
     plugin.ctx.settings.pop("levers", None)
-    assert plugin._levers() == pm.LEAN_LEVERS and NEW_044 & plugin._levers() == {"rename_scope", "test_plan_only"}
+    assert plugin._levers() == pm.LEAN_LEVERS
+    assert NEW_044 & plugin._levers() == {"rename_scope", "test_plan_only", "edit_batch"}
     hint = next(c for c in cases if c["kind"] == "execute_hint" and c["kwargs"]["commits"] is commits)
-    assert plugin._execute_hint() == hint["text"]
+    assert plugin._execute_hint() == hint["text"] + " " + render.EDIT_BATCH
     note = render.planning_note("/plans", levers=plugin._levers())
     assert render.RENAME_SCOPE.format(plans_dir="/plans") in note and render.TEST_PLAN_ONLY in note
     assert render.CHOICE_RECORD not in note

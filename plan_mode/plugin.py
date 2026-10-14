@@ -147,7 +147,7 @@ _APPROVAL_ASK = ("Ask it even if the user said not to ask questions: only the us
 LEAN_LEVERS = frozenset({"lean_craft", "todo_batch", "codex_compact", "sticky", "reentry", "approved_text",
                          "light_notes", "question_shape", "bridge_calls", "blocked_tools", "skill_policy",
                          "test_commands", "choice_fidelity", "todo_inline", "rename_scope", "test_plan_only",
-                         "approval_card"})
+                         "approval_card", "edit_batch"})
 PROFILE_DEFAULT = "lean"
 
 _PLAN_STYLES = frozenset({"compact", "core"})
