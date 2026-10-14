@@ -179,6 +179,19 @@ def test_061_bare_approve_refuses_newest_unsubmitted_plan(card, status):
     assert "Plan approved" in plugin.command(f"approve {newer.name}")
 
 
+def test_061_bare_approve_names_a_missing_submission(card):
+    plugin, path, result = card
+    older = path.with_name("older.md")
+    assert plugin.pre_tool_call("write_file", {"path": str(older)}) is None
+    older.write_text("# Older plan\n")
+    assert plugin.pre_tool_call("write_file", {"path": str(path)}) is None  # the submitted file is the newest again
+    path.unlink()
+    before = copy.deepcopy(state(plugin))
+    reply = plugin.command("approve")
+    assert "no longer" in reply and str(path) in reply and "never submitted" not in reply
+    assert state(plugin) == before and "approved_path" not in state(plugin)
+
+
 def test_061_bare_approve_refuses_unreadable_rejected_submission(card, monkeypatch):
     plugin, _, result = card
     answer_card(plugin, result, KEEP)

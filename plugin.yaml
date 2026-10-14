@@ -51,7 +51,7 @@ config_schema:
     type: bool
     default: true
     label: Approval card
-    description: "Ask for plan approval with one card in the lean profile; off uses Hermes' approval prompt, from the next plan submission."
+    description: "Ask for plan approval with one card in the lean profile; off uses Hermes' approval prompt. Change it between plans: it takes effect at once, and turning it off stops per-edit review of a running plan."
   allow_commits:
     type: bool
     default: false

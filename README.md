@@ -193,7 +193,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
-| Approval card (`approval_card`) | on | Ask for plan approval with one card in the lean profile. Off uses Hermes' approval prompt; applies from the next plan submission and wins over `levers` and `PLAN_MODE_LEVERS` |
+| Approval card (`approval_card`) | on | Ask for plan approval with one card in the lean profile. Off uses Hermes' approval prompt and wins over `levers` and `PLAN_MODE_LEVERS`. Change it between plans: it takes effect at once, and turning it off stops per-edit review of a running plan |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
 | Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask, so changes stay uncommitted for your review. This is an instruction, not enforced (see Known limitations). On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
@@ -223,7 +223,8 @@ the rest.
   session / always the rest of this plan. Each approval gets a fresh key, so always leaves one inert config entry that
   cannot approve another plan. If approvals turn off, review pauses and edits apply without a prompt. WhatsApp Cloud
   has no Other with 3 choices. To opt out, turn **Approval card** off (`approval_card: false`); the other lean settings
-  stay on. It applies from the next plan submission and wins over `levers` and `PLAN_MODE_LEVERS`. `plan_profile: classic`
+  stay on. It wins over `levers` and `PLAN_MODE_LEVERS`; change it between plans, because it takes effect at once
+  (turning it off stops per-edit review of a running plan, like turning Hermes approvals off). `plan_profile: classic`
   still works.
   - **PROOF-060** (2026-10-14, Hermes v0.21.6, gpt-6.1-sol medium; card vs the approval directive on two small tasks,
     4 runs each per arm):

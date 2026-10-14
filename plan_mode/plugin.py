@@ -1262,7 +1262,11 @@ class PlanModePlugin:
                 pinned = not remainder and bool(submission) and submission.get("status") != "approved"
                 card_open = pinned and self._ledger.is_inflight(submission.get("rule_key"))
                 if pinned:
-                    if files and files[-1] != submission.get("path"):
+                    if submission.get("path") not in files:
+                        return (f"Plan approval was refused: the submitted plan rev {submission.get('revision')}, "
+                                f"{submission.get('path')}, is no longer a tracked plan file (deleted or moved). "
+                                "Ask the agent to submit the plan again, or use /planmode approve <file> after reviewing it with /planmode show.")
+                    if files[-1] != submission.get("path"):
                         return (f"Plan approval was refused: the newest tracked plan, {files[-1]}, was never submitted. "
                                 "Ask the agent to submit it, or use /planmode approve <file> after reviewing it with /planmode show.")
                     text = None
