@@ -681,7 +681,7 @@ Run `/planmode status` in the affected session to check mode, phase and the plan
 The agent can read the same state with `plan_mode(action="status")`.
 From the next release, ask your Hermes agent to "report a problem with Plan Mode"; review its draft before filing.
 Use the [bug report form](https://github.com/100yenadmin/hermes-plan-mode/issues/new?template=bug_report.yml) and include plugin/Hermes versions and the affected surface.
-For log excerpts, try `hermes logs -n 300 | grep -i plan_mode`; the filter may return no lines because there is no dedicated plugin logger.
+For log excerpts, try `hermes logs -n 300 | grep -iE 'plan[-_]mode'`, and `hermes logs errors` for warnings. Hermes names this plugin `plan-mode` and its tool `plan_mode` in its logs; the plugin has no logger of its own, so expect only a few lines.
 Remove secrets, private message text and private paths before sharing diagnostics or logs.
 Report approval bypasses or writes outside the plans directory through a [private advisory](https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new).
 

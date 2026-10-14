@@ -9,7 +9,7 @@ body:
     attributes:
       value: |
         Thanks for the report. From the next release, your Hermes agent can draft it for you: ask it to "report a problem with Plan Mode".
-        **Security problems** (approval bypass, unapproved plans, or plan writes outside the plans directory, or anything that exposes a secret) go to a [private advisory](https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new), not here.
+        **Security problems** (approval bypass, unapproved plans, plan writes outside the plans directory, or anything that exposes a secret) go to a [private advisory](https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new), not here.
         **Problems in Hermes itself** belong in [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent/issues).
   - type: textarea
     id: what_happened
@@ -52,7 +52,8 @@ body:
     attributes:
       label: Where it happened
       options:
-        - CLI/TUI
+        - Classic CLI
+        - TUI
         - Desktop app
         - Telegram
         - Discord
@@ -77,11 +78,11 @@ body:
     id: logs
     attributes:
       label: Relevant log lines
-      description: Short excerpts only, for example from `hermes logs -n 300 | grep -i plan_mode`. Leave out tokens, keys and private message text.
+      description: Short excerpts only, for example from `hermes logs -n 300 | grep -iE 'plan[-_]mode'` or `hermes logs errors`. Leave out tokens, keys and private message text.
       render: text
   - type: markdown
     attributes:
-      value: The log filter is best-effort and may return no lines; Plan Mode has no dedicated logger. Redact private paths and plan contents as well as secrets.
+      value: Hermes logs only a few Plan Mode lines (the plugin has no logger of its own), so the filter may find little. Redact private paths and plan contents as well as secrets.
   - type: checkboxes
     id: checks
     attributes:
