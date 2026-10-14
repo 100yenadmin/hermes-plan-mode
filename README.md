@@ -296,8 +296,8 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
 `light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
-`todo_inline`, `rename_scope`, `test_plan_only` and `approval_card` (17 levers), plus `plan_once` on TUI, Desktop and
-`hermes serve` sessions, and `write_once` on the classic interactive CLI. `plan_skill` still opts into a skill's plan format. Eight more are measured but in no
+`todo_inline`, `rename_scope`, `test_plan_only`, `approval_card` and `edit_batch` (18 levers), plus `plan_once` on TUI, Desktop and
+`hermes serve` sessions, and `write_once` on the classic interactive CLI. `plan_skill` still opts into a skill's plan format. Seven more are measured but in no
 profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces the profile's
 set, including the automatic `plan_once` and `write_once`, so include the lean levers you want to keep:
 
@@ -334,9 +334,18 @@ plugins:
 - `choice_record` (opt-in) tells the model to record answered clarify choices in Assumptions as the user's decision.
   With it, 6 of 6 plans did so in S45. Without it, the probe counted 2 of 6, but read directly 4 of 6 already
   attributed the choice to the user, so the deficit the lever targets was not shown and it stays opt-in.
-- `edit_batch` (opt-in) tells the model to edit each file in one call where the tool allows, and to send edits to
-  different files, including tests, in the same response. Execution rounds with edits fell from 49 to 27 on the two
-  edit-heavy tasks in S45 (48 to 20 in S44).
+- `edit_batch` (lean since 0.6.7) tells the model to edit each file in one call where the tool allows, and to send
+  edits to different files, including tests, in the same response. Execution rounds with edits fell from 49 to 27 on
+  the two edit-heavy tasks in S45 (48 to 20 in S44). It joined lean after EB-2 (2026-10-14, pre-registered, decided by
+  a blind adjudicator): 0.6.6 lean with vs without it, on T8 × 8 and on PARITY-4's N1 and L2 × 4 each per arm, same day,
+  same harness, HP only, three tasks, gpt-6.1-sol. Results:
+  - 16 of 16 runs verified in both arms;
+  - T8 passing tests per run 27.5 vs 26.375 (1.04×, guard ≥ 0.85×);
+  - execution model calls per run 7.9 vs 11.8 (0.67×, 95% CI 0.56–0.81);
+  - execution cost-weighted tokens 0.94× (95% CI 0.75–1.18).
+
+  The first run of the same test, EB-1, was not counted for the decision. One run's call count included a Hermes
+  background-review call, which made the call and cost bars undecided; its results and T8 bars held. #26 has both.
 - `brief_final` (opt-in) tells the model to finish in 2–4 lines with what changed and the test result. The median final
   reply fell from 128.5 to 64 output tokens in S45 (117.5 to 62.5 in S44).
 - Speed is labelled, not gated: S45's arm with the three planning levers (`rename_scope`, `test_plan_only`,

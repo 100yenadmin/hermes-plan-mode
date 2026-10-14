@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.7 - 2026-10-14
+
+- **`edit_batch` joins the default lean profile (#26, #30).** After approval, the agent edits each file in one call
+  where the tool allows it, and sends edits to different files, including the tests, in the same response. Set `levers`
+  without it to opt out.
+  - Measured in EB-2. It was pre-registered and frozen before the runs, and a blind adjudicator applied the bars.
+    0.6.6 lean with and without `edit_batch` ran on T8 × 8 and PARITY-4's N1 and L2 × 4 each per arm, on Hermes 0.21.6
+    `hermes serve` with gpt-6.1-sol:
+    - verified: 16 of 16 in both arms;
+    - T8 passing tests per run: 27.5 vs 26.375 (#26's guard is ≥ 0.85×);
+    - execution model calls per run: 7.9 vs 11.8 (0.67×, 95% CI 0.56–0.81);
+    - execution cost-weighted tokens: 0.94× (95% CI 0.75–1.18).
+  - A first run, EB-1, ended undecided on calls and cost. A Hermes background-review call in one run broke the call
+    count; its results and T8 bars held. EB-2 is a fresh replication that counts only the main agent loop.
+  - R066 nominated this lever. It measured 0.6.6 against Codex plan mode on the same day (exploratory):
+    - both verified 12 of 12;
+    - blind judges preferred Plan Mode's plans in 11 and 12 of 12;
+    - cost-weighted tokens were 1.08–1.24× Codex's on W1 and A1, and 1.9–2.5× on N1 and L2.
+- Report skill: a yes to the secrets question alone does not approve publishing; only an explicit yes to publishing,
+  given after the user has seen the text, does (#65, from the plugin community kit).
+
 ## 0.6.6 - 2026-10-14
 
 - **`write_once` joins lean on the interactive classic CLI (#58).** The agent writes each plan revision to a new file
