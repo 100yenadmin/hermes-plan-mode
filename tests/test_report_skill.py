@@ -94,3 +94,12 @@ def test_real_plugin_manager_registers_the_report_skill(tmp_path, monkeypatch):
     finally:
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)
+
+
+def test_model_written_gh_arguments_are_single_quoted():
+    """A title or search words in double quotes would let the shell run `$()` from model-written text."""
+    gh_lines = [line for line in _skill_text().splitlines() if "gh issue" in line]
+    assert any("--title '<short title>'" in line for line in gh_lines)
+    assert any("--search '<two or three key words>'" in line for line in gh_lines)
+    assert not any(re.search(r'--(title|search) "', line) for line in gh_lines)
+
