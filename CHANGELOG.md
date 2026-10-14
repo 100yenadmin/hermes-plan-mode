@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.6 - 2026-10-14
+
+- **`write_once` joins lean on the interactive classic CLI (#58).** The agent writes each plan revision to a new file
+  with `write_file`, and Hermes prints the new file in full as an inline diff. When the plugin can confirm that diff
+  showed the whole file it is submitting, the agent no longer retypes the plan in its reply. The diff must come from
+  inline diffs on, a local file backend, at most 78 lines, no control characters and no line starting with `++ `, with
+  the same bytes at submit. Otherwise the agent shows the plan as before. Single-query mode (`hermes chat -q`), the TUI,
+  Desktop and messaging are unchanged. Approval is unchanged.
+  - Measured in SPEED-2 (pre-registered, 12 runs on PARITY-4 W1 and L2, Hermes 0.21.6, gpt-6.1-sol; #30):
+    - safety and display truth held in every run (6 of 6 flagged runs really showed the whole plan);
+    - retyped characters fell from the whole plan to 0;
+    - planning output tokens fell to 0.65× on both tasks, with the same number of model calls and the same plan length;
+    - blind pairwise judges (Claude and Codex) preferred the write_once plan in 4 of 6 pairs each and the 0.6.5 plan in
+      at most 1.
+  - The pre-registered planning-time gate failed: W1 1.11×, L2 0.79×, geometric mean 0.94× against a bar of 0.90×.
+    write_once ships on the owner's metric: plan quality first, then model calls and tokens. Wall time is reported,
+    not gated.
+- Report skill:
+  - the agent saves the issue title and the search words to files and passes them with `"$(cat '<file>')"`, so quotes,
+    `$()` and backticks in model-written text stay text (#59);
+  - file paths are quoted;
+  - security problems that clearly come from Hermes itself go to Hermes' private route;
+  - when the CLI is missing or fails, the paste fallback also covers a comment on the matching issue (#61).
+
 ## 0.6.5 - 2026-10-14
 
 - Add the `plan-mode-report-problem` skill, registered with `ctx.register_skill`. Ask the agent to "report a problem

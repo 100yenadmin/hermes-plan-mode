@@ -367,6 +367,12 @@ plugins:
 - `plan_once` (in lean on TUI, Desktop and `hermes serve`): Hermes reads `display.show_commentary` when it builds the
   agent, so after changing that setting start a new session before relying on `plan_once`. The approval card shows
   the saved plan up to 3,500 characters.
+- `write_once` (in lean on the interactive classic CLI): the agent writes each plan revision to a new file, Hermes
+  prints it in full as an inline diff, and the agent skips retyping it when the plugin can confirm the diff showed the
+  whole file (see Compatibility). In SPEED-2 (pre-registered, 12 runs on two PARITY-4 tasks, #30) it cut planning output
+  tokens to 0.65× with the same number of model calls and the same plan length, and two blind judges found no worse
+  plans. Planning was not faster: the pre-registered planning-time gate failed (0.94×, bar 0.90×). It joins lean on the
+  owner's metric, plan quality and tokens; wall time is reported, not gated.
 
 ### Compact plans
 
