@@ -561,3 +561,47 @@ def test_home_relative_target_counts_as_outside(reviewed, session_env, tmp_path,
     patch = f"*** Begin Patch\n{deletes}\n*** Delete File: ~/victim.py\n*** End Patch"
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
     assert len(text) <= limit and "(+0/−0 lines, 10 deletes, 1 path outside the working directory)" in text
+
+
+def test_displayed_paths_keep_their_whitespace(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    patch = "*** Begin Patch\n*** Delete File: a  b.py\n*** Delete File: c\td.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "patch a  b.py, c\td.py (+0/−0 lines, 2 deletes) — Delete File: a  b.py ⏎ Delete File: c\td.py" in text
+
+
+def test_large_patch_preview_is_fast(reviewed, session_env, tmp_path):
+    import time
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    patch = "*** Begin Patch\n" + "\n".join(f"*** Delete File: sub/d{n}.py" for n in range(10000)) + "\n*** End Patch"
+    start = time.perf_counter()
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert time.perf_counter() - start < 5 and "10000 deletes" in text and len(text) <= 1000
+
+
+def test_outside_target_is_named_first(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    session_env["TERMINAL_CWD"] = str(cwd)
+    adds = "\n".join(f"*** Add File: a{n}_" + "x" * 120 + ".py\n+x" for n in range(9))
+    patch = f"*** Begin Patch\n{adds}\n*** Add File: ../out.py\n+y\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    out = str((tmp_path / "out.py").resolve())
+    assert f"patch {out}, a0_" in text and "1 path outside the working directory)" in text
+
+
+def test_a_long_removed_line_leaves_room_for_the_replacement(reviewed, session_env):
+    plugin, _ = reviewed
+    text = plugin.pre_tool_call("patch", {"path": "a.py", "old_string": "o" * 2000, "new_string": "new"})["message"]
+    assert len(text) <= 1000 and text.endswith("… ⏎ +new")
+
+
+def test_a_long_move_keeps_its_destination(reviewed, session_env):
+    plugin, _ = reviewed
+    source = "s" * 200 + ".py"
+    patch = f"*** Begin Patch\n*** Move File: {source} -> dest.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith(f"Move File: {source} -> dest.py")

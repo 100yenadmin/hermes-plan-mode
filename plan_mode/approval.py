@@ -238,38 +238,63 @@ _LINE_BREAKS = re.compile(r"[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), session_key="", cwd=None) -> str:
     """Bounded file-edit preview; targets are extracted by the planning writer parser."""
-    def relative(path):
-        return str(path.relative_to(Path(cwd))) if path.is_relative_to(Path(cwd)) else str(path)
-
+    try:
+        base = os.path.realpath(cwd) if cwd is not None else None
+    except (OSError, ValueError, TypeError):
+        base = str(cwd)
+    prefix = base.rstrip(os.sep) + os.sep if base is not None else None
+    resolved, classified = {}, {}  # memos: a large patch names many files, often in the same directories
     outside = []  # targets outside the session cwd, counted in the header so the character cap cannot hide them
 
-    def display(target, header=False):
-        shown, inside = str(target), True
+    def realpath(path):
+        if path not in resolved:
+            resolved[path] = os.path.realpath(path)
+        return resolved[path]
+
+    def within(path):  # string checks: pathlib's relative_to dominated large patches
+        return path == base or path.startswith(prefix)
+
+    def relative(path):
+        return "." if path == base else path[len(prefix):] if path.startswith(prefix) else path
+
+    def classify(shown):
+        inside = True
         try:
-            if cwd is not None and shown and not shown.startswith("~"):
+            if base is not None and shown and not shown.startswith("~"):
                 # Resolve the parent directories, so a symlinked directory cannot hide an outside target, but keep
                 # the entry itself: a delete or move acts on a symlink, while a content write goes through it.
                 # Relative targets resolve from the session cwd, as the file tools do.
-                given = Path(target) if Path(target).is_absolute() else Path(cwd) / target
-                entry = (Path(os.path.realpath(given.parent)) / given.name if given.name not in ("", ".", "..")
-                         else Path(os.path.realpath(given)))
-                shown, inside = relative(entry), entry.is_relative_to(Path(cwd))
+                given = shown if os.path.isabs(shown) else os.path.join(base, shown)
+                parent, name = os.path.split(given)
+                entry = os.path.join(realpath(parent), name) if name not in ("", ".", "..") else realpath(given)
+                shown, inside = relative(entry), within(entry)
                 if os.path.islink(entry):
-                    real = Path(os.path.realpath(entry))
-                    shown, inside = shown + " → " + relative(real), inside and real.is_relative_to(Path(cwd))
+                    real = realpath(entry)
+                    shown, inside = shown + " → " + relative(real), inside and within(real)
         except (OSError, ValueError, TypeError):
             try:  # an unresolvable path is shown as given; an absolute one outside the cwd still counts
-                inside = not Path(shown).is_absolute() or Path(shown).is_relative_to(Path(cwd))
+                inside = not os.path.isabs(shown) or within(shown)
             except (ValueError, TypeError):
                 inside = False
-        if cwd is not None and shown.startswith("~"):
+        if base is not None and shown.startswith("~"):
             inside = False  # the host expands "~" to a profile home that can lie anywhere: shown as given, counted
+        # Only line breaks are replaced (the CLI prompt is one line); other whitespace is part of the name.
+        return _LINE_BREAKS.sub(" ", shown), inside
+
+    def display(target, header=False):
+        key = str(target)
+        if key not in classified:
+            classified[key] = classify(key)
+        shown, inside = classified[key]
         if header and not inside:
             outside.append(shown)
-        return " ".join(shown.split())
+        return shown
 
     limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
-    paths = ", ".join(display(target, header=True) for target in targets) or "(unknown path)"
+    shown = [display(target, header=True) for target in targets]
+    # Outside targets come first, so the cap below cannot cut the name the outside count refers to.
+    flagged = set(outside)
+    paths = ", ".join([x for x in shown if x in flagged] + [x for x in shown if x not in flagged]) or "(unknown path)"
     if len(paths) > limit // 4:  # long names must not push the counts below out of the capped message
         paths = paths[:limit // 4 - 1] + "…"
     operations = []  # deletes and moves: always listed, since they carry no +/- lines
@@ -317,7 +342,9 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
         sample = (old[:max(4, 8 - len(new))] + new)[:8]  # a long removal still leaves room for the replacement
         added, removed = len(new), len(old)
     hidden = len(body) - len(sample)
-    lines = [_LINE_BREAKS.sub(" ", line) for line in operations + sample]
+    width = max(40, limit // 6)  # one long content line must not crowd out the rest of the preview
+    lines = [_LINE_BREAKS.sub(" ", line) for line in operations] + [  # operations stay whole: a move keeps its destination
+        line if len(line) <= width else line[:width - 1] + "…" for line in (_LINE_BREAKS.sub(" ", x) for x in sample)]
     if hidden:
         lines.append(f"… {hidden} more line{'' if hidden == 1 else 's'}")
     # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
