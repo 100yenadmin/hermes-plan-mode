@@ -435,3 +435,39 @@ def test_correlation_still_required(card, mismatch):
     plugin.post_tool_call("clarify", args, tool_call_id="wrong" if mismatch == "call_id" else "ask",
                           status="ok", result=host_result(result, **changes))
     assert state(plugin)["active"] and state(plugin).get("phase") != "executing"
+
+
+def test_heading_scan_is_linear_on_long_lines():
+    import time
+    line = "# a" + " " * 3000 + "b"
+    start = time.monotonic()
+    summary, _ = pm.PlanModePlugin._card_diff({"text": line + "\nold\n", "revision": 1}, line + "\nnew\n")
+    assert time.monotonic() - start < 1.0
+    assert summary.startswith("Changed since rev 1: +1/−1 lines in a")
+    closed, _ = pm.PlanModePlugin._card_diff({"text": "## Tests ##\nold\n", "revision": 2}, "## Tests ##\nnew\n")
+    assert closed.endswith(" in Tests")
+
+
+def test_hook_platform_refresh_keeps_recent_session(make_plugin, session_env):
+    session_env["HERMES_SESSION_PLATFORM"] = ""
+    plugin = make_plugin("approval_card")
+    path = write_plan(plugin)
+    plugin.pre_llm_call(platform="acp")
+    key = next(reversed(plugin._hook_platforms))
+    for index in range(1023):
+        plugin._hook_platforms[f"other-{index}"] = ""
+    plugin.pre_llm_call(platform="acp")
+    plugin._hook_platforms["newest"] = ""
+    while len(plugin._hook_platforms) > 1024:
+        plugin._hook_platforms.popitem(last=False)
+    assert plugin._hook_platforms.get(key) == "acp"
+    assert plugin.pre_tool_call("plan_mode", {"action": "submit", "path": str(path)}, **IDS)["action"] == "approve"
+
+
+@pytest.mark.parametrize("hook,card_note", [("acp", False), ("cli", True)])
+def test_agent_entered_note_follows_session_platform(make_plugin, session_env, hook, card_note):
+    session_env["HERMES_SESSION_PLATFORM"] = ""
+    plugin = make_plugin("approval_card")
+    plugin.pre_llm_call(platform=hook)
+    message = json.loads(plugin.tool({"action": "on", "task": "parser"}))["message"]
+    assert ("verbatim, never a summary" in message) is card_note

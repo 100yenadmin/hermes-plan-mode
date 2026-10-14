@@ -1126,7 +1126,7 @@ class PlanModePlugin:
                 if entered_by == "agent":
                     # The turn's pre_llm_call note has already run, so the plan format and commit rule come with the result.
                     agent_note = _AGENT_NOTE_BRIDGE if "bridge_calls" in self._note_levers() else _AGENT_NOTE
-                    message += "\n" + self._planning_note(state, identity.surface) + f" {agent_note}"
+                    message += "\n" + self._planning_note(state, identity.surface, command_storage_key) + f" {agent_note}"
                     if "light_notes" in self._levers():
                         state["light_note_seen"] = True
                         self._save_command_state(identity.key, command_storage_key, state)
@@ -1427,9 +1427,9 @@ class PlanModePlugin:
                         added += d - c
             heading = ""
             for index, line in enumerate(lines):
-                match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
+                match = re.match(r"^\s{0,3}#{1,6}\s+(\S.*)", line)  # linear; the lazy/trailing form backtracks cubically
                 if match:
-                    heading = match[1]
+                    heading = match[1].rstrip().rstrip("#").rstrip()
                 if index in changed and heading and heading not in headings:
                     headings.append(heading)
         summary = f"Changed since rev {baseline['revision']}: +{added}/−{removed} lines"
@@ -2059,6 +2059,7 @@ class PlanModePlugin:
             with self._lock:
                 state_key, state = self._state_for_hook(identity)
                 if "approval_card" in self._levers() and state_key:
+                    self._hook_platforms.pop(_state_storage_key(state_key), None)  # re-insert: most recently used last
                     self._hook_platforms[_state_storage_key(state_key)] = str(kwargs.get("platform") or "").strip().lower()
                     while len(self._hook_platforms) > 1024:
                         self._hook_platforms.popitem(last=False)
