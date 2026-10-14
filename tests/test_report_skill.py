@@ -109,7 +109,9 @@ def _unsafe_gh_arguments(line: str) -> list[str]:
     command = line[line.index("gh issue"):].split("`")[0]
     words = shlex.split(command)
     unsafe = []
-    for flag, value in zip(words, words[1:]):
+    pairs = list(zip(words, words[1:]))
+    pairs += [tuple(word.split("=", 1)) for word in words if word.startswith("--") and "=" in word]
+    for flag, value in pairs:
         if flag in ("--title", "--search") and not _FILE_SUBST.fullmatch(value):
             unsafe.append(f"{flag} {value}")
         elif flag == "--body-file" and not _FILE_PATH.fullmatch(value):
@@ -125,7 +127,11 @@ def test_unsafe_gh_argument_check_catches_inline_values():
         "--title Plan Mode stalls"
     ]
     assert _unsafe_gh_arguments("gh issue comment 7 -R o/r --body-file <draft file>") == ["--body-file <draft"]
+    assert _unsafe_gh_arguments('gh issue create -R o/r --title="x $(id)" --body-file=notes.md') == [
+        "--title x $(id)", "--body-file notes.md"
+    ]
     assert _unsafe_gh_arguments("gh issue list -R o/r --search \"$(cat '<search file>')\"") == []
+    assert _unsafe_gh_arguments("gh issue list -R o/r --search=\"$(cat '<search file>')\"") == []
 
 
 @pytest.mark.parametrize("path", [REPORT_SKILL_PATH, REPO_ROOT / "AGENTS.md"], ids=["skill", "agents"])

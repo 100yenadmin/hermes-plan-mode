@@ -16,7 +16,7 @@ While Plan Mode is on in this session, it blocks shell commands and file writes 
 Security problems include a side-effecting tool running while Plan Mode should block it, a plan approved without the user, or plan files written outside the fixed plans directory.
 For any of these, or anything that exposes a secret, skip the public issue. Give the user the private reporting form and stop:
 https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new
-If the diagnostics in step 3 clearly place it in Hermes itself rather than this plugin, give Hermes' private security route instead: https://github.com/NousResearch/hermes-agent/security
+If what the user has already seen clearly places it in Hermes itself rather than this plugin, give Hermes' private security route instead: https://github.com/NousResearch/hermes-agent/security
 
 ## 2. Use a designated support channel if the deployment has one
 
