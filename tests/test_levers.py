@@ -16,7 +16,7 @@ pytestmark = pytest.mark.usefixtures("directive_lean")  # the directive path; se
 
 
 LEVER_NAMES = {
-    "plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
+    "plan_once", "write_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
     "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
     "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",

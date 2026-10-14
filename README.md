@@ -297,9 +297,9 @@ early, for example on the iteration limit, say "continue": the plan is still in 
 Lean is a fixed set of levers: `lean_craft`, `todo_batch`, `codex_compact`, `sticky`, `reentry`, `approved_text`,
 `light_notes`, `question_shape`, `bridge_calls`, `blocked_tools`, `skill_policy`, `test_commands`, `choice_fidelity`,
 `todo_inline`, `rename_scope`, `test_plan_only` and `approval_card` (17 levers), plus `plan_once` on TUI, Desktop and
-`hermes serve` sessions. `plan_skill` still opts into a skill's plan format. Eight more are measured but in no
+`hermes serve` sessions, and `write_once` on the classic interactive CLI. `plan_skill` still opts into a skill's plan format. Eight more are measured but in no
 profile. To try one, or to turn `plan_once` off, set `levers` to the full list you want. It replaces the profile's
-set, including the automatic `plan_once`, so include the lean levers you want to keep:
+set, including the automatic `plan_once` and `write_once`, so include the lean levers you want to keep:
 
 ```yaml
 plugins:
@@ -605,6 +605,11 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 ## Compatibility
 
 - **Classic CLI:** enforced on Hermes 0.21.3 (`v2026.9.14`) and newer; the plugin requires 0.21.3.
+  With `write_once` (lean, interactive classic CLI only), the agent writes each plan revision to a new file with
+  `write_file`, and the CLI prints the new file as an inline diff. The agent skips retyping the plan only when the
+  plugin can confirm that diff showed the whole file it is submitting: inline diffs on, a local file backend, at most
+  78 lines, no control characters and no line starting with `++ `. Otherwise it shows the plan as before. Single-query
+  mode (`hermes chat -q`) never qualifies. Approval is unchanged.
 - **Messaging gateway, TUI and Desktop:** Hermes 0.21.5 (`v2026.9.24`) or newer. Earlier builds refuse
   `/planmode on` on these surfaces instead of pretending plan mode is active.
 - **0.21.6 recommended.** On 0.21.5, turning a tool-providing plugin on from Desktop, the TUI or the dashboard can

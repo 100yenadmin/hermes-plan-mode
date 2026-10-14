@@ -115,7 +115,7 @@ _INLINE_TODO_HINT = (
     "create the list in the same response as your first edit, send status updates with your next edit or test call, "
     "and mark the last items completed in the same response as the final test run; batch independent read-only checks."
 )
-_LEVERS = frozenset({"plan_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
+_LEVERS = frozenset({"plan_once", "write_once", "lean_craft", "todo_batch", "codex_compact", "question_shape",
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
                      "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
                      "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
@@ -531,8 +531,8 @@ class PlanModePlugin:
         self._lock = threading.RLock()
         self._ledger = DecisionLedger()
         self._active_keys: set[str] = set()
-        # (session_id, tool_call_id) -> (state key, targets, activation id) awaiting post_tool_call.
-        self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any]] = {}
+        # (session_id, tool_call_id) -> (state key, targets, activation id, fresh candidates).
+        self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any, dict[str, bool]]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
@@ -1019,6 +1019,7 @@ class PlanModePlugin:
             state["submission"] = submission
             state["approved_snapshot"] = str(snapshot)  # the executing pointer re-reads this after a compaction
         state["active"] = False
+        state.pop("fresh_writes", None)
         state.pop("review", None)
         state.pop("edit_review", None)
         for field in ("activation_id", "entered_by", "agent_activation_id"):
@@ -1118,12 +1119,15 @@ class PlanModePlugin:
                 }
                 message = (
                     (f"No human has approved plan rev {revision} yet. Plan mode stays on. "
-                     "Show the complete plan file verbatim, not a summary. "
+                     + ("The user has already seen the complete plan file in the terminal; do not restate it. "
+                        if submission.get("shown_in_full") else "Show the complete plan file verbatim, not a summary. ")
                      + (f"Show this diff excerpt too:\n{submission['diff_excerpt']}\n\n" if submission.get("diff_excerpt") else "")
                      + "Then ask once with the clarify tool, passing exactly one question: " if card else
                      "Hermes approved this call automatically on this host (yolo, approvals.mode: off, or an unattended surface such as the API server or a webhook), "
                      f"so no human has approved plan rev {revision} yet. Plan mode stays on. "
-                     "Make sure the plan is shown, then ask once with the clarify tool, passing exactly one question: ") +
+                     + ("The user has already seen the complete plan file in the terminal; do not restate it. Then ask"
+                        if submission.get("shown_in_full") else "Make sure the plan is shown, then ask")
+                     + " once with the clarify tool, passing exactly one question: ") +
                     f"question={question} and choices={choices} "
                     "(these exact strings, this order, not multi-select). "
                     + (_APPROVAL_ASK if "approval_ask" in self._levers() else "") +
@@ -1408,6 +1412,7 @@ class PlanModePlugin:
                     self._forget_submission(state, command_storage_key)
                 submission.pop("clarify", None)
                 state["active"] = False
+                state.pop("fresh_writes", None)
                 state.pop("review", None)
                 state.pop("edit_review", None)
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
@@ -1477,6 +1482,7 @@ class PlanModePlugin:
                         "reject or off can end it."
                     )
                 state["active"] = False
+                state.pop("fresh_writes", None)
                 state.pop("review", None)
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
@@ -1581,6 +1587,8 @@ class PlanModePlugin:
                 return set()
             # plan_once was measured on tui_gateway sessions only (rounds 7 and 8), so it joins lean only there.
             levers = set(LEAN_LEVERS) | ({"plan_once"} if _tui_ui_session_id() else set())
+            if self._classic_cli() is not None:
+                levers.add("write_once")
         else:
             names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
             levers = set(_LEVERS) if "all" in names else names & _LEVERS
@@ -1590,6 +1598,72 @@ class PlanModePlugin:
         if card is False or (isinstance(card, str) and card.strip().lower() in {"false", "off", "no", "0"}):
             levers.discard("approval_card")
         return levers
+
+    def _classic_cli(self):
+        """Use the same manager seam as ctx.dispatch_tool; gateway and one-shot calls never qualify."""
+        try:
+            reader = _session_reader()
+            platform = str(reader("HERMES_SESSION_PLATFORM", "") or "").strip().lower() if reader else ""
+            if platform not in {"", "cli", "terminal", "local"} or _tui_ui_session_id() or _cron_session_is_active():
+                return None
+            cli = self.ctx._manager._cli_ref
+            return cli if cli is not None and not getattr(cli, "_single_query_mode", False) else None
+        except Exception:
+            return None
+
+    def _track_fresh_write(self, state_key: str, state: dict, name: str, targets: list[str]) -> dict[str, bool]:
+        """Mark which plan targets a write_file creates; any other write to a path drops its receipt.
+
+        Fails open to "not fresh": an error here must never block the plan write itself.
+        """
+        fresh: dict[str, bool] = {}
+        try:
+            receipts = state.get("fresh_writes")
+            dropped = False
+            for target in targets:
+                path = os.path.realpath(target)
+                if isinstance(receipts, dict) and receipts.pop(path, None) is not None:
+                    dropped = True
+                collision = False
+                for _, pending_targets, _, candidates in self._pending_plan_writes.values():
+                    if any(os.path.realpath(item) == path for item in pending_targets):
+                        candidates[path] = False
+                        collision = True
+                fresh[path] = (name == "write_file" and len(targets) == 1
+                               and "write_once" in self._levers()
+                               and not os.path.lexists(target) and not collision)
+            if dropped:
+                self._save_state(state_key, state)
+        except Exception:
+            return {}
+        return fresh
+
+    def _shown_in_full(self, state: dict, path: str, digest: str) -> bool:
+        """A structural display guarantee only; never changes approval or its digest checks."""
+        try:
+            if "write_once" not in self._levers():
+                return False
+            cli = self._classic_cli()
+            if cli is None or (os.getenv("TERMINAL_ENV") or "local").lower() != "local":
+                return False
+            for name in ("start", "complete"):
+                callback = getattr(cli.agent, f"tool_{name}_callback")
+                if (getattr(callback, "__self__", None) is not cli
+                        or getattr(callback, "__func__", None) is not getattr(type(cli), f"_on_tool_{name}")):
+                    return False
+            data = Path(path).read_bytes()
+            # The receipt, the bytes read now and the digest being approved must all be the same bytes.
+            if not (state.get("fresh_writes", {}).get(path) == hashlib.sha256(data).hexdigest() == digest):
+                return False
+            text = data.decode("utf-8", errors="strict")
+            from agent.display import _MAX_INLINE_DIFF_LINES
+
+            return bool(text) and len(text.splitlines()) <= _MAX_INLINE_DIFF_LINES - 2 and not (
+                any((ord(c) < 32 and c not in "\n\t") or 127 <= ord(c) <= 159
+                    or c in "\ufeff\u2028\u2029" for c in text)
+                or any(line.startswith("++ ") for line in text.splitlines()))
+        except Exception:
+            return False
 
     def _note_levers(self) -> set[str]:
         levers = self._levers()
@@ -1613,7 +1687,7 @@ class PlanModePlugin:
         return planning_note(plans_dir, style=self._plan_style(), plan_skill=self._plan_skill(),
                              commits=self._allow_commits(), levers=self._note_levers(), previous_plan=previous, platform=platform,
                              reply_plan="plan_once" in self._levers() and _plan_once_visible(), card_path=self._card_path(storage_key),
-                             ui_session=bool(_tui_ui_session_id()))
+                             ui_session=bool(_tui_ui_session_id()), classic_cli=self._classic_cli() is not None)
 
     def _card_path(self, storage_key: str = "") -> bool:
         reader = _session_reader()
@@ -1935,6 +2009,7 @@ class PlanModePlugin:
         state["submission"] = {
             "revision": revision, "digest": digest, "path": path, "rule_key": rule_key,
             "tool_call_id": tool_call_id or None, "status": "pending", "submitted_at": _utc_now(),
+            "shown_in_full": self._shown_in_full(state, path, digest),
         }
         storage_key = _state_storage_key(state_key)
         if self._card_path(storage_key):
@@ -2105,6 +2180,7 @@ class PlanModePlugin:
                             "only after restoring a non-symlink plan root.",
                         )
                     if all(_path_is_inside(target, plans_dir) for target in targets):
+                        fresh = self._track_fresh_write(state_key, state, name, targets)
                         call_id = str(kwargs.get("tool_call_id") or "")
                         if not call_id:
                             # Hosts without tool_call_id keep 0.1.6 pre-write tracking.
@@ -2112,7 +2188,7 @@ class PlanModePlugin:
                             return None
                         pending = self._pending_plan_writes
                         pending_key = (str(kwargs.get("session_id") or ""), call_id)
-                        pending[pending_key] = (state_key, list(targets), state.get("activation_id"))
+                        pending[pending_key] = (state_key, list(targets), state.get("activation_id"), fresh)
                         while len(pending) > 256:
                             pending.pop(next(iter(pending)))
                         return None
@@ -2279,13 +2355,20 @@ class PlanModePlugin:
                 )
                 if pending is None or kwargs.get("status") != "ok":
                     return
-                state_key, targets, activation_id = pending
+                state_key, targets, activation_id, fresh = pending
                 call_args = args if isinstance(args, dict) else {}
                 if _write_targets(str(tool_name or ""), call_args) != targets:
                     return
                 state = self._load_state(state_key)
                 # Only the activation that allowed the write may track it.
                 if state.get("active") and state.get("activation_id") == activation_id:
+                    if tool_name == "write_file" and len(targets) == 1:
+                        path = os.path.realpath(targets[0])
+                        if fresh.get(path):
+                            receipts = state.setdefault("fresh_writes", {})
+                            receipts[path] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                            while len(receipts) > 32:
+                                receipts.pop(next(iter(receipts)))
                     self._remember_plan_targets(state_key, state, targets)
         except Exception:
             return  # An observer failure leaves the write unapprovable (fail-closed).

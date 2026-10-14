@@ -126,7 +126,8 @@ def plan_file_stamp(now=None) -> str:
 
 
 def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=True,
-                  levers=frozenset(), previous_plan="", platform="", reply_plan=False, card_path=False, ui_session=False) -> str:
+                  levers=frozenset(), previous_plan="", platform="", reply_plan=False, card_path=False, ui_session=False,
+                  classic_cli=False) -> str:
     stamp = plan_file_stamp(now)
     target = f"{plans_dir}/{stamp}-<slug>.md (that timestamp is current; do not look up the time)"
     compact = CODEX_COMPACT_PLAN if "codex_compact" in levers else COMPACT_PLAN
@@ -191,6 +192,19 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
                             "3. Show the complete plan file verbatim, never a summary, then call")
         note = note.replace("3. In that same response, call",
                             "3. Show the complete plan file verbatim, never a summary. In that same response, call")
+    if ("write_once" in levers and classic_cli and not reply_plan and not ui_session
+            and str(platform).strip().lower() in {"", "cli", "terminal", "local"}):
+        # Anchor on line starts: the plans path in the first line may itself contain "2. " or "3. ".
+        note = note.replace("\n2. ", f"\n2. Use write_file to write the plan to a NEW file under {plans_dir}; "
+                            "use a new file name for every revision; never patch or overwrite an existing plan file. ", 1)
+        start, end = note.index("\n3. ") + 1, note.index("\n4. ")
+        note = note[:start] + (
+            '3. Do not restate the plan in your reply (the terminal already shows the new file); call '
+            'plan_mode(action="submit") on its own '
+            '(if plan_mode is not loaded, find it with tool_search "plan_mode"). '
+            'If the submit result says the user has not seen the full plan, show the complete plan file verbatim before asking. '
+            'Approval starts implementation in this same turn.'
+        ) + note[end:]
     if "bridge_calls" in levers:
         # Every step-3 variant carries this parenthetical; tests assert the swap happened in each one.
         note = note.replace('(if plan_mode is not loaded, find it with tool_search "plan_mode")', BRIDGE_SUBMIT)
