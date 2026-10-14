@@ -1378,6 +1378,23 @@ class PlanModePlugin:
                     copy.pop(field, None)
             self._save_storage_state(other, copy)
 
+    def _clear_delivered_note(self, storage_key: str, state: dict[str, Any], note: str) -> None:
+        """Clear a delivered note from the state's linked copies too.
+
+        A TUI/Desktop cold resume adopts a linked sk: copy into a fresh UI state, which would replay the note. Only
+        a copy holding this exact note is changed, so a different queued note is never dropped.
+        """
+        related = set(self._linked_command_storage_keys(state))
+        canonical = state.get("canonical_ui_storage_key")
+        if isinstance(canonical, str) and canonical.startswith("session:"):
+            related.add(canonical)
+        related.discard(storage_key)
+        for other in related:
+            copy = self._load_storage_state(other)
+            if copy.get("pending_note") == note and self._same_family(other, canonical):
+                copy["pending_note"] = ""
+                self._save_storage_state(other, copy)
+
     def _config(self, name: str, default: Any) -> Any:
         # Flat keys are what Settings ▸ Plugins writes (plugin.yaml config_schema); the nested plan_mode.<key> layout
         # documented before 0.3.3 is still read, but only when the flat key is unset.
@@ -2159,6 +2176,7 @@ class PlanModePlugin:
                     state["pending_note"] = ""
                     assert state_key is not None
                     self._save_state(state_key, state)
+                    self._clear_delivered_note(_state_storage_key(state_key), state, pending)
                 if state.get("active"):
                     assert state_key is not None
                     self._active_keys.add(state_key)

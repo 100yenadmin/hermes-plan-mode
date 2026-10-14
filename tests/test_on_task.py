@@ -37,3 +37,29 @@ def test_agent_activation_queues_no_task(plugin, session_env, tmp_path):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.ctx.tools["plan_mode"]["handler"]({"action": "on", "reason": "multi-file change"}, session_id="s1")
     assert QUEUED not in _context(plugin)
+
+
+def test_tui_cold_resume_does_not_replay_the_task(plugin, session_env, tmp_path):
+    # TUI/Desktop slash commands run without the UI id; the first turn adopts that sk: copy into the tab's state.
+    session_env.update({"HERMES_SESSION_KEY": "resume-key", "HERMES_SESSION_SOURCE": "tui",
+                        "HERMES_UI_SESSION_ID": "", "TERMINAL_CWD": str(tmp_path)})
+    plugin.command("on unique-reopen-task")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-1"
+    assert _context(plugin).count("unique-reopen-task") == 1
+    assert "unique-reopen-task" not in _context(plugin)
+    session_env["HERMES_UI_SESSION_ID"] = "reopened-tab"  # cold resume: a fresh UI id on the same session key
+    assert "unique-reopen-task" not in _context(plugin)
+
+
+def test_tui_cold_resume_does_not_replay_a_slash_reject_note(plugin, session_env, tmp_path):
+    session_env.update({"HERMES_SESSION_KEY": "resume-key", "HERMES_SESSION_SOURCE": "tui",
+                        "HERMES_UI_SESSION_ID": "", "TERMINAL_CWD": str(tmp_path)})
+    plugin.command("on")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-1"
+    _context(plugin)
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "remains on" in plugin.command("reject unique-revision-ask")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-1"
+    assert _context(plugin).count("unique-revision-ask") == 1
+    session_env["HERMES_UI_SESSION_ID"] = "reopened-tab"
+    assert "unique-revision-ask" not in _context(plugin)
