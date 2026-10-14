@@ -975,8 +975,13 @@ class PlanModePlugin:
             if not _plans_dir_is_still_safe(state["plans_dir"]) or os.path.islink(snapshot.parent):
                 raise ValueError("the approved snapshot path is unsafe")
             snapshot.parent.mkdir(exist_ok=True)
-            with snapshot.open("x", encoding="utf-8") as stream:
-                stream.write(review["text"])
+            stream = snapshot.open("x", encoding="utf-8", newline="")  # exact captured text, no newline translation
+            try:
+                with stream:
+                    stream.write(review["text"])
+            except BaseException:
+                snapshot.unlink(missing_ok=True)  # a partial snapshot would block every retry of the exclusive open
+                raise
             submission.update(replaces_revision=review["revision"], revision=revision, path=review["path"],
                               digest=review["digest"], review_text=review["text"], snapshot_path=str(snapshot))
             state["revision"] = revision
@@ -1011,12 +1016,13 @@ class PlanModePlugin:
         if not submission:
             return ""
         try:
-            if plan_digest(submission["path"])[0] != submission["digest"]:
-                return (f"The plan file changed after rev {submission['revision']} was submitted (writer unknown). "
-                        "Read the current file, keep its changes, apply the feedback, and submit a complete new revision.")
+            unchanged = plan_digest(submission["path"])[0] == submission["digest"]
         except (OSError, ValueError):
-            pass
-        return ""
+            unchanged = False  # an unreadable or oversized (> 1 MiB) plan cannot be shown unchanged
+        if unchanged:
+            return ""
+        return (f"The plan file changed after rev {submission['revision']} was submitted (writer unknown). "
+                "Read the current file, keep its changes, apply the feedback, and submit a complete new revision.")
 
     @staticmethod
     def _stale_note(revision) -> str:
@@ -1257,8 +1263,9 @@ class PlanModePlugin:
                 if path not in files:
                     return "Plan display was refused: the requested file was not written by this session."
                 if action == "edit":
+                    name = os.path.basename(path)
                     return (f"{path}\nEdit and save it in your editor (GUI editors: wait for the save). "
-                            "Then /planmode show, then /planmode approve.")
+                            f"Then /planmode show {name}, then /planmode approve {name}.")
                 try:
                     with open(path, "rb") as stream:
                         data = stream.read(65537)

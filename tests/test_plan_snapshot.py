@@ -247,8 +247,13 @@ def test_next_turn_detects_change_without_card(make_plugin, session_env):
 
 def test_edit_instructions_and_ui_note(make_plugin, session_env, monkeypatch):
     plugin, path = prepared(make_plugin, session_env)
-    assert plugin.command("edit") == f"{path}\nEdit and save it in your editor (GUI editors: wait for the save). Then /planmode show, then /planmode approve."
+    assert plugin.command("edit") == (f"{path}\nEdit and save it in your editor (GUI editors: wait for the save). "
+                                      f"Then /planmode show {path.name}, then /planmode approve {path.name}.")
     assert plugin.command(f"edit {path.name}").startswith(str(path))
+    other = path.with_name("other.md")
+    assert plugin.pre_tool_call("write_file", {"path": str(other)}) is None
+    other.write_text("# Other\n")
+    assert plugin.command("edit other.md").endswith("Then /planmode show other.md, then /planmode approve other.md.")
     assert "not written by this session" in plugin.command("edit missing.md")
     assert LINK not in plugin.pre_llm_call()["context"]
     current = state(plugin)
@@ -275,3 +280,31 @@ def test_ui_planning_note_golden():
     note = render.planning_note("/plans", datetime(2026, 10, 14, 12, 0), ui_session=True)
     expected = (Path(__file__).parent / "fixtures/planning_ui_062.txt").read_text()
     assert note == expected.rstrip("\n")
+
+
+@pytest.mark.parametrize("error", [OSError, ValueError])
+def test_unreadable_or_oversized_submitted_plan_still_gets_the_changed_note(make_plugin, session_env, monkeypatch, error):
+    plugin, path = prepared(make_plugin, session_env)
+    def fail(_path):
+        raise error("too large or gone")
+    monkeypatch.setattr(pm, "plan_digest", fail)
+    assert "The plan file changed after rev 1 was submitted" in plugin._changed_plan_note(state(plugin))
+
+
+def test_failed_snapshot_write_leaves_no_partial_file(make_plugin, session_env):
+    plugin, path = prepared(make_plugin, session_env)
+    text = "# Revised\n" + "y" * 5000 + "\n"
+    path.write_text(text)
+    plugin.command("show")
+    current = state(plugin)
+    good = current["review"]["text"]
+    current["review"]["text"] = good + "\ud800"  # cannot be encoded: the write fails after the exclusive open
+    plugin._save_state("sk:unit-session", current)
+    assert "could not be saved" in plugin.command("approve")
+    approved = path.parent / "approved"
+    assert not any(approved.glob("*")) if approved.exists() else True
+    current = state(plugin)
+    current["review"]["text"] = good
+    plugin._save_state("sk:unit-session", current)
+    assert "Plan approved" in plugin.command("approve")
+    assert (approved / f"{path.stem}-rev2.md").read_bytes() == text.encode()
