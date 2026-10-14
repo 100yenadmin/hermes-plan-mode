@@ -234,13 +234,22 @@ def approval_text(text, path, revision, platform, summary="") -> str:
 
 def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), session_key="", cwd=None) -> str:
     """Bounded file-edit preview; targets are extracted by the planning writer parser."""
+    def relative(path):
+        return str(path.relative_to(Path(cwd))) if path.is_relative_to(Path(cwd)) else str(path)
+
     display_paths = []
     for target in targets:
         shown = str(target)
         try:
             if cwd is not None and Path(target).is_absolute():
-                real = Path(os.path.realpath(target))  # a symlink inside the cwd must not hide an outside target
-                shown = str(real.relative_to(Path(cwd))) if real.is_relative_to(Path(cwd)) else str(real)
+                # Resolve the parent directories, so a symlinked directory cannot hide an outside target, but keep
+                # the entry itself: a delete or move acts on a symlink, while a content write goes through it.
+                given = Path(target)
+                entry = (Path(os.path.realpath(given.parent)) / given.name if given.name not in ("", ".", "..")
+                         else Path(os.path.realpath(given)))
+                shown = relative(entry)
+                if os.path.islink(entry):
+                    shown += " → " + relative(Path(os.path.realpath(entry)))
         except (OSError, ValueError, TypeError):
             pass  # an unresolvable path is shown as given
         display_paths.append(shown)

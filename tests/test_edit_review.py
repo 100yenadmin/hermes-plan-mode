@@ -430,9 +430,29 @@ def test_unresolvable_target_still_prompts(reviewed, session_env, monkeypatch):
     plugin, _ = reviewed
     real = pm.os.path.realpath
     def bad(path, *args, **kwargs):
-        if str(path) == "/abs/x.py":
+        if str(path).startswith("/abs"):
             raise ValueError("embedded null byte")
         return real(path, *args, **kwargs)
     monkeypatch.setattr(pm.os.path, "realpath", bad)
     directive = plugin.pre_tool_call("write_file", {"path": "/abs/x.py", "content": "a"})
     assert directive["action"] == "approve" and "write_file /abs/x.py (1 line)" in directive["message"]
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("write_file", {"content": "a"}),
+    ("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Delete File: {path}\n*** End Patch"}),
+])
+def test_symlink_entry_shows_the_link_and_its_target(reviewed, session_env, tmp_path, tool, args):
+    plugin, _ = reviewed
+    cwd, outside = tmp_path / "workspace", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    (outside / "victim.py").write_text("x\n")
+    (cwd / "alias.py").symlink_to(outside / "victim.py")
+    session_env["TERMINAL_CWD"] = str(cwd)
+    path = str(cwd / "alias.py")
+    args = {k: v.replace("{path}", path) for k, v in args.items()}
+    if tool == "write_file":
+        args["path"] = path
+    text = plugin.pre_tool_call(tool, args)["message"]
+    assert f"{tool} alias.py → {(outside / 'victim.py').resolve()} (" in text
