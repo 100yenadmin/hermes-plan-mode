@@ -57,8 +57,8 @@ def test_preview_session_relative_path(reviewed, session_env, monkeypatch, tmp_p
         monkeypatch.setattr(pm, "_runtime_cwd_reader", lambda: lambda: cwd)
     target = (tmp_path if outside else cwd) / "parser.py"
     text = plugin.pre_tool_call("write_file", {"path": str(target), "content": "first"})["message"]
-    expected = str(target) if outside else "parser.py"
-    assert f"write_file {expected} (1 line)" in text
+    expected = f"{target} (1 line, 1 path outside the working directory)" if outside else "parser.py (1 line)"
+    assert f"write_file {expected}" in text
 
 
 def test_preview_counts_whole_edit_and_shows_eight_lines(reviewed, session_env):
@@ -423,7 +423,7 @@ def test_symlink_inside_cwd_shows_the_real_outside_path(reviewed, session_env, t
     (cwd / "link").symlink_to(outside)
     session_env["TERMINAL_CWD"] = str(cwd)
     text = plugin.pre_tool_call("write_file", {"path": str(cwd / "link" / "x.py"), "content": "a"})["message"]
-    assert f"write_file {(outside / 'x.py').resolve()} (1 line)" in text
+    assert f"write_file {(outside / 'x.py').resolve()} (1 line, 1 path outside the working directory)" in text
 
 
 def test_unresolvable_target_still_prompts(reviewed, session_env, monkeypatch):
@@ -435,7 +435,7 @@ def test_unresolvable_target_still_prompts(reviewed, session_env, monkeypatch):
         return real(path, *args, **kwargs)
     monkeypatch.setattr(pm.os.path, "realpath", bad)
     directive = plugin.pre_tool_call("write_file", {"path": "/abs/x.py", "content": "a"})
-    assert directive["action"] == "approve" and "write_file /abs/x.py (1 line)" in directive["message"]
+    assert directive["action"] == "approve" and "write_file /abs/x.py (1 line, 1 path outside the working directory)" in directive["message"]
 
 
 @pytest.mark.parametrize("tool,args", [
@@ -490,7 +490,7 @@ def test_relative_target_through_a_symlink_shows_the_outside_path(reviewed, sess
     (cwd / "link").symlink_to(outside)
     session_env["TERMINAL_CWD"] = str(cwd)
     text = plugin.pre_tool_call("write_file", {"path": "link/x.py", "content": "a"})["message"]
-    assert f"write_file {(outside / 'x.py').resolve()} (1 line)" in text
+    assert f"write_file {(outside / 'x.py').resolve()} (1 line, 1 path outside the working directory)" in text
 
 
 @pytest.mark.parametrize("space", ["\v", "\f", "\x85", "\u2028", "\u2029", "\r", " \t "])
@@ -537,3 +537,16 @@ def test_local_platform_is_one_line(reviewed, session_env):
     session_env["HERMES_SESSION_PLATFORM"] = "local"
     text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "a\nb"})["message"]
     assert "\n" not in text and text.endswith(" — +a ⏎ +b")
+
+
+@pytest.mark.parametrize("platform,limit", [("cli", 1000), ("telegram", 250)])
+def test_long_names_cannot_hide_destructive_counts(reviewed, session_env, tmp_path, platform, limit):
+    plugin, _ = reviewed
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    session_env["TERMINAL_CWD"] = str(cwd)
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    adds = "\n".join(f"*** Add File: a{n}_" + "x" * 120 + ".py\n+x" for n in range(9))
+    patch = f"*** Begin Patch\n{adds}\n*** Delete File: ../victim.py\n*** Move File: s.py -> t.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert len(text) <= limit and "1 delete, 1 move, 1 path outside the working directory)" in text

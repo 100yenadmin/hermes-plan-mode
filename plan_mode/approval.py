@@ -241,8 +241,10 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     def relative(path):
         return str(path.relative_to(Path(cwd))) if path.is_relative_to(Path(cwd)) else str(path)
 
-    def display(target):
-        shown = str(target)
+    outside = []  # targets outside the session cwd, counted in the header so the character cap cannot hide them
+
+    def display(target, header=False):
+        shown, inside = str(target), True
         try:
             if cwd is not None and shown:
                 # Resolve the parent directories, so a symlinked directory cannot hide an outside target, but keep
@@ -251,14 +253,23 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
                 given = Path(target) if Path(target).is_absolute() else Path(cwd) / target
                 entry = (Path(os.path.realpath(given.parent)) / given.name if given.name not in ("", ".", "..")
                          else Path(os.path.realpath(given)))
-                shown = relative(entry)
+                shown, inside = relative(entry), entry.is_relative_to(Path(cwd))
                 if os.path.islink(entry):
-                    shown += " → " + relative(Path(os.path.realpath(entry)))
+                    real = Path(os.path.realpath(entry))
+                    shown, inside = shown + " → " + relative(real), inside and real.is_relative_to(Path(cwd))
         except (OSError, ValueError, TypeError):
-            pass  # an unresolvable path is shown as given
+            try:  # an unresolvable path is shown as given; an absolute one outside the cwd still counts
+                inside = not Path(shown).is_absolute() or Path(shown).is_relative_to(Path(cwd))
+            except (ValueError, TypeError):
+                inside = False
+        if header and not inside:
+            outside.append(shown)
         return " ".join(shown.split())
 
-    paths = ", ".join(display(target) for target in targets) or "(unknown path)"
+    limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
+    paths = ", ".join(display(target, header=True) for target in targets) or "(unknown path)"
+    if len(paths) > limit // 4:  # long names must not push the counts below out of the capped message
+        paths = paths[:limit // 4 - 1] + "…"
     operations = []  # deletes and moves: always listed, since they carry no +/- lines
     if tool_name == "write_file":
         body = ["+" + line for line in str(args.get("content") or "").splitlines()]
@@ -311,14 +322,15 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     counts = (f"{added} line{'' if added == 1 else 's'}" if tool_name == "write_file"
               else f"+{added}/−{removed} lines")
     deletes = sum(operation.startswith("Delete") for operation in operations)
-    for number, word in ((deletes, "delete"), (len(operations) - deletes, "move")):
+    for number, word in ((deletes, "delete"), (len(operations) - deletes, "move"), (len(outside), "path")):
         if number:
             counts += f", {number} {word}{'' if number == 1 else 's'}"
+    if outside:
+        counts += " outside the working directory"
     header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths} ({counts})"
     classic_cli = str(platform).strip().lower() in {"cli", "terminal", "local", ""} and not str(session_key).startswith("ui:")
     separator, joiner = (" — ", " ⏎ ") if classic_cli else ("\n", "\n")
     result = header + (separator + joiner.join(lines) if lines else "")
-    limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
     return result if len(result) <= limit else result[:limit - 1] + "…"
 
 
