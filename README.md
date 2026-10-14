@@ -675,6 +675,16 @@ Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_
 
 </details>
 
+## Troubleshooting and reporting a bug
+
+Run `/planmode status` in the affected session to check mode, phase and the plans directory.
+The agent can read the same state with `plan_mode(action="status")`.
+From the next release, ask your Hermes agent to "report a problem with Plan Mode"; review its draft before filing.
+Use the [bug report form](https://github.com/100yenadmin/hermes-plan-mode/issues/new?template=bug_report.yml) and include plugin/Hermes versions and the affected surface.
+For log excerpts, try `hermes logs -n 300 | grep -i plan_mode`; the filter may return no lines because there is no dedicated plugin logger.
+Remove secrets, private message text and private paths before sharing diagnostics or logs.
+Report approval bypasses or writes outside the plans directory through a [private advisory](https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new).
+
 ## License
 
 MIT. Maintained by [100yenadmin](https://github.com/100yenadmin).
