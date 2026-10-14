@@ -1,12 +1,8 @@
-"""SPEC-039: conservative, linear extraction against both pinned host parsers."""
-import importlib.util
+"""SPEC-039: conservative, linear extraction against the installed host parser."""
 import random
 import re
 import signal
-import sys
-from pathlib import Path
 from time import perf_counter
-from types import ModuleType
 
 import pytest
 
@@ -14,7 +10,6 @@ from plan_mode.plugin import _patch_targets
 from test_plan_mode import plugin, plan_profile, session_env
 
 
-HOSTS = Path("/Users/m1/Codex/session-notes/2026-10-14/plan-mode-046-resume/artifacts/hosts")
 FORMS = ("Update", "Add", "Delete", "Move")
 # Frozen e884710 oracle; keep inputs small because its Move regex is cubic.
 BASE_FILE = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+)$", re.MULTILINE)
@@ -102,20 +97,10 @@ def test_one_mb_adversarial_under_50_ms(kind, character, position):
     print(f"timing {kind}/{position}/{character!r}: {elapsed * 1000:.3f} ms")
 
 
-@pytest.fixture(params=["v0.21.6", "main-7bc05085"])
-def host_parser(request, monkeypatch):
-    # Load only the parser and its pure dataclasses, with no host runtime/config.
-    directory = HOSTS / request.param / "tools"
-    package = ModuleType("tools")
-    package.__path__ = [str(directory)]
-    monkeypatch.setitem(sys.modules, "tools", package)
-    for name, filename in (("tools.file_operations_common", "file_operations_common.py"),
-                           ("spec039_patch_parser", "patch_parser.py")):
-        spec = importlib.util.spec_from_file_location(name, directory / filename)
-        module = importlib.util.module_from_spec(spec)
-        monkeypatch.setitem(sys.modules, name, module)
-        spec.loader.exec_module(module)
-    return module.parse_v4a_patch
+@pytest.fixture
+def host_parser():
+    # The installed host's own V4A parser; CI runs this on every pinned Hermes ref.
+    return pytest.importorskip("tools.patch_parser").parse_v4a_patch
 
 
 def host_patch(kind, source, destination, separator, ending):
