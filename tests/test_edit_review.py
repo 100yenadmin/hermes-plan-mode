@@ -67,7 +67,7 @@ def test_preview_counts_whole_edit_and_shows_eight_lines(reviewed, session_env):
     session_env["HERMES_UI_SESSION_ID"] = "preview-tab"
     text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "\n".join(map(str, range(12)))})["message"]
     assert "(12 lines)" in text
-    assert text.splitlines()[1:] == [f"+{n}" for n in range(8)]
+    assert text.splitlines()[1:] == [f"+{n}" for n in range(8)] + ["… 4 more lines"]
 
 
 @pytest.fixture(autouse=True)
@@ -344,7 +344,7 @@ def test_preview_caps(reviewed, session_env, platform, limit):
     text = directive["message"]
     assert len(text) <= limit and "preview 0" in text
     if platform in {"cli", "tui", "desktop"}:
-        assert len(text.splitlines()) <= 9
+        assert len(text.splitlines()) <= 10  # header, eight lines, the omission note
         assert "preview 8" not in text
 
 
@@ -398,14 +398,14 @@ def test_no_lever_read_for_tools_outside_review(card, monkeypatch):
     assert calls == []
 
 
-@pytest.mark.parametrize("patch,shown", [
-    ("*** Begin Patch\n*** Delete File: old.py\n*** End Patch", "Delete File: old.py"),
-    ("*** Begin Patch\n*** Move File: a.py -> b.py\n*** End Patch", "Move File: a.py -> b.py"),
+@pytest.mark.parametrize("patch,count,shown", [
+    ("*** Begin Patch\n*** Delete File: old.py\n*** End Patch", "1 delete", "Delete File: old.py"),
+    ("*** Begin Patch\n*** Move File: a.py -> b.py\n*** End Patch", "1 move", "Move File: a.py -> b.py"),
 ])
-def test_preview_shows_deletes_and_moves(reviewed, session_env, patch, shown):
+def test_preview_shows_deletes_and_moves(reviewed, session_env, patch, count, shown):
     plugin, _ = reviewed
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
-    assert "(+0/−0 lines)" in text and text.endswith(" — " + shown)
+    assert f"(+0/−0 lines, {count})" in text and text.endswith(" — " + shown)
 
 
 def test_terminal_platform_is_one_line(reviewed, session_env):
@@ -463,7 +463,7 @@ def test_mixed_patch_shows_a_late_delete_first(reviewed, session_env):
     body = "\n".join(f"+line {i}" for i in range(9))
     patch = f"*** Begin Patch\n*** Update File: a.py\n{body}\n***Delete  File: old.py\n*** End Patch"
     text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
-    assert "(+9/−0 lines) — Delete File: old.py ⏎ +line 0" in text
+    assert "(+9/−0 lines, 1 delete) — Delete File: old.py ⏎ +line 0" in text and text.endswith("+line 7 ⏎ … 1 more line")
 
 
 def test_multi_file_patch_keeps_file_boundaries(reviewed, session_env):
@@ -479,7 +479,7 @@ def test_long_removal_leaves_room_for_the_replacement(reviewed, session_env):
     plugin, _ = reviewed
     old = "\n".join(f"old {i}" for i in range(10))
     text = plugin.pre_tool_call("patch", {"path": "a.py", "old_string": old, "new_string": "new 1\nnew 2"})["message"]
-    assert "(+2/−10 lines)" in text and text.endswith("-old 5 ⏎ +new 1 ⏎ +new 2") and "-old 6" not in text
+    assert "(+2/−10 lines)" in text and text.endswith("-old 5 ⏎ +new 1 ⏎ +new 2 ⏎ … 4 more lines") and "-old 6" not in text
 
 
 def test_relative_target_through_a_symlink_shows_the_outside_path(reviewed, session_env, tmp_path):
@@ -491,3 +491,34 @@ def test_relative_target_through_a_symlink_shows_the_outside_path(reviewed, sess
     session_env["TERMINAL_CWD"] = str(cwd)
     text = plugin.pre_tool_call("write_file", {"path": "link/x.py", "content": "a"})["message"]
     assert f"write_file {(outside / 'x.py').resolve()} (1 line)" in text
+
+
+@pytest.mark.parametrize("space", ["\v", "\f", "\x85", "\u2028", "\u2029", "\r", " \t "])
+def test_operation_lines_split_like_the_host(reviewed, session_env, space):
+    plugin, _ = reviewed
+    patch = f"*** Begin Patch\r\n***{space}Delete File: victim.py\r\n***{space}Move File: a.py -> b.py\r\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "(+0/−0 lines, 1 delete, 1 move) — Delete File: victim.py ⏎ Move File: a.py -> b.py" in text
+
+
+def test_every_delete_is_listed_beyond_eight_lines(reviewed, session_env):
+    plugin, _ = reviewed
+    patch = "\n".join(f"*** Delete File: d{n}.py" for n in range(9)) + "\n*** Update File: a.py\n+x"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "(+1/−0 lines, 9 deletes)" in text and "Delete File: d8.py ⏎ +x" in text
+
+
+def test_content_line_breaks_stay_on_one_line(reviewed, session_env):
+    plugin, _ = reviewed
+    patch = "*** Update File: a.py\n+one\u2028two\x85three\vfour"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith(" — +one two three four") and len(text.splitlines()) == 1
+
+
+def test_operation_paths_are_shown_relative(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    patch = (f"*** Update File: {tmp_path}/a.py\n+x\n*** Update File: {tmp_path}/b.py\n+y\n"
+             f"*** Move File: {tmp_path}/c.py -> {tmp_path}/d.py")
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith("— Move File: c.py -> d.py ⏎ Update File: a.py ⏎ +x ⏎ Update File: b.py ⏎ +y")

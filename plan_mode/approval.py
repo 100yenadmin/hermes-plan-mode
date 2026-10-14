@@ -233,6 +233,7 @@ def approval_text(text, path, revision, platform, summary="") -> str:
 
 
 _PATCH_OPERATION = re.compile(r"\*\*\*\s*(Update|Add|Delete|Move)\s+File:")  # the host V4A parser's markers
+_LINE_BREAKS = re.compile(r"[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 
 def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), session_key="", cwd=None) -> str:
@@ -240,11 +241,10 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
     def relative(path):
         return str(path.relative_to(Path(cwd))) if path.is_relative_to(Path(cwd)) else str(path)
 
-    display_paths = []
-    for target in targets:
+    def display(target):
         shown = str(target)
         try:
-            if cwd is not None:
+            if cwd is not None and shown:
                 # Resolve the parent directories, so a symlinked directory cannot hide an outside target, but keep
                 # the entry itself: a delete or move acts on a symlink, while a content write goes through it.
                 # Relative targets resolve from the session cwd, as the file tools do.
@@ -256,40 +256,57 @@ def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), sessi
                     shown += " → " + relative(Path(os.path.realpath(entry)))
         except (OSError, ValueError, TypeError):
             pass  # an unresolvable path is shown as given
-        display_paths.append(shown)
-    paths = " ".join(", ".join(display_paths).split()) or "(unknown path)"
+        return " ".join(shown.split())
+
+    paths = ", ".join(display(target) for target in targets) or "(unknown path)"
+    operations = []  # deletes and moves: always listed, since they carry no +/- lines
     if tool_name == "write_file":
-        lines = ["+" + line for line in str(args.get("content") or "").splitlines()]
-        added, removed = len(lines), 0
+        body = ["+" + line for line in str(args.get("content") or "").splitlines()]
+        sample, added, removed = body[:8], len(body), 0
     elif str(args.get("mode") or "replace").strip().lower() == "patch":
-        operations, files, changes = [], [], []
-        for line in str(args.get("patch") or "").splitlines():
+        files, body = [], []
+        # Split the way the host parser does (on newlines, dropping a trailing CR), so no operation line it applies
+        # can be split apart here and missed.
+        for line in (part[:-1] if part.endswith("\r") else part for part in str(args.get("patch") or "").split("\n")):
             match = _PATCH_OPERATION.match(line)
-            if match and match[1] in ("Delete", "Move"):
-                # Deletes and moves carry no +/- lines, so they come first and cannot be cut by the line limit.
-                operations.append(f"{match[1]} File: {line[match.end():].strip()}")
+            payload = line[match.end():].strip() if match else ""
+            if match and match[1] == "Move":
+                cut = payload.find("->", 1)
+                moved = f"{display(payload[:cut].strip())} -> {display(payload[cut + 2:].strip())}" if cut > 0 else payload
+                operations.append(f"Move File: {moved}")
+            elif match and match[1] == "Delete":
+                operations.append(f"Delete File: {display(payload)}")
             elif match:
-                files.append(f"{match[1]} File: {line[match.end():].strip()}")
-                changes.append(files[-1])
+                files.append(f"{match[1]} File: {display(payload)}")
+                body.append(files[-1])
             elif line.startswith(("+", "-")):
-                changes.append(line)
+                body.append(line)
+        added = sum(line.startswith("+") for line in body)
+        removed = sum(line.startswith("-") for line in body)
         if len(files) < 2:  # a file name repeats the header unless the patch spans several files
-            changes = [line for line in changes if line not in files]
-        lines = operations + changes
-        added = sum(line.startswith("+") for line in changes)
-        removed = sum(line.startswith("-") for line in changes)
+            body = [line for line in body if line not in files]
+        sample = body[:8]
     else:
         old = ["-" + line for line in str(args.get("old_string") or "").splitlines()]
         new = ["+" + line for line in str(args.get("new_string") or "").splitlines()]
-        lines = old[:max(4, 8 - len(new))] + new  # a long removal still leaves room for the replacement
+        body = old + new
+        sample = (old[:max(4, 8 - len(new))] + new)[:8]  # a long removal still leaves room for the replacement
         added, removed = len(new), len(old)
+    hidden = len(body) - len(sample)
+    lines = [_LINE_BREAKS.sub(" ", line) for line in operations + sample]
+    if hidden:
+        lines.append(f"… {hidden} more line{'' if hidden == 1 else 's'}")
     # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
     counts = (f"{added} line{'' if added == 1 else 's'}" if tool_name == "write_file"
               else f"+{added}/−{removed} lines")
+    deletes = sum(operation.startswith("Delete") for operation in operations)
+    for number, word in ((deletes, "delete"), (len(operations) - deletes, "move")):
+        if number:
+            counts += f", {number} {word}{'' if number == 1 else 's'}"
     header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths} ({counts})"
     classic_cli = str(platform).strip().lower() in {"cli", "terminal", ""} and not str(session_key).startswith("ui:")
     separator, joiner = (" — ", " ⏎ ") if classic_cli else ("\n", "\n")
-    result = header + (separator + joiner.join(lines[:8]) if lines else "")
+    result = header + (separator + joiner.join(lines) if lines else "")
     limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
     return result if len(result) <= limit else result[:limit - 1] + "…"
 
