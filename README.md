@@ -240,6 +240,16 @@ plugins:
 
 `levers` is not in the Settings form. The `PLAN_MODE_LEVERS` environment variable sets it when the key is unset.
 - **`approval_card` (opt-in).** After showing the complete plan verbatim, ask one approval card with “Approve, auto-accept edits” and “Keep planning”; Other supplies feedback. When Hermes approvals are on, it also offers “Approve, review each file edit”: review covers `write_file` and `patch`, including file-tool calls inside `execute_code`, but not shell commands, subagents or MCP writers. For each edit, once approves that edit; session / always auto-accept the rest of this plan. Each approval gets a fresh key, so always leaves one inert config entry that cannot approve another plan. If approvals turn off, review pauses and edits apply without a prompt. The card is used on CLI, TUI, Desktop and chat surfaces, with the existing approval prompt on ACP, API server, cron and webhooks. WhatsApp Cloud has no Other with 3 choices. Typed `/planmode approve` still works while a card is open and selects auto-accept edits.
+  - **What the prompts look like.** The per-edit prompt is Hermes' own approval prompt, so the host chooses its frame:
+    the classic CLI shows it in the panel titled "⚠️ Dangerous Command" (once / session / always / deny), and
+    Desktop shows "Approval needed" with Reject, Always allow… (Allow this session) and Run. The text inside is
+    plan-mode's: the plan revision, the file and the changed lines.
+  - **Cancelling the card.** On the classic CLI, Ctrl+C cancels the card (Esc does nothing there); on Desktop, Skip.
+    Either way nothing is approved and nothing is written; ask the agent to show the card again when you are ready.
+  - **Exercised by real clicks (2026-10-14, gpt-6.1-sol, Hermes v0.21.6):** classic CLI and Desktop, every choice
+    (auto-accept, review each edit with once / deny / session, keep planning, Other feedback with the revision diff,
+    cancel and re-ask, `/planmode show`, and the review choice hidden under `/yolo`). Not yet exercised: the TUI and
+    chat platforms.
 - **`exec_skill_guard` (opt-in).** While an approved plan is executing, it blocks `skill_view` of the planning, TDD
   and code-review process skills, so the agent follows the approved plan instead of a per-edit test loop. A user
   message that mentions TDD, test-first, red-green or code review while plan mode is on or the plan is executing

@@ -22,6 +22,54 @@ EDITS = [
 ]
 
 
+@pytest.mark.parametrize("platform", ["cli", "", "telegram"])
+@pytest.mark.parametrize("ui", [False, True])
+@pytest.mark.parametrize("tool,args,lines,count", [
+    (*EDITS[0], ["+first", "+second"], "(2 lines)"),
+    ("patch", {"path": "parser.py", "old_string": "before\nold", "new_string": "after\nnew"},
+     ["-before", "-old", "+after", "+new"], "(+2/−2 lines)"),
+    (*EDITS[2], ["Update File: parser.py", "-before", "+after", "Add File: helper.py", "+new"], "(+2/−1 lines)"),
+])
+def test_changed_line_preview(reviewed, session_env, platform, ui, tool, args, lines, count):
+    plugin, _ = reviewed
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    if ui:
+        plugin._save_state("ui:preview-tab", state(plugin))
+        session_env["HERMES_UI_SESSION_ID"] = "preview-tab"
+    text = plugin.pre_tool_call(tool, args)["message"]
+    assert count in text
+    if not ui and platform in {"cli", ""}:
+        assert "\n" not in text
+        assert text.endswith(" — " + " ⏎ ".join(lines))
+    else:
+        assert text.splitlines()[1:] == lines
+
+
+@pytest.mark.parametrize("runtime_cwd", [False, True])
+@pytest.mark.parametrize("outside", [False, True])
+def test_preview_session_relative_path(reviewed, session_env, monkeypatch, tmp_path, runtime_cwd, outside):
+    plugin, _ = reviewed
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    session_env["TERMINAL_CWD"] = str(cwd)
+    if runtime_cwd:
+        session_env["TERMINAL_CWD"] = str(tmp_path)
+        monkeypatch.setattr(pm, "_runtime_cwd_reader", lambda: lambda: cwd)
+    target = (tmp_path if outside else cwd) / "parser.py"
+    text = plugin.pre_tool_call("write_file", {"path": str(target), "content": "first"})["message"]
+    expected = f"{target} (1 line, 1 path outside the working directory)" if outside else "parser.py (1 line)"
+    assert f"write_file {expected}" in text
+
+
+def test_preview_counts_whole_edit_and_shows_eight_lines(reviewed, session_env):
+    plugin, _ = reviewed
+    plugin._save_state("ui:preview-tab", state(plugin))
+    session_env["HERMES_UI_SESSION_ID"] = "preview-tab"
+    text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "\n".join(map(str, range(12)))})["message"]
+    assert "(12 lines)" in text
+    assert text.splitlines()[1:] == [f"+{n}" for n in range(8)] + ["… 4 more lines"]
+
+
 @pytest.fixture(autouse=True)
 def probe(monkeypatch):
     """A host seam without config, auth, or approval-policy reads."""
@@ -296,7 +344,7 @@ def test_preview_caps(reviewed, session_env, platform, limit):
     text = directive["message"]
     assert len(text) <= limit and "preview 0" in text
     if platform in {"cli", "tui", "desktop"}:
-        assert len(text.splitlines()) <= 9
+        assert len(text.splitlines()) <= 10  # header, eight lines, the omission note
         assert "preview 8" not in text
 
 
@@ -348,3 +396,168 @@ def test_no_lever_read_for_tools_outside_review(card, monkeypatch):
     assert plugin.pre_tool_call("read_file", {"path": "x"}) is None
     assert plugin.pre_tool_call(*EDITS[0]) is None
     assert calls == []
+
+
+@pytest.mark.parametrize("patch,count,shown", [
+    ("*** Begin Patch\n*** Delete File: old.py\n*** End Patch", "1 delete", "Delete File: old.py"),
+    ("*** Begin Patch\n*** Move File: a.py -> b.py\n*** End Patch", "1 move", "Move File: a.py -> b.py"),
+])
+def test_preview_shows_deletes_and_moves(reviewed, session_env, patch, count, shown):
+    plugin, _ = reviewed
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert f"(+0/−0 lines, {count})" in text and text.endswith(" — " + shown)
+
+
+def test_terminal_platform_is_one_line(reviewed, session_env):
+    plugin, _ = reviewed
+    session_env["HERMES_SESSION_PLATFORM"] = "terminal"
+    text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "a\nb"})["message"]
+    assert "\n" not in text and text.endswith(" — +a ⏎ +b")
+
+
+def test_symlink_inside_cwd_shows_the_real_outside_path(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    cwd, outside = tmp_path / "workspace", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    (cwd / "link").symlink_to(outside)
+    session_env["TERMINAL_CWD"] = str(cwd)
+    text = plugin.pre_tool_call("write_file", {"path": str(cwd / "link" / "x.py"), "content": "a"})["message"]
+    assert f"write_file {(outside / 'x.py').resolve()} (1 line, 1 path outside the working directory)" in text
+
+
+def test_unresolvable_target_still_prompts(reviewed, session_env, monkeypatch):
+    plugin, _ = reviewed
+    real = pm.os.path.realpath
+    def bad(path, *args, **kwargs):
+        if str(path).startswith("/abs"):
+            raise ValueError("embedded null byte")
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(pm.os.path, "realpath", bad)
+    directive = plugin.pre_tool_call("write_file", {"path": "/abs/x.py", "content": "a"})
+    assert directive["action"] == "approve" and "write_file /abs/x.py (1 line, 1 path outside the working directory)" in directive["message"]
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("write_file", {"content": "a"}),
+    ("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Delete File: {path}\n*** End Patch"}),
+])
+def test_symlink_entry_shows_the_link_and_its_target(reviewed, session_env, tmp_path, tool, args):
+    plugin, _ = reviewed
+    cwd, outside = tmp_path / "workspace", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    (outside / "victim.py").write_text("x\n")
+    (cwd / "alias.py").symlink_to(outside / "victim.py")
+    session_env["TERMINAL_CWD"] = str(cwd)
+    path = str(cwd / "alias.py")
+    args = {k: v.replace("{path}", path) for k, v in args.items()}
+    if tool == "write_file":
+        args["path"] = path
+    text = plugin.pre_tool_call(tool, args)["message"]
+    assert f"{tool} alias.py → {(outside / 'victim.py').resolve()} (" in text
+
+
+def test_mixed_patch_shows_a_late_delete_first(reviewed, session_env):
+    plugin, _ = reviewed
+    body = "\n".join(f"+line {i}" for i in range(9))
+    patch = f"*** Begin Patch\n*** Update File: a.py\n{body}\n***Delete  File: old.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "(+9/−0 lines, 1 delete) — Delete File: old.py ⏎ +line 0" in text and text.endswith("+line 7 ⏎ … 1 more line")
+
+
+def test_multi_file_patch_keeps_file_boundaries(reviewed, session_env):
+    plugin, _ = reviewed
+    patch = "*** Begin Patch\n*** Update File: a.py\n-x\n+y\n*** Add File: b.py\n+z\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith("(+2/−1 lines) — Update File: a.py ⏎ -x ⏎ +y ⏎ Add File: b.py ⏎ +z")
+    single = plugin.pre_tool_call("patch", {"mode": "patch", "patch": "*** Update File: a.py\n-x\n+y"})["message"]
+    assert single.endswith("(+1/−1 lines) — -x ⏎ +y")
+
+
+def test_long_removal_leaves_room_for_the_replacement(reviewed, session_env):
+    plugin, _ = reviewed
+    old = "\n".join(f"old {i}" for i in range(10))
+    text = plugin.pre_tool_call("patch", {"path": "a.py", "old_string": old, "new_string": "new 1\nnew 2"})["message"]
+    assert "(+2/−10 lines)" in text and text.endswith("-old 5 ⏎ +new 1 ⏎ +new 2 ⏎ … 4 more lines") and "-old 6" not in text
+
+
+def test_relative_target_through_a_symlink_shows_the_outside_path(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    cwd, outside = tmp_path / "workspace", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    (cwd / "link").symlink_to(outside)
+    session_env["TERMINAL_CWD"] = str(cwd)
+    text = plugin.pre_tool_call("write_file", {"path": "link/x.py", "content": "a"})["message"]
+    assert f"write_file {(outside / 'x.py').resolve()} (1 line, 1 path outside the working directory)" in text
+
+
+@pytest.mark.parametrize("space", ["\v", "\f", "\x85", "\u2028", "\u2029", "\r", " \t "])
+def test_operation_lines_split_like_the_host(reviewed, session_env, space):
+    plugin, _ = reviewed
+    patch = f"*** Begin Patch\r\n***{space}Delete File: victim.py\r\n***{space}Move File: a.py -> b.py\r\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "(+0/−0 lines, 1 delete, 1 move) — Delete File: victim.py ⏎ Move File: a.py -> b.py" in text
+
+
+def test_every_delete_is_listed_beyond_eight_lines(reviewed, session_env):
+    plugin, _ = reviewed
+    patch = "\n".join(f"*** Delete File: d{n}.py" for n in range(9)) + "\n*** Update File: a.py\n+x"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert "(+1/−0 lines, 9 deletes)" in text and "Delete File: d8.py ⏎ +x" in text
+
+
+def test_content_line_breaks_stay_on_one_line(reviewed, session_env):
+    plugin, _ = reviewed
+    patch = "*** Update File: a.py\n+one\u2028two\x85three\vfour"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith(" — +one two three four") and len(text.splitlines()) == 1
+
+
+def test_operation_paths_are_shown_relative(reviewed, session_env, tmp_path):
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    patch = (f"*** Update File: {tmp_path}/a.py\n+x\n*** Update File: {tmp_path}/b.py\n+y\n"
+             f"*** Move File: {tmp_path}/c.py -> {tmp_path}/d.py")
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith("— Move File: c.py -> d.py ⏎ Update File: a.py ⏎ +x ⏎ Update File: b.py ⏎ +y")
+
+
+@pytest.mark.parametrize("split", ["\n", "\n\n  \n", "\r\n   "])
+def test_split_move_is_one_move(reviewed, session_env, split):
+    plugin, _ = reviewed
+    patch = f"*** Begin Patch\n*** Move File: a.py{split}-> b.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert text.endswith("(+0/−0 lines, 1 move) — Move File: a.py -> b.py")
+
+
+def test_local_platform_is_one_line(reviewed, session_env):
+    plugin, _ = reviewed
+    session_env["HERMES_SESSION_PLATFORM"] = "local"
+    text = plugin.pre_tool_call("write_file", {"path": "parser.py", "content": "a\nb"})["message"]
+    assert "\n" not in text and text.endswith(" — +a ⏎ +b")
+
+
+@pytest.mark.parametrize("platform,limit", [("cli", 1000), ("telegram", 250)])
+def test_long_names_cannot_hide_destructive_counts(reviewed, session_env, tmp_path, platform, limit):
+    plugin, _ = reviewed
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    session_env["TERMINAL_CWD"] = str(cwd)
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    adds = "\n".join(f"*** Add File: a{n}_" + "x" * 120 + ".py\n+x" for n in range(9))
+    patch = f"*** Begin Patch\n{adds}\n*** Delete File: ../victim.py\n*** Move File: s.py -> t.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert len(text) <= limit and "1 delete, 1 move, 1 path outside the working directory)" in text
+
+
+@pytest.mark.parametrize("platform,limit", [("cli", 1000), ("telegram", 250)])
+def test_home_relative_target_counts_as_outside(reviewed, session_env, tmp_path, platform, limit):
+    plugin, _ = reviewed
+    session_env["TERMINAL_CWD"] = str(tmp_path)
+    session_env["HERMES_SESSION_PLATFORM"] = platform
+    deletes = "\n".join(f"*** Delete File: d{n}_" + "x" * 120 + ".py" for n in range(9))
+    patch = f"*** Begin Patch\n{deletes}\n*** Delete File: ~/victim.py\n*** End Patch"
+    text = plugin.pre_tool_call("patch", {"mode": "patch", "patch": patch})["message"]
+    assert len(text) <= limit and "(+0/−0 lines, 10 deletes, 1 path outside the working directory)" in text

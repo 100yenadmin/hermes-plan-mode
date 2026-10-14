@@ -61,7 +61,7 @@ def card(make_plugin, session_env):
 def test_card_submission(card):
     plugin, path, result = card
     assert result["clarify"]["choices"] == [APPROVE, KEEP]
-    assert "Full plan: /planmode show [plan-mode " in result["clarify"]["question"]
+    assert "? Full plan: /planmode show [plan-mode " in result["clarify"]["question"]
     assert path.name in result["clarify"]["question"]
     assert "verbatim" in result["message"] and "not a summary" in result["message"]
     assert "If clarify is unavailable, ask the user to run /planmode approve." in result["message"]
@@ -194,6 +194,7 @@ def test_revision_diff(card):
     second = submit(plugin, path)
     submission = state(plugin)["submission"]
     assert "Changed since rev 1: +" in second["clarify"]["question"]
+    assert submission["change_summary"] + ". Full plan:" in second["clarify"]["question"]
     assert len(submission["change_summary"]) <= 300
     assert "Steps" in submission["change_summary"] and "Tests" in submission["change_summary"]
     assert 0 < len(submission["diff_excerpt"]) <= 2000

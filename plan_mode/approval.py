@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import threading
@@ -231,18 +232,107 @@ def approval_text(text, path, revision, platform, summary="") -> str:
     return result[:max(0, limit - len(suffix))] + suffix[:limit]
 
 
-def edit_review_text(tool_name, args, platform, *, revision=0, targets=()) -> str:
+_PATCH_OPERATION = re.compile(r"\*\*\*\s*(Update|Add|Delete|Move)\s+File:")  # the host V4A parser's markers
+_LINE_BREAKS = re.compile(r"[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]")
+
+
+def edit_review_text(tool_name, args, platform, *, revision=0, targets=(), session_key="", cwd=None) -> str:
     """Bounded file-edit preview; targets are extracted by the planning writer parser."""
-    paths = " ".join(", ".join(targets).split()) or "(unknown path)"
-    header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths}"
-    if tool_name == "write_file":
-        preview = str(args.get("content") or "")
-    elif str(args.get("mode") or "replace").strip().lower() == "patch":
-        preview = str(args.get("patch") or "")
-    else:
-        preview = str(args.get("old_string") or "") + " → " + str(args.get("new_string") or "")
-    result = header + ("\n" + "\n".join(preview.splitlines()[:8]) if preview else "")
+    def relative(path):
+        return str(path.relative_to(Path(cwd))) if path.is_relative_to(Path(cwd)) else str(path)
+
+    outside = []  # targets outside the session cwd, counted in the header so the character cap cannot hide them
+
+    def display(target, header=False):
+        shown, inside = str(target), True
+        try:
+            if cwd is not None and shown and not shown.startswith("~"):
+                # Resolve the parent directories, so a symlinked directory cannot hide an outside target, but keep
+                # the entry itself: a delete or move acts on a symlink, while a content write goes through it.
+                # Relative targets resolve from the session cwd, as the file tools do.
+                given = Path(target) if Path(target).is_absolute() else Path(cwd) / target
+                entry = (Path(os.path.realpath(given.parent)) / given.name if given.name not in ("", ".", "..")
+                         else Path(os.path.realpath(given)))
+                shown, inside = relative(entry), entry.is_relative_to(Path(cwd))
+                if os.path.islink(entry):
+                    real = Path(os.path.realpath(entry))
+                    shown, inside = shown + " → " + relative(real), inside and real.is_relative_to(Path(cwd))
+        except (OSError, ValueError, TypeError):
+            try:  # an unresolvable path is shown as given; an absolute one outside the cwd still counts
+                inside = not Path(shown).is_absolute() or Path(shown).is_relative_to(Path(cwd))
+            except (ValueError, TypeError):
+                inside = False
+        if cwd is not None and shown.startswith("~"):
+            inside = False  # the host expands "~" to a profile home that can lie anywhere: shown as given, counted
+        if header and not inside:
+            outside.append(shown)
+        return " ".join(shown.split())
+
     limit = 250 if str(platform).strip().lower() in {"telegram", "slack", "discord"} else 1000
+    paths = ", ".join(display(target, header=True) for target in targets) or "(unknown path)"
+    if len(paths) > limit // 4:  # long names must not push the counts below out of the capped message
+        paths = paths[:limit // 4 - 1] + "…"
+    operations = []  # deletes and moves: always listed, since they carry no +/- lines
+    if tool_name == "write_file":
+        body = ["+" + line for line in str(args.get("content") or "").splitlines()]
+        sample, added, removed = body[:8], len(body), 0
+    elif str(args.get("mode") or "replace").strip().lower() == "patch":
+        files, body = [], []
+        # Split the way the host parser does (on newlines, dropping a trailing CR), so no operation line it applies
+        # can be split apart here and missed.
+        raw = [part[:-1] if part.endswith("\r") else part for part in str(args.get("patch") or "").split("\n")]
+        index = 0
+        while index < len(raw):
+            line, index = raw[index], index + 1
+            match = _PATCH_OPERATION.match(line)
+            payload = line[match.end():].strip() if match else ""
+            if match and match[1] == "Move":
+                cut = payload.find("->", 1)
+                if cut <= 0:
+                    # The host's path rewrite joins "*** Move File: a" with an arrow on a later line ("\n-> b").
+                    ahead = index
+                    while ahead < len(raw) and not raw[ahead].strip():
+                        ahead += 1
+                    if ahead < len(raw) and raw[ahead].lstrip().startswith("->"):
+                        payload, index = f"{payload} {raw[ahead].strip()}", ahead + 1
+                        cut = payload.find("->", 1)
+                moved = f"{display(payload[:cut].strip())} -> {display(payload[cut + 2:].strip())}" if cut > 0 else payload
+                operations.append(f"Move File: {moved}")
+            elif match and match[1] == "Delete":
+                operations.append(f"Delete File: {display(payload)}")
+            elif match:
+                files.append(f"{match[1]} File: {display(payload)}")
+                body.append(files[-1])
+            elif line.startswith(("+", "-")):
+                body.append(line)
+        added = sum(line.startswith("+") for line in body)
+        removed = sum(line.startswith("-") for line in body)
+        if len(files) < 2:  # a file name repeats the header unless the patch spans several files
+            body = [line for line in body if line not in files]
+        sample = body[:8]
+    else:
+        old = ["-" + line for line in str(args.get("old_string") or "").splitlines()]
+        new = ["+" + line for line in str(args.get("new_string") or "").splitlines()]
+        body = old + new
+        sample = (old[:max(4, 8 - len(new))] + new)[:8]  # a long removal still leaves room for the replacement
+        added, removed = len(new), len(old)
+    hidden = len(body) - len(sample)
+    lines = [_LINE_BREAKS.sub(" ", line) for line in operations + sample]
+    if hidden:
+        lines.append(f"… {hidden} more line{'' if hidden == 1 else 's'}")
+    # write_file replaces the whole file, so it shows its size, not a +/− change that would claim nothing was removed.
+    counts = (f"{added} line{'' if added == 1 else 's'}" if tool_name == "write_file"
+              else f"+{added}/−{removed} lines")
+    deletes = sum(operation.startswith("Delete") for operation in operations)
+    for number, word in ((deletes, "delete"), (len(operations) - deletes, "move"), (len(outside), "path")):
+        if number:
+            counts += f", {number} {word}{'' if number == 1 else 's'}"
+    if outside:
+        counts += " outside the working directory"
+    header = f"Plan-mode edit review (plan rev {revision}): {tool_name} {paths} ({counts})"
+    classic_cli = str(platform).strip().lower() in {"cli", "terminal", "local", ""} and not str(session_key).startswith("ui:")
+    separator, joiner = (" — ", " ⏎ ") if classic_cli else ("\n", "\n")
+    result = header + (separator + joiner.join(lines) if lines else "")
     return result if len(result) <= limit else result[:limit - 1] + "…"
 
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show bounded changed-line edit previews with session-relative paths, one-line classic CLI prompts, and a separator after approval-card change summaries.
+
 - Fix `/planmode on <task>`: the task now reaches the model on the next turn. Before, only the user saw it (#40).
   A note queued by a slash command is delivered once and no longer replays after a TUI/Desktop cold resume.
 
