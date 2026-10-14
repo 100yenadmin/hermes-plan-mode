@@ -991,6 +991,26 @@ def test_u1_real_cli_deny_keeps_planning(real_submit_host):
     assert any("review feedback, not a safety refusal" in note.get("context", "") for note in notes if isinstance(note, dict))
 
 
+def test_061_real_stale_submission_refuses_bare_approve(real_submit_host):
+    host = real_submit_host
+    plugin = host.command.__self__
+
+    def edit_then_approve(*args, **kwargs):
+        path = Path(plugin._load_state("sk:submit-session")["submission"]["path"])
+        path.write_text("# Changed after submission\n")
+        return "once"
+
+    host.callback(edit_then_approve)
+    result = json.loads(host.submit())
+    assert "changed after rev 1 was submitted" in result["message"]
+    before = plugin._load_state("sk:submit-session")
+    assert before["active"] and before["submission"]["status"] == "stale"
+    reply = host.command("approve")
+    assert "Plan rev 1 changed after it was submitted" in reply and "/planmode show" in reply
+    assert plugin._load_state("sk:submit-session") == before
+    assert "approved_path" not in before
+
+
 @pytest.mark.parametrize("mode", ["yolo", "off"])
 def test_u1_real_auto_approval_keeps_planning(real_submit_host, monkeypatch, mode):
     host = real_submit_host

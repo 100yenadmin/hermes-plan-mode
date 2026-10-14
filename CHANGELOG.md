@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 - 2026-10-14
+
+- Bare `/planmode approve` refuses changed submissions (#48) even after a denial or stale answer, and refuses a newer file
+  that was never submitted; review with `/planmode show`, then resubmit or approve the file explicitly.
+- A stale approval-card answer tells the model in the same turn that approval did not apply, plan mode is still on,
+  and it must show the current plan and submit it again.
+- Move previews keep the tails of both source and destination on Telegram, Slack and Discord's 250-character prompts (#46).
+- Add the **Approval card** switch (`approval_card`, on by default): off uses Hermes' approval prompt from the next
+  plan submission, keeps the other lean settings, and wins over custom lever overrides.
+
 ## 0.6.0 - 2026-10-14
 
 - **Approval card (`approval_card`).** Now part of the default lean profile, after PROOF-060 (README).

@@ -193,6 +193,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
+| Approval card (`approval_card`) | on | Ask for plan approval with one card in the lean profile. Off uses Hermes' approval prompt; applies from the next plan submission and wins over `levers` and `PLAN_MODE_LEVERS` |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
 | Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask, so changes stay uncommitted for your review. This is an instruction, not enforced (see Known limitations). On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
@@ -221,8 +222,9 @@ the rest.
   file-tool calls inside `execute_code`, but not shell commands, subagents or MCP writers: once approves that edit,
   session / always the rest of this plan. Each approval gets a fresh key, so always leaves one inert config entry that
   cannot approve another plan. If approvals turn off, review pauses and edits apply without a prompt. WhatsApp Cloud
-  has no Other with 3 choices. To opt out, set `plan_profile: classic`, or a `levers` list without `approval_card` (it replaces the whole
-  set, so list the other lean levers you want; see Experimental levers).
+  has no Other with 3 choices. To opt out, turn **Approval card** off (`approval_card: false`); the other lean settings
+  stay on. It applies from the next plan submission and wins over `levers` and `PLAN_MODE_LEVERS`. `plan_profile: classic`
+  still works.
   - **PROOF-060** (2026-10-14, Hermes v0.21.6, gpt-6.1-sol medium; card vs the approval directive on two small tasks,
     4 runs each per arm):
     - Approval correctness held in both arms: one approval per scripted approve, never before it, and no writes
@@ -507,10 +509,15 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   without a reason. The agent then asks what to change. Core also tells the model "Do NOT retry" on any denial; the
   plugin's turn note tells it that a plan denial is review feedback.
 - **An edited plan invalidates its approval.** The plugin hashes the plan at submit. If the file changes before the
-  approval lands, or before a typed approve without an explicit file, it refuses and the agent must show and submit
-  the new revision.
+  approval lands, or before a typed `/planmode approve` without an explicit file, it refuses, even after a denial or
+  stale answer. When the card's submitted text is available, the refusal includes a bounded change summary. Review
+  the current plan with `/planmode show`, then ask the agent to resubmit or use `/planmode approve <file>` after reviewing it.
+  If the newest tracked file differs from the submitted file, bare approve names it and refuses because it was never
+  submitted; ask the agent to submit it or review it with `/planmode show` and approve it explicitly. An unchanged
+  submitted revision can still be approved after a denial or timeout.
 - **One prompt at a time.** A second submit while an approval prompt is open is blocked. A typed `/planmode approve`
-  while the prompt is still open approves the submitted revision, and the prompt's later answer changes nothing.
+  while the prompt is still open approves the unchanged submitted revision when it is still the newest tracked file,
+  and the prompt's later answer changes nothing.
 - **`/plan` marker.** The plugin detects core's `/plan` prompt in the user's message. A user who types that text only
   restricts their own session; the model cannot author the user's message. If activation is refused (no session
   identity, profile mismatch), `/plan` stays prompt-only for that turn. If the hook times out, Hermes continues the
