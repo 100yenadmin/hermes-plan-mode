@@ -276,6 +276,16 @@ def test_snapshot_name_is_bounded_in_bytes():
         pm.PlanModePlugin._snapshot_name("x", 10 ** 240, "a" * 64)
 
 
+def test_snapshot_name_accepts_surrogateescaped_filesystem_bytes():
+    stem = "plan-\udcff" * 40
+    name = pm.PlanModePlugin._snapshot_name(stem, 12, "a" * 64)
+    assert len(os.fsencode(name)) <= 255
+    assert name.endswith("-rev12-aaaaaaaaaaaa.md")
+    assert stem.startswith(name.removesuffix("-rev12-aaaaaaaaaaaa.md"))
+    tagged = pm.PlanModePlugin._snapshot_name(stem, 12, "a" * 64, "-\udcff")
+    assert len(os.fsencode(tagged)) <= 255 and tagged.endswith("-rev12-aaaaaaaaaaaa-\udcff.md")
+
+
 @pytest.mark.parametrize("levers", ["", "approval_card"])
 @pytest.mark.parametrize("explicit", [False, True])
 def test_changed_approval_is_idle_only(make_plugin, session_env, levers, explicit):

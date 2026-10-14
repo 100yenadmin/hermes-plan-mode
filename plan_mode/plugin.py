@@ -970,9 +970,9 @@ class PlanModePlugin:
     @staticmethod
     def _snapshot_name(stem: str, revision: int, digest: str, tag: str = "") -> str:
         suffix = f"-rev{revision}-{digest[:12]}{tag}.md"
-        if len(suffix.encode("utf-8")) >= 255:
+        if len(os.fsencode(suffix)) >= 255:
             raise ValueError("the approved snapshot name is too long")
-        while stem and len((stem + suffix).encode("utf-8")) > 255:  # one path component on common filesystems
+        while stem and len(os.fsencode(stem + suffix)) > 255:  # one path component on common filesystems
             stem = stem[:-1]
         return stem + suffix
 
@@ -2439,19 +2439,44 @@ class PlanModePlugin:
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:
             platform = str(kwargs.get("platform") or "").strip().lower()
-            if (self._footer_off() or not platform
-                    or platform in LOCAL_PLATFORMS or len(response_text) > _FOOTER_MAX_CHARS):
-                return None
+            if self._footer_off() or platform in _NO_TURN_NOTE_PLATFORMS:
+                return None  # `footer: off` opts out of every plan-mode output transform; child turns belong to the parent.
             identity = derive_session_identity(platform)
             if identity.unsupported or identity.non_cli_without_key or not identity.key:
                 return None
-            if identity.key.startswith("ui:"):
-                return None  # A TUI/Desktop tab, even when the session was resumed from a chat platform.
             with self._lock:
-                _, state = self._state_for_hook(identity)
+                # Match hook lookup precedence without claiming or linking state just to render a reply.
+                state = self._load_state(identity.key)
+                if not state.get("active") and identity.fallback_key:
+                    fallback = self._load_state(identity.fallback_key)
+                    if fallback.get("active"):
+                        state = fallback
+                cli_key = f"cli:{os.getpid()}"
+                if not state.get("active") and identity.key != cli_key:
+                    fallback = self._load_state(cli_key)
+                    if fallback.get("active"):
+                        state = fallback
+                submission = state.get("submission") or {}
+                if state.get("active") and submission.get("status") == "awaiting":
+                    last_line = response_text.rstrip().split("\n")[-1]
+                    if last_line.startswith(("⏸ Plan mode", "Plan progress", "Executing approved plan", "⏸ Plan rev")):
+                        return None
+                    clarify = submission.get("clarify") or {}
+                    if (not clarify.get("tool_call_id")
+                            and not any(nonce == clarify.get("nonce") for nonce, _ in self._open_asks)
+                            and "/planmode approve" not in response_text):
+                        # A pure append: the streamed reply must stay an exact prefix of the transformed text.
+                        sep = ("" if not response_text or response_text.endswith("\n\n")
+                               else "\n" if response_text.endswith("\n") else "\n\n")
+                        return response_text + sep + (
+                            f"⏸ Plan rev {submission['revision']} is waiting for your approval: "
+                            "type /planmode approve to approve it, or say what to change.")
+                if (not platform or platform in LOCAL_PLATFORMS
+                        or len(response_text) > _FOOTER_MAX_CHARS or identity.key.startswith("ui:")):
+                    return None
                 return response_footer(response_text, state)
         except Exception:
-            return None  # Cosmetic output transforms fail open.
+            return None  # Output transforms fail open; approval and enforcement are unchanged.
 
     def on_session_reset(self, **kwargs: Any) -> None:
         identity = derive_session_identity(str(kwargs.get("platform") or ""))
