@@ -141,3 +141,58 @@ def test_067_session_index_skips_redundant_writes(idle_chat, monkeypatch):
     plugin._mark_session(pm._state_storage_key("sk:a"), True)   # moves to the end
     assert writes.count("session-index") == 1
     assert plugin.ctx.state.get("session-index", [])[-1] == pm._state_storage_key("sk:a")
+
+
+def as_pre_index_store(plugin, tmp_path):
+    """Make the in-memory store look like a 0.6.7 state.json: no session index, no backfill marker."""
+    plugin.ctx.state.values.pop("session-index", None)
+    plugin.ctx.state.values.pop("session-index-backfill", None)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(plugin.ctx.state.values), encoding="utf-8")
+    plugin.ctx.state.path = path
+    return path
+
+
+def test_067_upgrade_backfills_idle_states_written_before_the_index(idle_chat, session_env, tmp_path):
+    plugin, finish = idle_chat
+    finish("chat-1", "s1", "executing_llm")
+    second = finish("chat-2", "s2", "planning_tool")
+    as_pre_index_store(plugin, tmp_path)
+    assert plugin.ctx.state.get("session-index") is None
+
+    unbound_reset(plugin, session_env, "s1")  # the first action after the upgrade is /new
+
+    assert plugin._load_state("sk:chat-1") == {}
+    assert plugin._load_state("sk:chat-2") == second
+    assert plugin.ctx.state.get("session-index") == [pm._state_storage_key("sk:chat-2")]
+    assert plugin.ctx.state.get("session-index-backfill") is True
+
+
+def test_067_backfill_runs_once_and_keeps_recent_entries_last(idle_chat, session_env, tmp_path):
+    plugin, finish = idle_chat
+    finish("chat-1", "s1")
+    path = as_pre_index_store(plugin, tmp_path)
+    plugin._remember_session_id("sk:after-upgrade", {}, "s9")  # indexed by 0.6.8 before the first reset
+
+    unbound_reset(plugin, session_env, "unknown-session")
+
+    recent = pm._state_storage_key("sk:after-upgrade")
+    assert plugin.ctx.state.get("session-index") == [pm._state_storage_key("sk:chat-1"), recent]
+    path.write_text("not json", encoding="utf-8")  # a second scan would fail loudly here
+    unbound_reset(plugin, session_env, "unknown-session")
+    assert plugin.ctx.state.get("session-index")[-1] == recent
+
+
+def test_067_backfill_tolerates_a_store_without_a_readable_file(idle_chat, session_env, tmp_path):
+    plugin, finish = idle_chat
+    before = finish("chat-1", "s1")
+    path = as_pre_index_store(plugin, tmp_path)
+    path.write_text("not json", encoding="utf-8")
+
+    unbound_reset(plugin, session_env, "s1")  # unreadable: no crash, no marker, retried next time
+
+    assert plugin._load_state("sk:chat-1") == before
+    assert plugin.ctx.state.get("session-index-backfill") is None
+    path.write_text(json.dumps(plugin.ctx.state.values), encoding="utf-8")
+    unbound_reset(plugin, session_env, "s1")
+    assert plugin._load_state("sk:chat-1") == {}
