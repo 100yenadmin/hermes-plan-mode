@@ -316,3 +316,30 @@ def test_failed_snapshot_write_leaves_no_partial_file(make_plugin, session_env):
     plugin._save_state("sk:unit-session", current)
     assert "Plan approved" in plugin.command("approve")
     assert (approved / f"{path.stem}-rev2.md").read_bytes() == text.encode()
+
+
+def test_executing_pointer_rereads_the_approved_snapshot(make_plugin, session_env):
+    plugin, path = prepared(make_plugin, session_env)
+    path.write_text("# Revised\nUse pow2.\n")
+    plugin.command("show")
+    assert "Plan approved" in plugin.command("approve")
+    snapshot = path.parent / "approved" / f"{path.stem}-rev2.md"
+    pointer = render.executing_pointer(state(plugin))
+    assert f"The approved text is the snapshot {snapshot}" in pointer and "not the working plan" in pointer
+
+
+def test_normal_approval_has_no_snapshot_pointer(make_plugin, session_env):
+    plugin, path = prepared(make_plugin, session_env)
+    current = state(plugin)
+    current["approved_snapshot"] = "/stale/old-snapshot.md"  # left over from an earlier reviewed plan
+    plugin._save_state("sk:unit-session", current)
+    assert "Plan approved" in plugin.command("approve")
+    assert "approved_snapshot" not in state(plugin)
+    assert "snapshot" not in render.executing_pointer(state(plugin))
+
+
+def test_reply_saved_plans_get_no_link_sentence():
+    levers = frozenset({"plan_once"})
+    note = render.planning_note("/plans", ui_session=True, levers=levers, reply_plan=True)
+    assert "markdown link to the plan file" not in note
+    assert "markdown link to the plan file" in render.planning_note("/plans", ui_session=True, levers=levers)

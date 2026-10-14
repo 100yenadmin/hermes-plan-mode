@@ -135,8 +135,8 @@ Otherwise the reply says "Send any message to start", and your next message star
 ### Editing a plan before approving
 
 On classic CLI, TUI and Desktop, finish or dismiss any open approval first, then run `/planmode edit [file]`. Edit the
-host file in your editor and wait for the save. On Desktop, open the plan file from the markdown link in the agent's
-plan reply and use the preview's Edit and Save controls. Run `/planmode show [file]`, read the complete text, then
+host file in your editor and wait for the save. On Desktop, open the plan file from the project tree (`.hermes/plans/`), or from
+the markdown link in the agent's reply when it wrote the file itself, and use the preview's Edit and Save controls. Run `/planmode show [file]`, read the complete text, then
 `/planmode approve [file]`. A file changed since submission becomes the approved rev N+1; another save between show
 and approve requires showing it again. Implementation receives the captured text and a saved snapshot under
 `<plans_dir>/approved/`, so later edits to the working file do not gain approval.

@@ -969,6 +969,7 @@ class PlanModePlugin:
 
     def _approve_submission(self, state: dict[str, Any], submission: dict, via: str | None = None, storage_key: str = "", review: dict | None = None) -> None:
         """The shared transition after a correlated human decision and digest check."""
+        state.pop("approved_snapshot", None)  # set again below only for a reviewed replacement
         if review is not None:
             revision = int(state.get("revision") or 0) + 1
             snapshot = Path(state["plans_dir"]) / "approved" / f"{Path(review['path']).stem}-rev{revision}.md"
@@ -986,6 +987,7 @@ class PlanModePlugin:
                               digest=review["digest"], review_text=review["text"], snapshot_path=str(snapshot))
             state["revision"] = revision
             state["submission"] = submission
+            state["approved_snapshot"] = str(snapshot)  # the executing pointer re-reads this after a compaction
         state["active"] = False
         state.pop("review", None)
         state.pop("edit_review", None)
@@ -1390,6 +1392,7 @@ class PlanModePlugin:
                     state["pending_note"] += " " + SKILL_EXECUTION
                 state.update(phase="executing", approved_path=approved_path, approved_at=_utc_now())
                 state.pop("approved_revision", None)
+                state.pop("approved_snapshot", None)
                 if submission.get("path") == approved_path:
                     if unchanged:
                         submission["status"] = "approved"

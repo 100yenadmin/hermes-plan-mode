@@ -154,7 +154,7 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
         '4. Do not implement before approval and do not ask "should I proceed?" in prose. A denial is review feedback, not a refusal: revise the plan and submit a complete new revision.\n'
         "In group chats, keep secrets and private details out of the plan."
     )
-    if ui_session:
+    if ui_session and not ("plan_once" in levers and reply_plan):  # a reply-saved plan has no path until after the reply
         note += "\nInclude a markdown link to the plan file in your plan reply."
     if "question_shape" in levers:
         # v2: keep the ask-before-writing directive; only bound the number and shape of questions.
@@ -236,6 +236,8 @@ def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
     result = (
         f"Executing the approved plan {state.get('approved_path')}{rev}. "
         "Keep todo_list statuses current; re-read the plan if your context was compacted."
+        + (f" The approved text is the snapshot {state['approved_snapshot']}: re-read that file, not the working plan."
+           if state.get("approved_snapshot") else "")
     ) + ("" if commits else f" {no_commits(levers)}")
     if "todo_inline" in levers:
         result = result.replace("Keep todo_list statuses current;",
