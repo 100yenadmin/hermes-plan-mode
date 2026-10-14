@@ -97,12 +97,11 @@ def test_real_plugin_manager_registers_the_report_skill(tmp_path, monkeypatch):
 
 
 def test_model_written_text_never_becomes_shell_source():
-    """The title is read from a file by command substitution (its output is not re-parsed); search words are
-    letters and digits inside single quotes. Typing model text into the command would let quotes or `$()` escape."""
+    """The title and the search words are read from files by command substitution (its output is not re-parsed).
+    Typing model text into the command would let quotes or `$()` escape."""
     text = _skill_text()
     gh_lines = [line for line in text.splitlines() if "gh issue" in line]
     assert any('--title "$(cat <title file>)" --body-file <draft file>' in line for line in gh_lines)
-    assert any("--search '<two or three key words>'" in line for line in gh_lines)
-    assert "letters and digits" in text
-    assert not any(re.search(r"--title ['\"]<", line) for line in gh_lines)
+    assert any('--search "$(cat <search file>)"' in line for line in gh_lines)
+    assert not any(re.search(r"--(title|search) ['\"]<", line) for line in gh_lines)
 
