@@ -1263,9 +1263,8 @@ class PlanModePlugin:
                 if path not in files:
                     return "Plan display was refused: the requested file was not written by this session."
                 if action == "edit":
-                    name = os.path.basename(path)
                     return (f"{path}\nEdit and save it in your editor (GUI editors: wait for the save). "
-                            f"Then /planmode show {name}, then /planmode approve {name}.")
+                            f"Then /planmode show {path}, then /planmode approve {path}.")
                 try:
                     with open(path, "rb") as stream:
                         data = stream.read(65537)

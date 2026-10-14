@@ -248,12 +248,20 @@ def test_next_turn_detects_change_without_card(make_plugin, session_env):
 def test_edit_instructions_and_ui_note(make_plugin, session_env, monkeypatch):
     plugin, path = prepared(make_plugin, session_env)
     assert plugin.command("edit") == (f"{path}\nEdit and save it in your editor (GUI editors: wait for the save). "
-                                      f"Then /planmode show {path.name}, then /planmode approve {path.name}.")
+                                      f"Then /planmode show {path}, then /planmode approve {path}.")
     assert plugin.command(f"edit {path.name}").startswith(str(path))
     other = path.with_name("other.md")
     assert plugin.pre_tool_call("write_file", {"path": str(other)}) is None
     other.write_text("# Other\n")
-    assert plugin.command("edit other.md").endswith("Then /planmode show other.md, then /planmode approve other.md.")
+    assert plugin.command("edit other.md").endswith(f"Then /planmode show {other}, then /planmode approve {other}.")
+    nested = path.parent / "nested" / path.name  # same name as the submitted plan, in a subdirectory
+    nested.parent.mkdir()
+    assert plugin.pre_tool_call("write_file", {"path": str(nested)}) is None
+    nested.write_text("# Nested\n")
+    reply = plugin.command(f"edit {nested}")
+    assert reply.endswith(f"Then /planmode show {nested}, then /planmode approve {nested}.")
+    assert plugin.command(f"show {nested}").endswith("# Nested\n")
+    assert state(plugin)["review"]["path"] == str(nested)
     assert "not written by this session" in plugin.command("edit missing.md")
     assert LINK not in plugin.pre_llm_call()["context"]
     current = state(plugin)
