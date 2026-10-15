@@ -479,6 +479,29 @@ refactor across a ~200-file repo), plan-mode 0.4.5 met every threshold against C
     any counted run.
   - Under the original rule, the campaign would have stopped before it started.
 
+**Revisions (REV-1, 2026-10-15).** When the user sent the first plan back with a change, plan-mode 0.6.8 revised it as
+well as Codex plan mode did. Both ran on the same model (gpt-6.1-sol, medium), on the same day, with 6 runs per task and
+product on two tasks. The bars were pre-registered and applied by a blind adjudicator.
+- **Setup:** the scripted user denied the first plan with one change request, then approved the revision.
+  - T6: give `slugify` a docstring with two examples and return `""` for `None`.
+  - T7R: add `import --dry-run`, which prints `would import N rows` and writes nothing.
+- **Change applied in the finished code:** 12 of 12 for plan-mode, 12 of 12 for Codex plan mode. A column-blind
+  reviewer judged the T6 docstrings.
+- **Original task still correct:** 12 of 12 for each.
+- **Cost of the revision round** (from the feedback to the next plan decision): plan-mode used 1.75× Codex's
+  cost-weighted tokens (95% CI 1.52–2.02).
+  - Most of the difference is output. plan-mode writes the complete revised plan and submits it in a second call: a
+    median of 2 calls and about 1,350 output tokens per round, against 1–2 calls and about 460 tokens for Codex.
+  - Whole runs cost 1.46–1.57× Codex's cost-weighted tokens.
+  - Median wall time was 94 s against 51 s (T6) and 207 s against 110 s (T7R). Wall time is reported only.
+- **A first run of the Codex column was not a fair comparison and is not used.** It ran without the shared Python user
+  site that PARITY-3 and PARITY-4 used, so Codex's `python3` had no pytest.
+  - Codex then lost 4 of 6 T6 runs to a type annotation that fails on the repository's Python 3.9. It had checked
+    that code only under Python 3.12.
+  - That run is kept in the evidence (Codex 8 of 12).
+  - The Codex column was then re-run with the user site, under a declaration written before the re-run. That re-run
+    gives the numbers above.
+
 **plan-mode 0.4.2 (PARITY-2, 2026-10-12).** It met every pre-declared threshold.
 - 0 changes and 0 commits before approval in 38 runs, and every approval went through the gate.
 - Tests passed in 35 of 35 runs, against 35 of 35 for Codex.
