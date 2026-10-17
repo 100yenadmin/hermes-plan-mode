@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.0 - 2026-10-17
+
+1.0 is the same code as 0.6.8, with documentation that states what plan mode does and what was measured. It is a
+bounded planning-and-approval product: the agent plans read-only, you approve on one card, and it implements the
+approved plan in the same turn.
+
+- **Known limitation, now documented: resuming an approved plan.** After a restart, a context compaction or a session
+  rotation mid-execution, the agent does not pick up the approved plan by itself. The README gives the manual
+  workaround (#6 stays open on the post-1.0 milestone).
+- **Every measured claim names its campaign, plugin version, configuration, denominator and metric.** "Equal observed
+  pass counts" replaces wording that read as general task correctness, and "nothing changes before approval" names the
+  covered `pre_tool_call` hook (#70).
+- **A quick start** at the top of the README, checked end to end on a daily-driver agent over Telegram: a clarifying
+  question with named options, the plan, a revision, approval, implementation and an independent test run (#70).
+- **EXEC-1 (exploratory):** two blind graders compared each approved plan with the final diff on 48 existing PARITY-4
+  and REV-1 runs. Both plan-mode and Codex plan mode followed their plans closely: 98–100% of plan steps found, no
+  unplanned new behaviour (#70).
+- **ASK-1 (asking vs Codex plan mode, pre-registered):** undecided. On the cache task the scripted user's matcher missed
+  both products' wording in 11 of 12 runs, so the hidden preference was never delivered and the result cannot be
+  measured without new runs. On the two retry tasks, which the defect did not affect, both products asked well in 12
+  of 12 runs, including the task whose preference went against its own recommendation. Base checks passed 18 of 18
+  for each.
+- After 1.0 the project is in maintenance mode. It reopens on recorded triggers: durable resume (#6), Goal Mode once
+  Hermes exposes a goals seam (#32), plans outside the repository (#49), and lean follow-ups on a real cost complaint.
+
 ## 0.6.8 - 2026-10-15
 
 - **`/new` on chat platforms now starts plan mode clean (#67).** Before, after a plan had finished executing, the next
