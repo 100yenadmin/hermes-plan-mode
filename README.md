@@ -12,6 +12,18 @@ hook, except writes to the plan file.
 
 `/plan` in core Hermes is a prompt only. This plugin turns it into an enforced mode.
 
+## Quick start
+
+1. Install it (see [Install](#install)), then start a new Hermes session.
+2. Ask for a change with `/plan`, for example `/plan add a --dry-run flag to the import command`.
+3. The agent reads the code, may ask you a question or two, and shows you its plan. Apart from the plan file, nothing
+   in the repository changes yet.
+4. Approve it on the card ("Approve, auto-accept edits" or "Approve, review each file edit"), or choose Other and say
+   what to change; the agent revises the plan and asks again. Where there is no card, Hermes' own approval prompt asks.
+5. After approval the agent implements the plan in the same turn and tracks its progress.
+
+`/planmode status` shows where you are; `/planmode off` leaves plan mode without approving anything.
+
 ## How it works
 
 1. Start planning with `/plan <task>` or `/planmode on [task]`. The agent can also enter on its own with the
@@ -518,6 +530,21 @@ product on two tasks. Plan-mode used its lean defaults. The bars were pre-regist
   - That run is kept in the evidence (Codex 8 of 12).
   - The Codex column was then re-run with the user site, under a declaration written before the re-run. That re-run
     gives the numbers above.
+
+**Following the plan (EXEC-1, 2026-10-17, exploratory).** Two blind graders checked whether each finished diff did
+what its approved plan said, on runs already reported above: PARITY-4 (plan-mode 0.4.5) and REV-1 (plan-mode 0.6.8),
+12 runs per product in each. The graders (gpt-6.1-sol and gpt-6-astra, high effort) saw only a rubric, the approved
+plan and the final diff, without the product's name. No pass bar was set.
+- **Plan steps found in the diff:** a mean of 98–100% for both products, from both graders.
+- **Unplanned new behaviour:** none found in either product's runs.
+- **Labels out of 24 runs per product, Sol grader / Astra grader:**
+  - plan-mode: followed the plan 18 / 16, minor deviation 3 / 3, major deviation 0 / 2;
+  - Codex plan mode: followed the plan 20 / 16, minor deviation 0 / 0, major deviation 1 / 5;
+  - not assessable 3 / 3 for each product: one PARITY-4 task's diffs were longer than the 60 KB the graders saw.
+- **The graders agreed on 41 of 48 labels** (Cohen's κ 0.68). All 7 disagreements were PARITY-4 runs.
+- Most major deviations were one explicit plan rule handled only in part, for example a malformed-id route answering
+  405 where the plan said 404.
+- This is diff-level evidence on two task sets. It does not show runtime behaviour or the order of the work.
 
 **plan-mode 0.4.2 (PARITY-2, 2026-10-12).** It met every pre-declared threshold.
 - 0 non-plan repository changes through the covered `pre_tool_call` hook and 0 commits before approval in 38 runs,
