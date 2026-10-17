@@ -242,8 +242,8 @@ the rest.
   - Later planning turns get a short reminder instead of the full note.
 - **Plan once (TUI, Desktop and `hermes serve`, since 0.4.1).** The agent writes the plan once, in its reply between a
   `<proposed_plan>` line and a `</proposed_plan>` line, and the plugin saves that text as the plan file. This needs
-  Hermes 0.21.5 (v2026.9.24) or later with interim messages shown (and, for Codex models, commentary shown); otherwise,
-  and on the CLI and chat platforms, the agent writes the plan file as before. In round 8 (2026-10-11, plugin 0.4.1,
+  Hermes 0.21.5 (v2026.9.24) or later with interim messages shown (and, for Codex models, commentary shown). When those
+  conditions are not met, and always on the CLI and chat platforms, the agent writes the plan file as before. In round 8 (2026-10-11, plugin 0.4.1,
   gpt-6.1-sol medium, eight tasks with three runs each per arm, `plan_once` vs the 0.4.0 default)
   it was 22% faster (wall time 0.78×, 95% CI 0.73–0.85) with the same test results and judge scores.
 - **Approval card (since 0.6.0).** After showing the complete plan, the agent submits and plan mode asks one
