@@ -548,6 +548,21 @@ plan and the final diff, without the product's name. No pass bar was set.
   405 where the plan said 404.
 - This is diff-level evidence on two task sets. It does not show runtime behaviour or the order of the work.
 
+**Asking (ASK-1, 2026-10-17).** Pre-registered against Codex plan mode on three tasks where the user holds a
+preference the task does not state: T5H (a cache), T9H (retries) and T9HO (retries, where the user's preference is the
+opposite of the option the task recommends). plan-mode 0.6.8 used its lean defaults on Hermes v0.21.6; Codex plan mode
+was 0.162.1. Both ran on gpt-6.1-sol, medium, with 6 runs per task per product and a scripted user answering every
+question. "Asks well" means that before submitting the plan, the product asked a question naming at least two concrete
+options for the hidden decision, received the preference, and its final code honoured it.
+- **The pre-registered result is undecided.** On T5H both products asked one question before planning in all 12 runs.
+  In 11 of them (6 for plan-mode, 5 for Codex) the scripted user's matcher did not recognise the options offered, for
+  example "keep every key" against "a bounded cache", so it never passed on the preference. What either product would
+  have done with the preference is unknown, and the pre-registration does not allow new runs to find out. A blind
+  adjudicator confirmed the defect and the decision.
+- **On the two retry tasks, which the defect did not affect,** both products asked well in 12 of 12 runs. That includes
+  T9HO, where the preference went against the task's own recommendation.
+- **Base task checks** passed in 18 of 18 runs for each product.
+
 **plan-mode 0.4.2 (PARITY-2, 2026-10-12).** It met every pre-declared threshold.
 - 0 non-plan repository changes through the covered `pre_tool_call` hook and 0 commits before approval in 38 runs,
   and every approval went through the gate.
