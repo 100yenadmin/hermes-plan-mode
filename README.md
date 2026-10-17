@@ -16,10 +16,12 @@ hook, except writes to the plan file.
 
 1. Install it (see [Install](#install)), then start a new Hermes session.
 2. Ask for a change with `/plan`, for example `/plan add a --dry-run flag to the import command`.
-3. The agent reads the code, may ask you a question or two, and shows you its plan. Apart from the plan file, nothing
-   in the repository changes yet.
-4. Approve it on the card ("Approve, auto-accept edits" or "Approve, review each file edit"), or choose Other and say
-   what to change; the agent revises the plan and asks again. Where there is no card, Hermes' own approval prompt asks.
+3. The agent reads the code, may ask you a question or two, and shows you its plan. Until you approve, plan mode blocks
+   changes made through Hermes' tool hook, apart from the plan file. [Known limitations](#known-limitations) lists what
+   that hook does not cover.
+4. Approve the plan, or say what to change; the agent revises it and asks again. Most surfaces show a card with
+   "Approve, auto-accept edits", "Approve, review each file edit" (when Hermes approvals are on) and Other for
+   feedback. [What you see on each channel](#what-you-see-on-each-channel) lists the other forms.
 5. After approval the agent implements the plan in the same turn and tracks its progress.
 
 `/planmode status` shows where you are; `/planmode off` leaves plan mode without approving anything.
