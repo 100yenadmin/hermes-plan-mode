@@ -243,7 +243,8 @@ the rest.
 - **Plan once (TUI, Desktop and `hermes serve`, since 0.4.1).** The agent writes the plan once, in its reply between a
   `<proposed_plan>` line and a `</proposed_plan>` line, and the plugin saves that text as the plan file. This needs
   Hermes 0.21.5 (v2026.9.24) or later with interim messages shown (and, for Codex models, commentary shown); otherwise,
-  and on the CLI and chat platforms, the agent writes the plan file as before. In round 8 (2026-10-11, plugin 0.4.1)
+  and on the CLI and chat platforms, the agent writes the plan file as before. In round 8 (2026-10-11, plugin 0.4.1,
+  gpt-6.1-sol medium, eight tasks with three runs each per arm, `plan_once` vs the 0.4.0 default)
   it was 22% faster (wall time 0.78×, 95% CI 0.73–0.85) with the same test results and judge scores.
 - **Approval card (since 0.6.0).** After showing the complete plan, the agent submits and plan mode asks one
   `clarify` card: "Approve, auto-accept edits", "Approve, review each file edit" (when Hermes approvals are on) or
@@ -269,7 +270,8 @@ the rest.
     Desktop shows "Approval needed" with Reject, Always allow… (Allow this session) and Run. The text inside is
     plan-mode's: the plan revision, the file and the changed lines.
   - **Cancelling the card.** On the classic CLI, Ctrl+C cancels the card (Esc does nothing there); on Desktop, Skip.
-    Either way nothing is approved and nothing is written; ask the agent to show the card again when you are ready.
+    Either way the plan stays unapproved and non-plan writes through the covered `pre_tool_call` hook stay blocked;
+    ask the agent to show the card again when you are ready.
   - **Exercised by real clicks (2026-10-14, gpt-6.1-sol, Hermes v0.21.6):** classic CLI and Desktop, every choice
     (auto-accept, review each edit with once / deny / session, keep planning, Other feedback with the revision diff,
     cancel and re-ask, `/planmode show`, and the review choice hidden under `/yolo`). Not yet exercised: the TUI and
@@ -279,14 +281,19 @@ the rest.
   - Re-entering plan mode points at your previous plan.
   - "Just do it" while planning means: plan it and submit.
 
-How it was measured: pre-registered rounds with bars written before the runs and a blind adjudicator, on eight coding
-tasks with the same model (gpt-6.1-sol, medium effort) and Hermes v0.21.6.
+How 0.4.0 lean was measured against 0.3.5 classic: pre-registered lean-profile rounds with bars written before the runs
+and a blind adjudicator, on eight coding tasks with the same model (gpt-6.1-sol, medium effort) and Hermes v0.21.6.
+Ratios below use 0.3.5 as the denominator; these historical results do not measure current defaults.
+Throughout this README, **cost-weighted tokens** means `2 × uncached input + 0.1 × cached input + 10 × output`,
+with token counts in MTok (the campaign's $/MTok weights). This differs from unweighted token counts and wall time.
+
 - Lean finished 42% faster than 0.3.5 (wall time 0.58×, 95% CI 0.55–0.62, faster on all 8 tasks).
 - It used 28% fewer cost-weighted tokens (0.72×, CI 0.63–0.80).
-- It had the same test results and no approval leaks.
+- It had equal observed test pass counts on these tasks and no approval leaks.
 - On two tasks where the user had an unstated preference, it asked and matched it in 10 of 10 runs, as 0.3.5 did. On
   the eight tasks without one it asked 15 questions against 0.3.5's 22.
-- Two blind judges from different model families scored plan and code quality the same as or better than 0.3.5.
+- Two blind judges from different model families scored plan and code quality the same as or better than 0.3.5
+  (round 3, three runs per task); the question counts above come from round 5, two runs per task.
 
 Set `plan_profile: classic` to get the 0.3.5 behaviour back.
 
@@ -344,6 +351,9 @@ plugins:
   - T8 passing tests per run 27.5 vs 26.375 (1.04×, guard ≥ 0.85×);
   - execution model calls per run 7.9 vs 11.8 (0.67×, 95% CI 0.56–0.81);
   - execution cost-weighted tokens 0.94× (95% CI 0.75–1.18).
+
+  EB-2 used medium effort; its ratios use the 0.6.6 lean arm without `edit_batch` as the denominator and the
+  cost-weighted definition above.
 
   The first run of the same test, EB-1, was not counted for the decision. One run's call count included a Hermes
   background-review call, which made the call and cost bars undecided; its results and T8 bars held. #26 has both.
@@ -437,6 +447,12 @@ Four pre-registered benchmarks, PARITY-1 to PARITY-4, compared plan-mode with Co
 - **Setup:** both products ran the same model (gpt-6.1-sol, medium) with the same scripted user. PARITY-1 to PARITY-3
   used a suite of Python coding tasks, two of which hide a preference that only the user knows. PARITY-4 used four
   larger tasks.
+- **Reading the metrics:** each campaign below names its historical plugin version, not the current release. PARITY
+  ran the lean defaults for that version. Ratios in this section use Codex plan mode as the denominator: wall time
+  is elapsed time for the named phase; raw token use counts input and output without price weights; cost-weighted
+  tokens use `2 × uncached input + 0.1 × cached input + 10 × output`, per MTok. PARITY-1 to PARITY-3 had 38 runs per
+  product, with test checks on 35 and hidden-preference checks on 10. Judge percentages use blind plan pairs as the
+  denominator, not finished-code correctness; pair counts not stated below are not given in this summary.
 
 **plan-mode 0.4.5 (PARITY-3, 2026-10-13).** Against Codex plan mode on the same model, suite and test environment,
 plan-mode 0.4.5 met every threshold (0 non-plan repository changes before approval in 38 runs; tests passed in 35 of 35
@@ -467,7 +483,8 @@ refactor across a ~200-file repo), plan-mode 0.4.5 met every threshold against C
   - plan-mode's plans named all four in 3 of 3 runs.
   - Codex plan mode's plans named one in one run and none in the other two.
   - Both products' finished code handled all four.
-- **Cost:** plan-mode made more model calls (a median of 14–34 per run, against 10–13) and used 1.2–5.3× the tokens.
+- **Raw token use:** plan-mode made more model calls (a median of 14–34 per run, against 10–13) and used 1.2–5.3×
+  the unweighted tokens across the four tasks (12 runs per product).
   Its calls were not slower: the median was 7.4 s per call (297 calls), against 12.3 s per Codex request (87 requests;
   49 requests with no recorded end were left out).
 - **Test environment:** both products ran the same `node` (v26.7.0), `python3` and pytest, and command output was
@@ -479,9 +496,9 @@ refactor across a ~200-file repo), plan-mode 0.4.5 met every threshold against C
     any counted run.
   - Under the original rule, the campaign would have stopped before it started.
 
-**Revisions (REV-1, 2026-10-15).** When the user sent the first plan back with a change, plan-mode 0.6.8 revised it as
-well as Codex plan mode did. Both ran on the same model (gpt-6.1-sol, medium), on the same day, with 6 runs per task and
-product on two tasks. The bars were pre-registered and applied by a blind adjudicator.
+**Revisions (REV-1, 2026-10-15).** When the user sent the first plan back with a change, plan-mode 0.6.8 and Codex plan
+mode had equal observed pass counts on these tasks. Both ran on the same model (gpt-6.1-sol, medium), on the same day, with 6 runs per task and
+product on two tasks. Plan-mode used its lean defaults. The bars were pre-registered and applied by a blind adjudicator.
 - **Setup:** the scripted user denied the first plan with one change request, then approved the revision.
   - T6: give `slugify` a docstring with two examples and return `""` for `None`.
   - T7R: add `import --dry-run`, which prints `would import N rows` and writes nothing.
@@ -503,7 +520,8 @@ product on two tasks. The bars were pre-registered and applied by a blind adjudi
     gives the numbers above.
 
 **plan-mode 0.4.2 (PARITY-2, 2026-10-12).** It met every pre-declared threshold.
-- 0 changes and 0 commits before approval in 38 runs, and every approval went through the gate.
+- 0 non-plan repository changes through the covered `pre_tool_call` hook and 0 commits before approval in 38 runs,
+  and every approval went through the gate.
 - Tests passed in 35 of 35 runs, against 35 of 35 for Codex.
 - The hidden preference was found before the plan was submitted in 10 of 10 runs, against 10 of 10.
 - In blind plan-only comparisons, a Claude judge preferred plan-mode's plan in 91% of pairs (95% CI 82–100%) and a
@@ -610,10 +628,23 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Session-key edge cases.** With `compression.in_place: false`, `/planmode on` then `/compress` before any agent
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
-  linked tab has plan mode on; retry from the owning tab after one turn there. If a TUI session key rotates, or the
-  session is reopened in a new tab, while a plan executes, `/planmode done` may not reach that tab and the execution
-  pointer can stay until the todos finish or 100 turns pass
+  linked tab has plan mode on; retry from the owning tab after one turn there.
+- **Resuming an approved plan.** Durable resume is not part of 1.0
   ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
+  - **Hermes restart:** classic CLI execution state belongs to its process ID and is cleared on normal exit; a new
+    CLI process does not recover its execution pointer. Other surfaces can read retained state only when their
+    session/tab key still resolves it; there is no automatic unfinished-step recovery.
+  - **Context compaction:** while execution state is still found, a reminder asks the agent to re-read the approved
+    plan (its snapshot when present). Progress stores counts and a short current-item label, not a full checkpoint.
+    Lean clears the reminder at turn end without a nonempty todo list; a surviving reminder also expires after 100 executing turns.
+  - **TUI/Desktop key rotation or reopening:** the same tab can keep its pointer after a key rotation, but new keys
+    are not linked while executing. Commands in the new key or a reopened tab may miss it; `/planmode done` may leave
+    the old pointer behind.
+  - **Workaround:** run `/planmode status`. To clear a stale reminder, try `/planmode done` in the session/tab where
+    status still identifies it. Open the saved file under `.hermes/plans` if `/planmode show` cannot find it, then tell the agent:
+    "Read this approved plan: <file> (use its approved snapshot if available). Check what is already complete and
+    continue only the unfinished work; ask me before changing the plan." If status says planning is on, have the
+    agent submit the remaining plan and approve it again before edits. This is manual continuation, not restored progress.
 - **The no-commit rule is an instruction.** After approval plan mode is off, and terminal commands are not inspected.
   In benchmark runs the agent committed in 3 lean runs (2 of 108 through round 7, 1 of 112 in round 8), each after
   loading a TDD skill that commits per step, and in 0 of 70 classic runs
@@ -621,8 +652,9 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Plan once shows its tag lines.** On TUI, Desktop and `hermes serve` the reply shows the plan between a literal
   `<proposed_plan>` line and a `</proposed_plan>` line; Hermes does not style them as Codex does. Desktop's history view
   folds the planning reply away after the turn; the plan file stays in `.hermes/plans`.
-- **No autonomy choice at approval** (Hermes has no per-mode edit-accept setting) and **no
-  clear-context-and-implement** (not reachable from a plugin).
+- **Approval choices cover file tools:** the lean card offers auto-accept or review each `write_file` / `patch`
+  when Hermes approvals are on (see The lean profile). It does not offer **clear-context-and-implement**
+  (not reachable from a plugin).
 - **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs
   a new upstream plugin API, proposed in
   [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306) together with
