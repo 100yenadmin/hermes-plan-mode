@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.0 - 2026-11-08
+
+Support for Hermes 0.22 and 0.23, and a cleaner finish on chat platforms.
+
+- **Tested on Hermes 0.22.7, 0.23.0 and current main** (CI installs each with `uv sync --locked`, as Hermes' own CI
+  does). On Hermes 0.22 and newer, the lean profile on TUI, Desktop and `hermes serve` saves the plan straight from
+  the agent's reply again (`plan_once`). Hermes renamed an internal helper the capture used, so plan-mode had been
+  falling back to asking the agent to write the plan to a file, which cost one extra round trip per plan. Approval was
+  not affected (#73).
+- **The reply that finishes a plan no longer says "Executing approved plan"** on Telegram and other chat platforms
+  (lean profile): an execution without a todo list ends with its turn, and that turn's reply now carries no footer
+  (#71, #74).
+- **`/planmode status` keeps plan files as text on chat platforms** instead of turning them into attachments (#71, #74).
+
 ## 1.0.0 - 2026-10-17
 
 1.0 is the same code as 0.6.8, with documentation that states what plan mode does and what was measured. It is a

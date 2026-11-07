@@ -257,7 +257,10 @@ the rest.
 - **Plan once (TUI, Desktop and `hermes serve`, since 0.4.1).** The agent writes the plan once, in its reply between a
   `<proposed_plan>` line and a `</proposed_plan>` line, and the plugin saves that text as the plan file. This needs
   Hermes 0.21.5 (v2026.9.24) or later with interim messages shown (and, for Codex models, commentary shown). When those
-  conditions are not met, and always on the CLI and chat platforms, the agent writes the plan file as before. In round 8 (2026-10-11, plugin 0.4.1,
+  conditions are not met, and always on the CLI and chat platforms, the agent writes the plan file as before. Plan once
+  saves the reply text Hermes hands plugins after each model call. If another plugin holds the stream to withhold
+  commentary (`transform_llm_output` with `hold_stream`), that text can include commentary it kept off screen; use
+  `plan_profile: classic` alongside such a plugin. In round 8 (2026-10-11, plugin 0.4.1,
   gpt-6.1-sol medium, eight tasks with three runs each per arm, `plan_once` vs the 0.4.0 default)
   it was 22% faster (wall time 0.78×, 95% CI 0.73–0.85) with the same test results and judge scores.
 - **Approval card (since 0.6.0).** After showing the complete plan, the agent submits and plan mode asks one
@@ -733,8 +736,9 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **v0.3.0 features** use only the Hermes capability they need. Where the approval directive or the approval hooks
   are missing, submit asks through `clarify`, with typed `/planmode approve` as the fallback if clarify is unavailable. The system-prompt hint is skipped where the host
   has no prompt-section API, and typed approval skips `inject_message` where the host has none.
-- Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11), `v0.21.6` and a
-  pinned `main` (Python 3.14, the version for which 0.21.6 and `main` declare their runtime dependencies).
+- Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11), `v0.21.6`, `v0.22.7`,
+  `v0.23.0` and a pinned `main` (Python 3.14, the version for which 0.21.6 and newer declare their runtime
+  dependencies). From 0.22, CI installs Hermes with `uv sync --locked`, as Hermes' own CI does.
 
 ## How to test
 
