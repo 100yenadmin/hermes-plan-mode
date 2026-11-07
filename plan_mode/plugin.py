@@ -974,10 +974,11 @@ class PlanModePlugin:
         mode = "on" if state.get("active") else "off"
         entered = state.get("entered_at") or "not set"
         plans_dir = state.get("plans_dir") or "not set"
-        rendered = "\n".join(f"- {path}" for path in files) or "- none"
+        # Inline code keeps chat gateways from turning the plan paths into file attachments (#71).
+        rendered = "\n".join(f"- `{path}`" for path in files) or "- none"
         submission = state.get("submission") or {}
         if state.get("phase") == "executing":
-            phase = f"executing (rev {state.get('approved_revision') or '?'}: {state.get('approved_path')})"
+            phase = f"executing (rev {state.get('approved_revision') or '?'}: `{state.get('approved_path')}`)"
         elif state.get("active") and submission.get("status") in {"pending", "awaiting"}:
             asked = ", asked in chat" if submission.get("status") == "awaiting" and submission.get("clarify") else ""
             phase = f"awaiting approval (rev {submission['revision']}{asked})"
@@ -1982,6 +1983,11 @@ class PlanModePlugin:
             hint += " " + BRIEF_FINAL
         return hint
 
+    def _execution_ends_with_turn(self, state: dict[str, Any]) -> bool:
+        """With the todo levers, an execution that has no todo progress ends when its turn ends (post_llm_call)."""
+        return (bool({"todo_batch", "todo_inline"} & self._levers()) and state.get("phase") == "executing"
+                and not (state.get("progress") or {}).get("total"))
+
     def post_llm_call(self, **kwargs: Any) -> None:
         """Turn-end hook (after the tool loop), including local surfaces without footers."""
         if not {"todo_batch", "todo_inline"} & self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
@@ -1992,7 +1998,7 @@ class PlanModePlugin:
                 return
             with self._lock:
                 key, state = self._state_for_hook(identity)
-                if key and state.get("phase") == "executing" and not (state.get("progress") or {}).get("total"):
+                if key and self._execution_ends_with_turn(state):
                     self._clear_execution(state)
                     self._save_state(key, state)
                     self._sync_execution_family(_state_storage_key(key), state)
@@ -2620,6 +2626,8 @@ class PlanModePlugin:
                 if (not platform or platform in LOCAL_PLATFORMS
                         or len(response_text) > _FOOTER_MAX_CHARS or identity.key.startswith("ui:")):
                     return None
+                if self._execution_ends_with_turn(state):
+                    return None  # this is the execution's last reply: post_llm_call ends it right after (#71)
                 return response_footer(response_text, state)
         except Exception:
             return None  # Output transforms fail open; approval and enforcement are unchanged.
