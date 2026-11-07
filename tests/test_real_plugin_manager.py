@@ -38,12 +38,18 @@ def _copy_plugin(destination: Path) -> None:
     )
 
 
-def _gateway_binds_plugin_commands() -> bool:
-    """Feature gate for NousResearch/hermes-agent 5943347a2a (after v2026.9.21)."""
+def _plugin_command_dispatch_source() -> str:
+    """Source of the gateway's plugin-command dispatch; Hermes 0.22+ moved the handler call into a helper."""
     from gateway.run_inbound import GatewayInboundMixin
 
-    source = inspect.getsource(GatewayInboundMixin._hm_dispatch_quick_and_plugin_commands)
-    return "_session_env_scope" in source
+    names = ("_hm_dispatch_quick_and_plugin_commands", "_hm_run_plugin_handler")
+    return "".join(inspect.getsource(getattr(GatewayInboundMixin, name))
+                   for name in names if hasattr(GatewayInboundMixin, name))
+
+
+def _gateway_binds_plugin_commands() -> bool:
+    """Feature gate for NousResearch/hermes-agent 5943347a2a (after v2026.9.21)."""
+    return "_session_env_scope" in _plugin_command_dispatch_source()
 
 
 def _tui_binds_plugin_commands() -> bool:
@@ -58,12 +64,11 @@ def test_pinned_upstream_session_seam_is_importable_and_bound_around_commands():
     if not _gateway_binds_plugin_commands():
         pytest.skip("Hermes build lacks the gateway plugin-command session binding (5943347a2a)")
     from gateway.session_context import get_session_env
-    from gateway.run_inbound import GatewayInboundMixin
 
     assert callable(get_session_env)
-    source = inspect.getsource(GatewayInboundMixin._hm_dispatch_quick_and_plugin_commands)
+    source = _plugin_command_dispatch_source()
     assert "handler reading get_session_env()" in source
-    assert "with self._session_env_scope(_plugin_context):" in source
+    assert "self._session_env_scope(_plugin_context)" in source
 
 
 def test_real_cli_like_process_works_after_gateway_run_import(tmp_path, monkeypatch):
