@@ -40,18 +40,23 @@ jobs:
             python: "3.11"
           # From 0.21.6, Hermes declares its runtime dependencies for Python >= 3.14 only (older
           # interpreters get them from Hermes' lazy installer), so 0.21.6 and newer are tested on 3.14.
+          # From 0.22, Hermes resolves only with uv (its [tool.uv] overrides), so those rows install
+          # the exact locked set with `uv sync --locked`, as Hermes' own CI does.
           - name: v0.21.6
             ref: v0.21.6
             python: "3.14"
           - name: v0.22.7
             ref: v0.22.7
             python: "3.14"
+            installer: uv
           - name: v0.23.0
             ref: v0.23.0
             python: "3.14"
+            installer: uv
           - name: main-9ffa7dff23
             ref: 9ffa7dff23726d8daa8b3e167b20a5fabc2e04ef
             python: "3.14"
+            installer: uv
     env:
       HERMES_DISABLE_LAZY_INSTALLS: "1"
     steps:
@@ -62,11 +67,21 @@ jobs:
       - name: Install Hermes ${{ matrix.name }} and tests
         env:
           HERMES_REF: ${{ matrix.ref }}
+          HERMES_INSTALLER: ${{ matrix.installer }}
+          HERMES_PYTHON: ${{ matrix.python }}
         run: |
-          python -m pip install pytest
           git clone --filter=blob:none https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent"
           git -C "$RUNNER_TEMP/hermes-agent" checkout --detach "$HERMES_REF"
-          python -m pip install -e "$RUNNER_TEMP/hermes-agent"
+          if [ "$HERMES_INSTALLER" = "uv" ]; then
+            python -m pip install uv
+            uv sync --locked --python "$HERMES_PYTHON" --project "$RUNNER_TEMP/hermes-agent"
+            uv pip install --python "$RUNNER_TEMP/hermes-agent/.venv/bin/python" pytest
+            # Later steps run python, pytest and hermes from the locked environment.
+            echo "$RUNNER_TEMP/hermes-agent/.venv/bin" >> "$GITHUB_PATH"
+          else
+            python -m pip install pytest
+            python -m pip install -e "$RUNNER_TEMP/hermes-agent"
+          fi
       - name: Real Hermes modules import (the real-host tests must not skip silently)
         run: python -c "import hermes_cli.plugins, model_tools, gateway.run, tools.approval; print('hermes importable')"
       - run: pytest -q -rs
