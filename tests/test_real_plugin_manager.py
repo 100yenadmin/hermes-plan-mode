@@ -346,6 +346,8 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
                 raising=False,
             )
             monkeypatch.setattr(methods_tools, "_clear_session_context", clear_session_vars, raising=False)
+            # From Hermes 0.22 this helper is bound in from tui_gateway.server, which this test stubs out.
+            monkeypatch.setattr(methods_tools, "_session_source", lambda session: "tui", raising=False)
             response = methods_tools._run_plugin_command(
                 handler,
                 "on regression proof",

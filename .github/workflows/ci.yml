@@ -75,7 +75,7 @@ jobs:
           if [ "$HERMES_INSTALLER" = "uv" ]; then
             python -m pip install uv
             uv sync --locked --python "$HERMES_PYTHON" --project "$RUNNER_TEMP/hermes-agent"
-            uv pip install --python "$RUNNER_TEMP/hermes-agent/.venv/bin/python" pytest
+            uv pip install --python "$RUNNER_TEMP/hermes-agent/.venv/bin/python" pytest pyyaml
             # Later steps run python, pytest and hermes from the locked environment.
             echo "$RUNNER_TEMP/hermes-agent/.venv/bin" >> "$GITHUB_PATH"
           else

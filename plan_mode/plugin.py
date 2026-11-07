@@ -1822,7 +1822,11 @@ class PlanModePlugin:
             return
         try:
             from agent.agent_runtime_helpers import strip_think_blocks
-            from agent.history_commentary import _commentary_items, visible_commentary
+            from agent.history_commentary import visible_commentary
+            try:  # public from Hermes 0.22; a private name before
+                from agent.history_commentary import commentary_items
+            except ImportError:
+                from agent.history_commentary import _commentary_items as commentary_items
             from agent.message_sanitization import coalesce_tool_call_id
 
             def field(name):
@@ -1845,7 +1849,7 @@ class PlanModePlugin:
                 if not _plan_once_visible(provider=provider, codex=codex):
                     return
                 if codex:
-                    parts = _commentary_items({"codex_message_items": field("codex_message_items")})
+                    parts = commentary_items({"codex_message_items": field("codex_message_items")})
                     text = "\n\n".join(part for raw in parts if (part := visible_commentary(raw)))
                 else:
                     content = field("content")
