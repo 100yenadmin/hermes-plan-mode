@@ -260,7 +260,8 @@ the rest.
   conditions are not met, and always on the CLI and chat platforms, the agent writes the plan file as before. Plan once
   saves the reply text Hermes hands plugins after each model call. If another plugin holds the stream to withhold
   commentary (`transform_llm_output` with `hold_stream`), that text can include commentary it kept off screen; use
-  `plan_profile: classic` alongside such a plugin. In round 8 (2026-10-11, plugin 0.4.1,
+  `plan_profile: classic` alongside such a plugin, and leave `plan_once` (and `all`) out of any custom `levers` or
+  `PLAN_MODE_LEVERS` list. In round 8 (2026-10-11, plugin 0.4.1,
   gpt-6.1-sol medium, eight tasks with three runs each per arm, `plan_once` vs the 0.4.0 default)
   it was 22% faster (wall time 0.78×, 95% CI 0.73–0.85) with the same test results and judge scores.
 - **Approval card (since 0.6.0).** After showing the complete plan, the agent submits and plan mode asks one
