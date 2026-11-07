@@ -151,7 +151,7 @@ def test_profile_status_adds_only_one_line(make_plugin, monkeypatch, profile, co
     response = plugin._status_text(state, ["/plans/fixed.md"])
     assert "\n".join(text for text in response.splitlines() if text != line) == (
         "Plan mode: on\nEntered at: fixed\nPhase: awaiting approval (rev 3)\n"
-        "Last submission: rev 3 pending\nPlans directory: /plans\nPlan files:\n- /plans/fixed.md")
+        "Last submission: rev 3 pending\nPlans directory: /plans\nPlan files:\n- `/plans/fixed.md`")
 
 
 def test_profile_manifest_select_and_validation(tmp_path, monkeypatch):

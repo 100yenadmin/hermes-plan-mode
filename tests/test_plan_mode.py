@@ -1994,16 +1994,36 @@ def test_v033_extra_allowed_tools_flat_beats_nested(plugin):
 
 
 def test_u2_executing_footer_progress(plugin, executing_plan):
-    assert plugin.transform_llm_output(response_text="Working", platform="telegram") == "Working\n\nExecuting approved plan rev 1"
+    # With the todo levers (lean), an execution without todo progress ends with its turn, so no "Executing" footer (#71).
+    lean = bool({"todo_batch", "todo_inline"} & plugin._levers())
+    footer = plugin.transform_llm_output(response_text="Working", platform="telegram")
+    assert footer == (None if lean else "Working\n\nExecuting approved plan rev 1")
     state = plugin._load_state("sk:unit-session")
     state.pop("approved_revision")
     plugin._save_state("sk:unit-session", state)
-    assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Executing approved plan")
+    footer = plugin.transform_llm_output(response_text="Working", platform="telegram")
+    assert footer is None if lean else footer.endswith("Executing approved plan")
     plugin.post_tool_call("todo_list", {"todos": []}, status="ok", result=json.dumps({"todos": [
         {"status": "completed"}, {"status": "cancelled"}, {"status": "in_progress", "content": "Build"}]}))
     assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Plan progress 2/3 · now: Build")
     plugin.post_tool_call("todo", {"todos": []}, status="ok", result=json.dumps({"todos": [{"status": "pending"}]}))
     assert plugin.transform_llm_output(response_text="Working", platform="telegram").endswith("Plan progress 0/1")
+
+
+@pytest.mark.parametrize("plan_profile", ["lean"])
+def test_71_final_reply_of_an_execution_has_no_executing_footer(plugin, executing_plan):
+    # The reply that ends the execution turn must not claim the plan is still executing.
+    assert plugin.transform_llm_output(response_text="Done: added the script and its test.", platform="telegram") is None
+    plugin.post_llm_call(platform="telegram")
+    assert plugin._load_state("sk:unit-session").get("phase") != "executing"
+    assert "Phase: off" in plugin.command("status")
+
+
+def test_71_status_lists_plan_files_as_inline_code(plugin, executing_plan):
+    # Chat gateways turn bare local .md paths into attachments; inline code keeps them as text.
+    status = plugin.command("status")
+    assert f"- `{executing_plan}`" in status and f"`{executing_plan}`)" in status
+    assert f"- {executing_plan}" not in status
 
 
 @pytest.mark.parametrize("ending", ["⏸ Plan mode: already shown", "Plan progress 1/2", "Executing approved plan rev 1"])
