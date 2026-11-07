@@ -39,12 +39,18 @@ jobs:
             ref: v2026.9.24
             python: "3.11"
           # From 0.21.6, Hermes declares its runtime dependencies for Python >= 3.14 only (older
-          # interpreters get them from Hermes' lazy installer), so 0.21.6 and main are tested on 3.14.
+          # interpreters get them from Hermes' lazy installer), so 0.21.6 and newer are tested on 3.14.
           - name: v0.21.6
             ref: v0.21.6
             python: "3.14"
-          - name: main-d4d2ab7b5d
-            ref: d4d2ab7b5d104166e7e22a02cafd12f1fe456a31
+          - name: v0.22.7
+            ref: v0.22.7
+            python: "3.14"
+          - name: v0.23.0
+            ref: v0.23.0
+            python: "3.14"
+          - name: main-9ffa7dff23
+            ref: 9ffa7dff23726d8daa8b3e167b20a5fabc2e04ef
             python: "3.14"
     env:
       HERMES_DISABLE_LAZY_INSTALLS: "1"
