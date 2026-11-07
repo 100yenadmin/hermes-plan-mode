@@ -1,6 +1,6 @@
 # Hermes Plan Mode
 
-![Hermes Plan Mode](docs/media/banner.png)
+![Hermes Plan Mode](docs/media/banner.jpg)
 
 Claude Code / Codex-style plan mode for Hermes, on every interactive Hermes surface (CLI, TUI, Desktop and the
 messaging platforms), with no core changes. The agent explores with
