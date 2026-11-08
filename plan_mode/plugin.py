@@ -693,9 +693,6 @@ class PlanModePlugin:
         for candidate in related:
             if candidate != storage_key and not self._same_family(candidate, canonical):
                 continue  # a stale link to a key another tab has since claimed
-            if candidate != storage_key and self._other_activation(
-                    self._load_storage_state(candidate), state.get("activation_id")):
-                continue  # a plan turned on there since
             self._clear_storage_key(candidate)
 
     def _family_storage_keys(self, storage_key: str, state: dict[str, Any]) -> tuple[set[str], Any]:
@@ -857,7 +854,8 @@ class PlanModePlugin:
         if command_storage not in linked:
             linked.append(command_storage)
         for evicted in linked[:-256]:
-            if evicted != canonical_storage and self._same_family(evicted, canonical_storage):
+            if (evicted != canonical_storage and self._same_family(evicted, canonical_storage)
+                    and not self._other_activation(self._load_storage_state(evicted), state.get("activation_id"))):
                 self._clear_storage_key(evicted)
         state["command_session_storage_keys"] = linked[-256:]
         state["canonical_ui_storage_key"] = canonical_storage

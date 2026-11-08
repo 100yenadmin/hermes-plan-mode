@@ -1132,6 +1132,31 @@ def test_done_or_off_before_the_tabs_turn_drops_the_approval_note(session_env, p
     assert ctx is None or "The user approved the plan" not in ctx["context"]
 
 
+def test_reset_after_a_command_side_on_clears_the_tabs_new_plan(session_env, plugin, tmp_path):
+    """#6 review r3: `/planmode on` from the command side, then a session reset before the tab's turn, leaves plan
+    mode off, as on main."""
+    _approve_in_tab(session_env, plugin, tmp_path, "reset-key", "tab-reset", "reset")
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode is on" in plugin.command("on next task")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-reset"
+    plugin.on_session_reset(platform="tui")
+    assert plugin.pre_tool_call("terminal", {}) is None
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Phase: off" in plugin.command("status") or "off" in plugin.command("status").lower()
+
+
+def test_alias_eviction_never_clears_a_plan_turned_on_since(plugin):
+    """#6 review r3: an evicted alias holding a different plan that is on keeps it."""
+    keys = [plugin_mod._state_storage_key(f"sk:evict2-{i}") for i in range(256)]
+    tab_a = {"active": False, "phase": "executing", "command_session_storage_keys": list(keys),
+             "canonical_ui_storage_key": plugin_mod._state_storage_key("ui:evict2-a")}
+    plugin._save_state("ui:evict2-a", tab_a)
+    started = dict(tab_a, active=True, activation_id="other-plan", phase=None)
+    plugin._save_storage_state(keys[0], started)
+    plugin._link_command_key("ui:evict2-a", tab_a, "sk:evict2-new")
+    assert plugin._load_storage_state(keys[0]).get("activation_id") == "other-plan"
+
+
 def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
     session_env, plugin, tmp_path
 ):
