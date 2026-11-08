@@ -312,3 +312,48 @@ def test_request_scan_stays_fast_on_long_messages():
     start = time.monotonic()
     assert pm._user_asked_commits("don't commit " * 2000) is False
     assert time.monotonic() - start < 0.5
+
+
+# Review round 3: a quote opened in prose must not hide a later commit; continuations; very long commands.
+@pytest.mark.parametrize("command", [
+    "cd repo  # it's here\ngit commit -m x  # that's it",
+    "cat > a.md <<'EOF'\nDon't panic\nEOF\ngit add a.md && git commit -m wip\ncat > b.md <<'EOF'\nIt's fine\nEOF",
+    "git -C repo \\\ncommit -m x", "git \\\ncommit -m x", "git commit\\\n -m x", "git push\\\n origin main",
+    "echo '" + "a" * 30000 + "'\ngit push", "x=" + "a" * 30000 + "; git commit -m y",
+])
+def test_round3_commit_forms_blocked(executing, command):
+    assert executing.pre_tool_call("terminal", {"command": command}) == {
+        "action": "block", "message": render.NO_COMMIT_BLOCK,
+    }
+
+
+@pytest.mark.parametrize("command", ["ls # ; git push", "echo done  # then git commit"])
+def test_round3_comments_allowed(executing, command):
+    assert executing.pre_tool_call("terminal", {"command": command}) is None
+
+
+@pytest.mark.parametrize("message", [
+    "push to my fork", "push to the fork", "push the PR", "push to a new branch", "push to feature/x",
+    "push and open a PR", "push origin main", "push upstream", "push pls",
+])
+def test_round3_requests_lift_guard(executing, message):
+    executing.pre_llm_call(user_message=message)
+    assert executing.pre_tool_call("terminal", {"command": "git push"}) is None
+
+
+@pytest.mark.parametrize("message", ["neither commit nor push", "hold off on committing", "refrain from committing"])
+def test_round3_refusals_keep_guard(executing, message):
+    executing.pre_llm_call(user_message=message)
+    assert executing.pre_tool_call("terminal", {"command": "git commit -m x"})["action"] == "block"
+
+
+@pytest.mark.parametrize("command", [
+    "echo " + "a" * 1_000_000, "echo '" + "a" * 1_000_000, "echo 'git " + "a" * 1_000_000,
+    ("echo 'git' " + "b" * 50 + "\n") * 20000, ";" * 100_000, "\n" * 100_000,
+])
+def test_round3_scan_stays_fast_on_megabyte_commands(command):
+    import time
+
+    start = time.monotonic()
+    pm._runs_git_commit(command)
+    assert time.monotonic() - start < 1.0

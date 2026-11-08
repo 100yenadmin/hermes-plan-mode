@@ -697,7 +697,8 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   while an approved plan executes unless the user asks for commits or a push. A plan left executing (classic profile,
   or a stale pointer) keeps blocking until the user asks or runs `/planmode done`. The check reads the command the way a
   shell splits it, through `&&`, `;`, pipes, `sudo`/`env`/`xargs` wrappers and `bash -c` scripts; text that only
-  mentions git, such as `grep "git commit"`, is not blocked. Aliases, scripts, `execute_code`, MCP
+  mentions git, such as `grep "git commit"`, is not blocked, but a heredoc line that starts with `git commit` is. Aliases,
+  scripts, `execute_code`, MCP
   git tools and other commit-creating git commands (merge, revert, cherry-pick, am) are not caught; delegated subagents
   may not share the executing state.
   In benchmark runs the agent committed in 3 lean runs (2 of 108 through round 7, 1 of 112 in round 8), each after

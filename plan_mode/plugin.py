@@ -132,9 +132,10 @@ _USER_ASKED_PROCESS = re.compile(
 # changes", "push."), so "push the item onto the stack" or "push notifications" does not lift the guard.
 _USER_ASKED_COMMITS = re.compile(
     r"\b(?:commit(?:s|ting)?|(?:git\s+)?push(?:\s+up)?(?:"
-    r"\s+(?:it|this|that|them|now|when|after|once)\b"
-    r"|\s+(?:(?:your|my|our|the|these|those|all|any)\s+)?(?:changes?|code|branch(?:es)?|commits?|work|fix(?:es)?|updates?)\b"
-    r"|\s+to\s+(?:the\s+)?(?:origin|main|master|remote|github|gitlab|upstream)\b"
+    r"\s+(?:it|this|that|them|now|when|after|once|and|pls|please)\b"
+    r"|\s+(?:(?:your|my|our|the|these|those|all|any)\s+)?(?:changes?|code|branch(?:es)?|commits?|work|fix(?:es)?|pr)\b"
+    r"|\s+(?:to\s+)?(?:(?:the|my|our|your|a|new)\s+)*(?:origin|main|master|remote|github|gitlab|upstream|fork|branch|pr)\b"
+    r"|\s+to\s+[\w.-]+/[\w./-]+"
     r"|(?=\s*(?:$|[.!?,;]))))"
     r"\b(?![-\w]*\s+(?:message|msg|hook|parser))", re.I)
 _EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
@@ -155,7 +156,8 @@ def _user_asked_commits(text: str) -> bool:
     return False
 
 
-_COMMIT_NEGATORS = frozenset({"not", "dont", "cant", "wont", "no", "never", "without", "avoid", "stop", "skip", "nothing"})
+_COMMIT_NEGATORS = frozenset({"not", "dont", "cant", "wont", "no", "never", "without", "avoid", "stop", "skip", "nothing",
+                              "neither", "nor", "refrain", "hold"})
 _SHELL_PUNCTUATION = ";&|()<>`"
 _SHELL_KEYWORDS = frozenset({"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case",
                              "esac", "!", "{", "}"})
@@ -166,17 +168,22 @@ _GIT_VALUE_OPTIONS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--names
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
+_SHLEX_MAX_CHARS = 20_000  # shlex grows faster than linear on long tokens; longer lines use a plain split
+
+
 def _shell_tokens(text: str) -> list[str]:
-    """Split a command like a POSIX shell would, keeping ; & | ( ) < > ` as separate tokens."""
-    for attempt in (text, text.replace("'", " ").replace('"', " ")):
-        try:
-            lexer = shlex.shlex(attempt, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
-            lexer.whitespace_split = True
-            lexer.commenters = ""
-            return list(lexer)
-        except ValueError:  # an unbalanced quote or a trailing backslash
-            continue
-    return text.split()
+    """Split one command line like a POSIX shell would, keeping ; & | ( ) < > ` as separate tokens."""
+    if len(text) <= _SHLEX_MAX_CHARS:
+        for attempt in (text, text.replace("'", " ").replace('"', " ")):
+            try:
+                lexer = shlex.shlex(attempt, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
+                lexer.whitespace_split = True
+                lexer.commenters = "#"
+                return list(lexer)
+            except ValueError:  # an unbalanced quote or a trailing backslash
+                continue
+    plain = text.replace("'", " ").replace('"', " ")
+    return [token for token in re.split(r"\s+|([;&|()<>`]+)", plain) if token]
 
 
 def _runs_git_commit(command: Any, depth: int = 0) -> bool:
@@ -188,8 +195,15 @@ def _runs_git_commit(command: Any, depth: int = 0) -> bool:
     """
     if not isinstance(command, str) or depth > 3:
         return False
+    # Each line on its own, after joining backslash continuations: a quote opened in a heredoc body or a comment
+    # ("Don't panic") must not hide a later git commit.
+    text = re.sub(r"\\\r?\n", " ", command).replace("\r", "")
+    return any(_line_runs_git_commit(line, depth) for line in text.split("\n") if "git" in line)
+
+
+def _line_runs_git_commit(line: str, depth: int) -> bool:
     simple: list[list[str]] = [[]]
-    for token in _shell_tokens(command.replace("\r", " ").replace("\n", " ; ")):
+    for token in _shell_tokens(line):
         if token and all(ch in _SHELL_PUNCTUATION for ch in token):
             simple.append([])
         else:
