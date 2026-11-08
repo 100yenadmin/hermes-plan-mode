@@ -881,6 +881,44 @@ def test_tui_commands_reach_ui_state_after_adoption_and_key_rotation(
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
+def test_tui_done_finishes_executing_plan_after_session_key_rotation(
+    session_env, plugin, tmp_path
+):
+    """#6: an approved (inactive) plan keeps its rotated sk: command key linked, so done still finds it."""
+    session_env.update(
+        {
+            "HERMES_SESSION_KEY": "exec-before",
+            "HERMES_SESSION_SOURCE": "tui",
+            "HERMES_UI_SESSION_ID": "",
+            "TERMINAL_CWD": str(tmp_path),
+        }
+    )
+    assert "Plan mode is on" in plugin.command("on rotate while executing")
+    session_env["HERMES_UI_SESSION_ID"] = "exec-tab"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+    plan = tmp_path / ".hermes" / "plans" / "2026-11-08_exec.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "x"}) is None
+    plan.write_text("x", encoding="utf-8")
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan approved" in plugin.command("approve")
+    session_env["HERMES_UI_SESSION_ID"] = "exec-tab"
+    plugin.pre_llm_call()
+
+    # Rotating compression gives the tab a new session key while the plan executes.
+    session_env.update({"HERMES_SESSION_KEY": "exec-after", "HERMES_UI_SESSION_ID": "exec-tab"})
+    assert "Executing the approved plan" in plugin.pre_llm_call()["context"]
+
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "executing" in plugin.command("status").lower()
+    assert plugin.command("done") == "The executing plan is done."
+
+    session_env["HERMES_UI_SESSION_ID"] = "exec-tab"
+    ctx = plugin.pre_llm_call()
+    assert ctx is None or "Executing the approved plan" not in ctx["context"]
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
 def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
     session_env, plugin, tmp_path
 ):

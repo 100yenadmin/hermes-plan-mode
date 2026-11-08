@@ -837,6 +837,34 @@ class PlanModePlugin:
         state["canonical_ui_storage_key"] = canonical_storage
         self._save_state(state_key, state)
 
+    def _link_executing_alias(
+        self, ui_key: str, state: dict[str, Any], fallback_key: str | None
+    ) -> None:
+        """Link a tab's current sk: command key to its executing UI state (#6).
+
+        Active states are linked by _state_for_hook. An approved plan is inactive, so when rotating
+        compression gave the tab a new session key, /planmode status and done found no plan.
+        """
+        if not fallback_key or not fallback_key.startswith("sk:"):
+            return
+        if state.get("phase") != "executing" and not isinstance(state.get("edit_review"), dict):
+            return
+        alias = _state_storage_key(fallback_key)
+        canonical = _state_storage_key(ui_key)
+        if (
+            alias in self._linked_command_storage_keys(state)
+            and state.get("canonical_ui_storage_key") == canonical
+        ):
+            return
+        resolved, copy, _ = self._command_state(fallback_key)
+        if resolved != alias or copy.get("active"):
+            return  # another tab's active plan owns this command key
+        if copy and copy.get("canonical_ui_storage_key") not in (None, canonical):
+            return  # another family's copy: never overwrite it
+        self._link_command_key(ui_key, state, fallback_key)
+        if not copy:
+            self._save_storage_state(alias, dict(state))
+
     @staticmethod
     def _session_id_hash(value: Any) -> str:
         text = str(value or "").strip()
@@ -880,6 +908,8 @@ class PlanModePlugin:
                 self._claim_state_for_current_process(identity.key, state)
                 self._link_command_key(identity.key, state, identity.fallback_key)
                 return identity.key, state
+            if identity.key.startswith("ui:"):
+                self._link_executing_alias(identity.key, state, identity.fallback_key)
         if identity.key and identity.fallback_key:
             fallback_state = self._load_state(identity.fallback_key)
             if fallback_state.get("active"):

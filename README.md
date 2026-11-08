@@ -685,9 +685,10 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   - **Context compaction:** while execution state is still found, a reminder asks the agent to re-read the approved
     plan (its snapshot when present). Progress stores counts and a short current-item label, not a full checkpoint.
     Lean clears the reminder at turn end without a nonempty todo list; a surviving reminder also expires after 100 executing turns.
-  - **TUI/Desktop key rotation or reopening:** the same tab can keep its pointer after a key rotation, but new keys
-    are not linked while executing. Commands in the new key or a reopened tab may miss it; `/planmode done` may leave
-    the old pointer behind.
+  - **TUI/Desktop key rotation or reopening:** after a key rotation (rotating compression), the tab links its new key
+    at its next turn, so `/planmode status` and `/planmode done` find the executing plan again; a command sent before
+    that turn may still miss it. A reopened tab with a new tab id does not pick up an approved plan, and a command may
+    be refused while another tab of the profile has plan mode on.
   - **Workaround:** run `/planmode status`. To clear a stale reminder, try `/planmode done` in the session/tab where
     status still identifies it. Open the saved file under `.hermes/plans` if `/planmode show` cannot find it, then tell the agent:
     "Read this approved plan: <file> (use its approved snapshot if available). Check what is already complete and
