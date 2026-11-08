@@ -95,6 +95,11 @@ BLOCKED_TOOL_MESSAGE = (
     "Plan mode is on: {name} is blocked until the user approves the plan. Commands and tests run only after "
     "approval: put them in the plan's test plan and do not retry blocked tools."
 )
+# Hermes shows the user nothing when a pre_tool_call hook blocks a call (upstream NousResearch/hermes-agent#151276),
+# so the agent says it once. Only for blocked attempts to run or change something, not for plan_mode errors.
+BLOCK_USER_NOTICE = (
+    "Tell the user once, in one short line of your reply, that Plan Mode stopped this {name} call before it ran."
+)
 SKILL_POLICY = (
     "While planning, this overrides the system prompt's rule to load matching skills: plan mode sets the process "
     "and this plan format, so do not load skills about planning, plan writing, brainstorming, TDD, debugging, "

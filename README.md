@@ -662,6 +662,10 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 
 - **The agent can skip the approval card** when you say not to ask questions
   ([#19](https://github.com/100yenadmin/hermes-plan-mode/issues/19)); the turn-end `/planmode approve` pointer is the fallback.
+- **Blocked calls are not shown by Hermes.** When plan mode stops a tool call, Hermes prints nothing for it on any surface
+  ([NousResearch/hermes-agent#151276](https://github.com/NousResearch/hermes-agent/issues/151276)). The block itself is
+  enforced; the plugin asks the agent to say in one line that Plan Mode stopped the call, so how it is worded depends on
+  the model. The session record (`hermes sessions export`) always holds the call and the block message.
 - **Codex app-server runtime.** Hermes' Codex app-server executes native `exec` and `applyPatch` outside
   `pre_tool_call`. Plan mode does not enforce them. Use a normal Hermes tool runtime when enforcement matters.
 - **TUI `/background` and `btw`** side agents run under their own task id with no public link to the parent session.
