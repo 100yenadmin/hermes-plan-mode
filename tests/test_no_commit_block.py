@@ -251,5 +251,64 @@ def test_git_commit_pattern_stays_fast_on_long_tokens(command):
     import time
 
     start = time.monotonic()
-    assert pm._GIT_COMMIT.search(command) is None
+    assert pm._runs_git_commit(command) is False
+    assert time.monotonic() - start < 0.5
+
+
+# Review round 2: forms the command-position regex missed, and data that only mentions git.
+@pytest.mark.parametrize("command", [
+    "if true; then git commit -m x; fi", "{ git commit -m x; }", "while true; do git push; done",
+    "! git commit -m x", "git ls-files | xargs git commit -m x", "nice git push", "timeout 60 git push",
+    "sudo -u bob git push", "env -i git push", "bash -lc 'git push'", 'sh -xc "git push"', "git -p commit -m x",
+    "git -P push", "for f in a b; do git add $f; git commit -m $f; done", "eval 'git push'",
+    "sudo bash -c 'git commit -m x'", "git commit -m 'unbalanced", "git add -A\r\ngit commit -m x",
+])
+def test_more_commit_forms_blocked(executing, command):
+    assert executing.pre_tool_call("terminal", {"command": command}) == {
+        "action": "block", "message": render.NO_COMMIT_BLOCK,
+    }
+
+
+@pytest.mark.parametrize("command", [
+    'grep -c "git commit" log.txt', "rg -c 'git push' .", "git log --oneline | head", "git stash push -m wip",
+    "git show HEAD:commit.txt", "python3 -m pytest -q -k commit", "git -C /repo status", "echo 'bash -c git push'",
+])
+def test_more_safe_commands_allowed(executing, command):
+    assert executing.pre_tool_call("terminal", {"command": command}) is None
+
+
+@pytest.mark.parametrize("message", [
+    "push the new item onto the stack", "push to the array instead", "push the button left", "push my luck",
+    "don’t commit", "please don’t commit or push", "nothing to commit",
+])
+def test_more_non_requests_keep_guard(executing, message):
+    executing.pre_llm_call(user_message=message)
+    assert not executing._load_state("sk:unit-session").get("user_asked_commits")
+    assert executing.pre_tool_call("terminal", {"command": "git commit -m x"})["action"] == "block"
+
+
+@pytest.mark.parametrize("message", ["push up the changes", "ok, push the branch", "commit this, then push it"])
+def test_more_requests_lift_guard(executing, message):
+    executing.pre_llm_call(user_message=message)
+    assert executing.pre_tool_call("terminal", {"command": "git commit -m x"}) is None
+
+
+@pytest.mark.parametrize("command", [
+    "git " + "--git-dir " * 40 + "status", "\n" * 10000, ";" * 10000, "(" * 10000,
+    "cat <<EOF" + "\n" * 2000 + "EOF", "curl 'http://x/?" + "a=1&" * 2500 + "'", "echo " + "\n\n  " * 3000,
+    "bash -c " * 50 + "'echo hi'", "'" * 5001,
+])
+def test_commit_scan_stays_fast_on_adversarial_commands(command):
+    import time
+
+    start = time.monotonic()
+    pm._runs_git_commit(command)
+    assert time.monotonic() - start < 0.5
+
+
+def test_request_scan_stays_fast_on_long_messages():
+    import time
+
+    start = time.monotonic()
+    assert pm._user_asked_commits("don't commit " * 2000) is False
     assert time.monotonic() - start < 0.5

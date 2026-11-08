@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import secrets
 import sys
 import threading
@@ -127,17 +128,14 @@ EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-c
 _USER_ASKED_PROCESS = re.compile(
     r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]reviews?)\b", re.I)
 # Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
-_GIT_COMMIT = re.compile(
-    r"(?:^|[;&|(`\n]|\$\(|-c\s+['\"])\s*"
-    r"(?:(?:sudo|env|command|exec|nohup|time)\s+|[A-Za-z_]\w*=(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+\s+)*"
-    r"(?:\S*/)?git(?:\s+(?:"
-    r"-[cC]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+|"
-    r"--(?:git-dir|work-tree|namespace)\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+|"
-    r"--[\w-]+(?:=(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)?"
-    r"))*\s+(commit|push)(?![\w-])")
+# What counts as a commit request in the user's words. Push needs an object or a clause end ("push it", "push your
+# changes", "push."), so "push the item onto the stack" or "push notifications" does not lift the guard.
 _USER_ASKED_COMMITS = re.compile(
-    r"\b(?:commit(?:s|ting)?|(?:git\s+)?push(?![ -](?:notifications?|to-talk)\b)"
-    r"(?:\s+(?:it|this|that|them|your|my|our|the|to|now|when|after|once)\b|(?=\s*(?:$|[.!?,;]))))"
+    r"\b(?:commit(?:s|ting)?|(?:git\s+)?push(?:\s+up)?(?:"
+    r"\s+(?:it|this|that|them|now|when|after|once)\b"
+    r"|\s+(?:(?:your|my|our|the|these|those|all|any)\s+)?(?:changes?|code|branch(?:es)?|commits?|work|fix(?:es)?|updates?)\b"
+    r"|\s+to\s+(?:the\s+)?(?:origin|main|master|remote|github|gitlab|upstream)\b"
+    r"|(?=\s*(?:$|[.!?,;]))))"
     r"\b(?![-\w]*\s+(?:message|msg|hook|parser))", re.I)
 _EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
 _IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
@@ -148,12 +146,78 @@ _PLAN_CRAFT_START = "\n\nWrite the plan for an implementer with zero context"
 
 def _user_asked_commits(text: str) -> bool:
     """Accept a commit/push request only outside a nearby negation in its clause."""
+    text = text.replace("\u2019", "'").replace("\u2018", "'")  # "don’t" from phones and chat apps
     for match in _USER_ASKED_COMMITS.finditer(text):
-        clause = re.split(r"[.!?;,\n]", text[:match.start()])[-1]
+        clause = re.split(r"[.!?;,\n]", text[max(0, match.start() - 200):match.start()])[-1]
         words = re.findall(r"\b[\w']+\b", clause.lower())[-4:]
-        if not any(word in {"not", "dont", "cant", "wont", "no", "never", "without", "avoid", "stop", "skip"}
-                   or word.endswith("n't") for word in words):
+        if not any(word in _COMMIT_NEGATORS or word.endswith("n't") for word in words):
             return True
+    return False
+
+
+_COMMIT_NEGATORS = frozenset({"not", "dont", "cant", "wont", "no", "never", "without", "avoid", "stop", "skip", "nothing"})
+_SHELL_PUNCTUATION = ";&|()<>`"
+_SHELL_KEYWORDS = frozenset({"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case",
+                             "esac", "!", "{", "}"})
+_COMMAND_PREFIXES = frozenset({"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "ionice", "timeout",
+                               "xargs", "stdbuf", "caffeinate"})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+_GIT_VALUE_OPTIONS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace"})
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _shell_tokens(text: str) -> list[str]:
+    """Split a command like a POSIX shell would, keeping ; & | ( ) < > ` as separate tokens."""
+    for attempt in (text, text.replace("'", " ").replace('"', " ")):
+        try:
+            lexer = shlex.shlex(attempt, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            return list(lexer)
+        except ValueError:  # an unbalanced quote or a trailing backslash
+            continue
+    return text.split()
+
+
+def _runs_git_commit(command: Any, depth: int = 0) -> bool:
+    """Whether a terminal command runs git commit or git push, at the start of any simple command.
+
+    Best effort and linear in the command's length: it follows separators, shell keywords, VAR=value prefixes,
+    wrappers such as sudo, env, xargs and timeout, and `bash -c '...'` scripts. Text that only mentions git, such as
+    `grep "git commit"`, does not count. Aliases, scripts and other commit-creating commands are not seen.
+    """
+    if not isinstance(command, str) or depth > 3:
+        return False
+    simple: list[list[str]] = [[]]
+    for token in _shell_tokens(command.replace("\r", " ").replace("\n", " ; ")):
+        if token and all(ch in _SHELL_PUNCTUATION for ch in token):
+            simple.append([])
+        else:
+            simple[-1].append(token)
+    for words in simple:
+        i = 0
+        while i < len(words) and (words[i] in _SHELL_KEYWORDS or _ASSIGNMENT.match(words[i])):
+            i += 1
+        if i < len(words) and words[i].rsplit("/", 1)[-1] in _COMMAND_PREFIXES:
+            i = next((k for k in range(i + 1, len(words))
+                      if words[k].rsplit("/", 1)[-1] in {"git", "eval"} | _SHELLS), len(words))
+        if i >= len(words):
+            continue
+        name, args = words[i].rsplit("/", 1)[-1], words[i + 1:]
+        if name == "git":
+            k = 0
+            while k < len(args) and args[k].startswith("-"):
+                k += 2 if args[k] in _GIT_VALUE_OPTIONS else 1
+            if k < len(args) and args[k] in {"commit", "push"}:
+                return True
+        elif name == "eval":
+            if _runs_git_commit(" ".join(args), depth + 1):
+                return True
+        elif name in _SHELLS:
+            flag = next((k for k, arg in enumerate(args)
+                         if arg.startswith("-") and not arg.startswith("--") and "c" in arg[1:]), None)
+            if flag is not None and flag + 1 < len(args) and _runs_git_commit(args[flag + 1], depth + 1):
+                return True
     return False
 
 
@@ -2188,7 +2252,7 @@ class PlanModePlugin:
                     try:
                         if (tool_name == "terminal" and state.get("phase") == "executing"
                                 and not self._allow_commits() and not state.get("user_asked_commits")
-                                and _GIT_COMMIT.search(call_args.get("command") or "")):
+                                and _runs_git_commit(call_args.get("command") or "")):
                             return {"action": "block", "message": NO_COMMIT_BLOCK}
                     except Exception:
                         return None
