@@ -475,8 +475,7 @@ def test_042_catch_all_message_and_decisions(make_plugin, tmp_path, profile, lev
                 "only after approval: put them in the plan's test plan and do not retry blocked tools." if enabled else
                 f"Plan mode is on: {tool} is blocked until you approve the plan (/planmode approve). "
                 "You may write the plan under .hermes/plans/.")
-    notice = f"Tell the user once, in one short line of your reply, that Plan Mode stopped this {tool} call before it ran."
-    assert result == {"action": "block", "message": f"{expected} {notice}"}
+    assert result == {"action": "block", "message": expected}
     for read_only in pm.READ_ONLY_TOOLS:
         assert plugin.pre_tool_call(read_only, {}) is None
     assert plugin.pre_tool_call("plan_mode", {"action": "status"}) is None
@@ -485,7 +484,6 @@ def test_042_catch_all_message_and_decisions(make_plugin, tmp_path, profile, lev
     refusal = plugin.pre_tool_call("write_file", {"path": str(tmp_path / "outside.md")})
     assert refusal["action"] == "block" and "Use only absolute paths" in refusal["message"]
     assert "do not retry" not in refusal["message"]
-    assert refusal["message"].endswith("that Plan Mode stopped this write_file call before it ran.")
 
 
 def test_042_catch_all_lever_failure_is_closed(make_plugin, monkeypatch):
@@ -496,7 +494,6 @@ def test_042_catch_all_lever_failure_is_closed(make_plugin, monkeypatch):
     monkeypatch.setattr(plugin, "_note_levers", broken)
     result = plugin.pre_tool_call("terminal", {})
     assert result["action"] == "block" and "failed closed (ValueError)" in result["message"]
-    assert "Plan Mode stopped" not in result["message"]
     assert plugin.pre_tool_call("read_file", {}) is None
 
 

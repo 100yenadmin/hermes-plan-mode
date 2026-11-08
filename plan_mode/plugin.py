@@ -30,7 +30,7 @@ from .approval import (
     is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
 from .render import (
-    AGENT_HINT, AGENT_HINT_BRIDGE, BLOCK_USER_NOTICE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
+    AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
     BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
@@ -2431,13 +2431,11 @@ class PlanModePlugin:
                     return _block_message(
                         name,
                         f"Use only absolute paths resolving inside {plans_dir}; relative, outside, "
-                        "traversal, and symlink-escaping targets are refused. " + BLOCK_USER_NOTICE.format(name=name),
+                        "traversal, and symlink-escaping targets are refused.",
                     )
-                shown = name or "unknown tool"
-                notice = BLOCK_USER_NOTICE.format(name=shown)
                 if "blocked_tools" in self._note_levers():
-                    return {"action": "block", "message": f"{BLOCKED_TOOL_MESSAGE.format(name=shown)} {notice}"}
-                return _block_message(shown, notice)
+                    return {"action": "block", "message": BLOCKED_TOOL_MESSAGE.format(name=name or "unknown tool")}
+                return _block_message(name or "unknown tool")
         except Exception as exc:
             return _block_message(
                 str(tool_name or "unknown tool"),
