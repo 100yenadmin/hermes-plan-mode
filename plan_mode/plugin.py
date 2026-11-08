@@ -693,6 +693,9 @@ class PlanModePlugin:
         for candidate in related:
             if candidate != storage_key and not self._same_family(candidate, canonical):
                 continue  # a stale link to a key another tab has since claimed
+            if candidate != storage_key and self._other_activation(
+                    self._load_storage_state(candidate), state.get("activation_id")):
+                continue  # a plan turned on there since
             self._clear_storage_key(candidate)
 
     def _family_storage_keys(self, storage_key: str, state: dict[str, Any]) -> tuple[set[str], Any]:
@@ -790,12 +793,22 @@ class PlanModePlugin:
         self, raw_key: str, storage_key: str, state: dict[str, Any]
     ) -> None:
         """Save a command mutation to its canonical UI state and linked sk copies."""
+        prior = self._load_storage_state(storage_key).get("activation_id")
         self._save_storage_state(storage_key, state, key_hint=raw_key)
         canonical = state.get("canonical_ui_storage_key")
         for linked_storage in self._linked_command_storage_keys(state):
             # A linked key another tab has since claimed keeps that tab's copy.
-            if linked_storage != storage_key and self._same_family(linked_storage, canonical):
-                self._save_storage_state(linked_storage, state)
+            if linked_storage == storage_key or not self._same_family(linked_storage, canonical):
+                continue
+            if self._other_activation(self._load_storage_state(linked_storage), prior, state.get("activation_id")):
+                continue  # a plan turned on there since (a command-side `on` keeps the old tab's marker)
+            self._save_storage_state(linked_storage, state)
+
+    @staticmethod
+    def _other_activation(copy: dict[str, Any], *mine: Any) -> bool:
+        """Whether a copy holds a different plan that is still on: never overwrite or clear it from this family."""
+        theirs = copy.get("activation_id")
+        return bool(copy.get("active") and theirs and theirs not in mine)
 
     def _command_state(
         self, raw_key: str, surface: str = ""
@@ -844,7 +857,7 @@ class PlanModePlugin:
         if command_storage not in linked:
             linked.append(command_storage)
         for evicted in linked[:-256]:
-            if evicted != canonical_storage:
+            if evicted != canonical_storage and self._same_family(evicted, canonical_storage):
                 self._clear_storage_key(evicted)
         state["command_session_storage_keys"] = linked[-256:]
         state["canonical_ui_storage_key"] = canonical_storage
@@ -961,6 +974,10 @@ class PlanModePlugin:
                         identity.key, cli_state, identity.fallback_key
                     )
                     self._save_state(identity.key, cli_state)
+                    # The adopting tab owns the CLI copy too, even if another tab's save marked it.
+                    theirs = self._load_storage_state(cli_storage).get("canonical_ui_storage_key")
+                    if isinstance(theirs, str) and theirs != cli_state.get("canonical_ui_storage_key"):
+                        self._save_storage_state(cli_storage, cli_state)
                     return identity.key, cli_state
                 return cli_key, cli_state
         return identity.key, self._load_state(identity.key) if identity.key else {}
@@ -1436,9 +1453,12 @@ class PlanModePlugin:
                 self._clear_execution(state)
                 # Neither a still-open approval card nor a queued note may say "implement it now" after done.
                 state.pop("approved_while_open", None)
+                old_note = state.get("pending_note")
                 state["pending_note"] = ""
                 self._save_command_state(identity.key, command_storage_key, state)
                 self._sync_execution_family(command_storage_key, state)
+                if isinstance(old_note, str) and old_note:
+                    self._clear_delivered_note(command_storage_key, state, old_note)
                 return "The executing plan is done."
 
             if action == "submit" and entered_by == "agent":
@@ -1588,6 +1608,7 @@ class PlanModePlugin:
                 state.pop("review", None)
                 for field in ("activation_id", "entered_by", "agent_activation_id"):
                     state.pop(field, None)
+                old_note = state.get("pending_note")
                 state["pending_note"] = ""
                 self._forget_submission(state, command_storage_key)
                 state.pop("submission", None)
@@ -1596,6 +1617,8 @@ class PlanModePlugin:
                 self._clear_execution(state)
                 self._save_command_state(identity.key, command_storage_key, state)
                 self._sync_execution_family(command_storage_key, state)
+                if isinstance(old_note, str) and old_note:
+                    self._clear_delivered_note(command_storage_key, state, old_note)
                 return "Plan mode is off for this session. No approval note will be injected."
 
         return "Usage: /planmode on [task] | status | show [file] | edit [file] | approve [file] | reject [feedback] | done | off"

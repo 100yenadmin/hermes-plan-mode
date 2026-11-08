@@ -688,9 +688,9 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   - **TUI/Desktop key rotation or reopening:** after a key rotation (rotating compression), the tab links its new key
     at its next turn or tool call, so `/planmode status` and `/planmode done` find the executing plan again; a command
     sent before that may still miss it. The new key is not linked when it already holds another tab's plan or a state
-    of its own; commands there then say there is no executing plan, and `/planmode done` in the tab clears it. A
-    reopened tab with a new tab id does not pick up an approved plan, and a command may be refused while another tab
-    of the profile has plan mode on.
+    of its own; commands sent with that key then show and act on that state, not this tab's plan (`/planmode done`
+    there would end the other tab's plan), so run `/planmode status` first. A reopened tab with a new tab id does not pick up an approved plan, and a command may be
+    refused while another tab of the profile has plan mode on.
   - **Workaround:** run `/planmode status`. To clear a stale reminder, try `/planmode done` in the session/tab where
     status still identifies it. Open the saved file under `.hermes/plans` if `/planmode show` cannot find it, then tell the agent:
     "Read this approved plan: <file> (use its approved snapshot if available). Check what is already complete and

@@ -793,6 +793,28 @@ def test_ui_adoption_never_deletes_active_current_process_cli_state(
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
+def test_second_tab_off_clears_a_legacy_cli_plan_the_first_tab_touched(session_env, plugin, tmp_path):
+    """#6 review r2: a tab that adopts a legacy CLI plan owns its CLI copy, even after another tab wrote to it."""
+    session_env.clear()
+    session_env.update({"HERMES_SESSION_SOURCE": "cli", "TERMINAL_CWD": str(tmp_path)})
+    assert "Plan mode is on" in plugin.command("on legacy cli")
+    cli_key = f"cli:{os.getpid()}"
+    session_env.update({"HERMES_SESSION_KEY": "cli-tab-a", "HERMES_SESSION_SOURCE": "tui",
+                        "HERMES_UI_SESSION_ID": "cli-tab-a"})
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    plugin.command("reject try again")
+    assert plugin._load_state(cli_key).get("active") is True
+
+    session_env.update({"HERMES_SESSION_KEY": "cli-tab-b", "HERMES_UI_SESSION_ID": "cli-tab-b"})
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan mode is off" in plugin.command("off")
+    session_env["HERMES_UI_SESSION_ID"] = "cli-tab-b"
+    assert plugin.pre_tool_call("terminal", {}) is None
+    assert not plugin._load_state(cli_key).get("active")
+
+
 def test_durable_legacy_cli_state_blocks_after_plugin_reload(
     session_env, plugin, tmp_path
 ):
@@ -1058,6 +1080,56 @@ def test_failed_alias_link_fails_open_while_executing(session_env, plugin, tmp_p
         assert plugin.pre_tool_call("terminal", {"command": "pytest -q"}) is None
     finally:
         plugin.ctx.state.set = original
+
+
+def test_alias_eviction_never_clears_another_tabs_copy(plugin):
+    """#6 review r2 (pre-existing): dropping a tab's oldest alias leaves a copy another tab reclaimed alone."""
+    keys = [plugin_mod._state_storage_key(f"sk:evict-{i}") for i in range(256)]
+    tab_a = {"active": False, "phase": "executing", "command_session_storage_keys": list(keys),
+             "canonical_ui_storage_key": plugin_mod._state_storage_key("ui:evict-a")}
+    plugin._save_state("ui:evict-a", tab_a)
+    theirs = {"active": False, "phase": "executing", "approved_path": "/b/plan.md",
+              "canonical_ui_storage_key": plugin_mod._state_storage_key("ui:evict-b")}
+    plugin._save_storage_state(keys[0], theirs)
+    ours = dict(tab_a)
+    plugin._save_storage_state(keys[1], ours)
+    plugin._link_command_key("ui:evict-a", tab_a, "sk:evict-new")
+    plugin._link_command_key("ui:evict-a", tab_a, "sk:evict-newer")
+    assert plugin._load_storage_state(keys[0]) == theirs
+    assert plugin._load_storage_state(keys[1]) == {}
+
+
+def test_done_from_a_rotated_tab_never_turns_off_a_plan_started_on_its_old_key(session_env, plugin, tmp_path):
+    """#6 review r2: a command-side `on` on tab A's old key keeps A's marker until B's first turn; A's done must
+    still leave B's new plan on."""
+    _approve_in_tab(session_env, plugin, tmp_path, "started-old", "tab-started-a", "started-a")
+    session_env.update({"HERMES_SESSION_KEY": "started-a-new", "HERMES_UI_SESSION_ID": "tab-started-a"})
+    plugin.pre_llm_call()
+    session_env.update({"HERMES_SESSION_KEY": "started-old", "HERMES_UI_SESSION_ID": ""})
+    assert "Plan mode is on" in plugin.command("on plan b")
+    session_env["HERMES_SESSION_KEY"] = "started-a-new"
+    assert plugin.command("done") == "The executing plan is done."
+    session_env.update({"HERMES_SESSION_KEY": "started-old", "HERMES_UI_SESSION_ID": "tab-started-b"})
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+
+
+@pytest.mark.parametrize("action", ["done", "off"])
+def test_done_or_off_before_the_tabs_turn_drops_the_approval_note(session_env, plugin, tmp_path, action):
+    """#6 review r2 (pre-existing): the approval note must not reach the tab after done/off from the command side."""
+    session_env.update({"HERMES_SESSION_KEY": "note-key", "HERMES_SESSION_SOURCE": "tui", "HERMES_UI_SESSION_ID": "",
+                        "TERMINAL_CWD": str(tmp_path)})
+    assert "Plan mode is on" in plugin.command("on note task")
+    session_env["HERMES_UI_SESSION_ID"] = "note-tab"
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    plan = tmp_path / ".hermes" / "plans" / "2026-11-08_note.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "x"}) is None
+    plan.write_text("x", encoding="utf-8")
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan approved" in plugin.command("approve")
+    plugin.command(action)
+    session_env["HERMES_UI_SESSION_ID"] = "note-tab"
+    ctx = plugin.pre_llm_call()
+    assert ctx is None or "The user approved the plan" not in ctx["context"]
 
 
 def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
