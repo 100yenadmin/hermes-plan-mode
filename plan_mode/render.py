@@ -54,6 +54,10 @@ COMPACT_PLAN = (
 NO_COMMITS = (
     "Do not commit, and do not plan commit steps, unless the user asked for commits; leave the changes for the user to review."
 )
+NO_COMMIT_BLOCK = (
+    "Not run: allow_commits is off for this plan, so git commit and git push are blocked during execution. "
+    "Leave the changes uncommitted for review; the user can ask for a commit."
+)
 COMMIT_OVERRIDE = "This overrides any commit step in a loaded skill, such as a TDD skill's."
 CODEX_COMPACT_PLAN = (
     "Summary; Key changes, grouped by behaviour or subsystem, naming every touched file and every consumer of a "

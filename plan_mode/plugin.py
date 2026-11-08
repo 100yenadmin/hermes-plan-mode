@@ -30,7 +30,7 @@ from .approval import (
 )
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
-    BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, SKILL_EXECUTION, executing_pointer, light_note,
+    BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -98,7 +98,7 @@ _EXECUTING_INDEX_KEY = "executing-index"
 _SESSION_INDEX_KEY = "session-index"
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
-                     "user_asked_process")
+                     "user_asked_process", "user_asked_commits")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -127,6 +127,12 @@ EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-c
 _USER_ASKED_PROCESS = re.compile(
     r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]reviews?)\b", re.I)
 # Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
+_GIT_COMMIT = re.compile(
+    r"(?:^|[\s;&|(`'\"])git(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*\s+(commit|push)(?![\w-])")
+_USER_ASKED_COMMITS = re.compile(
+    r"(?<!\bnot )(?<!n't )(?<!\bno )(?<!\bnever )(?<!\bwithout )\b"
+    r"(?:commit(?:s|ting)?|git\s+push|push\s+(?:it|this|that|them|the\s+(?:changes?|branch|commits?)|"
+    r"to\s+(?:origin|main|master|remote|github)))\b(?![-\w]*\s+(?:message|msg|hook|parser))", re.I)
 _EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
 _IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
 # Core /plan puts its plan-craft text right after the task (agent/plan_prompt.py, v0.21.6 and main); its first words
@@ -1303,6 +1309,8 @@ class PlanModePlugin:
                     state["pending_note"] = f"The user's task for this plan (from /planmode on): {remainder[:2000]}"
                 if entered_by == "user" and _USER_ASKED_PROCESS.search(remainder):
                     state["user_asked_process"] = True
+                if entered_by == "user" and _USER_ASKED_COMMITS.search(remainder):
+                    state["user_asked_commits"] = True
                 if entered_by == "agent":
                     state["agent_activation_id"] = state["activation_id"]
                 if identity.key.startswith("cli:"):
@@ -2160,6 +2168,13 @@ class PlanModePlugin:
                                 return {"action": "block", "message": EXEC_SKILL_GUARD_MESSAGE.format(name=name)}
                     except Exception:
                         return None
+                    try:
+                        if (tool_name == "terminal" and state.get("phase") == "executing"
+                                and not self._allow_commits() and not state.get("user_asked_commits")
+                                and _GIT_COMMIT.search(call_args.get("command") or "")):
+                            return {"action": "block", "message": NO_COMMIT_BLOCK}
+                    except Exception:
+                        return None
                     return _block_message(PLAN_MODE_TOOL, "Cannot submit: plan mode is not active for this session.") if is_submit else None
                 assert state_key is not None
                 self._active_keys.add(state_key)
@@ -2477,8 +2492,7 @@ class PlanModePlugin:
                     state_key, state = self._state_for_hook(identity)
                     if not state.get("active"):
                         return None  # Refusal text is never injected into a turn.
-                # exec_skill_guard's escape: record a user request for TDD or a code review. It can only relax a
-                # speed lever, so any failure here is ignored and never changes this hook's result.
+                # Record user requests for process skills or commits; ignore failures without changing this hook's result.
                 try:
                     if state_key is not None and (state.get("active") or state.get("phase") == "executing"):
                         user_text = _user_message_text(message)
@@ -2493,6 +2507,9 @@ class PlanModePlugin:
                                 user_text = user_text.replace(pending_note.strip(), "")
                             if _USER_ASKED_PROCESS.search(user_text):
                                 state["user_asked_process"] = True
+                                self._save_state(state_key, state)
+                            if _USER_ASKED_COMMITS.search(user_text):
+                                state["user_asked_commits"] = True
                                 self._save_state(state_key, state)
                 except Exception:
                     pass
