@@ -701,9 +701,12 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   or a stale pointer) keeps blocking until the user asks or runs `/planmode done`. The check reads the command the way a
   shell splits it, through `&&`, `;`, pipes, `sudo`/`env`/`xargs` wrappers and `bash -c` scripts; text that only
   mentions git, such as `grep "git commit"`, is not blocked, but a heredoc line that starts with `git commit` is. Aliases,
-  scripts, `execute_code`, MCP
-  git tools and other commit-creating git commands (merge, revert, cherry-pick, am) are not caught; delegated subagents
-  may not share the executing state.
+  scripts, `execute_code`, MCP git tools and other commit-creating git commands (merge, revert, cherry-pick, am) are not
+  caught, nor are wrappers off its list (`su -c`, `find -exec`, `setsid`), a leading redirection, `$(…)` inside double
+  quotes or `bash -c` nested more than three deep; an internal error in the check lets the command run; delegated
+  subagents may not share the executing state. A user message that mentions a commit can lift the block until
+  `/planmode done`: negation is read within one clause, so "do not, under any circumstances, commit" counts as a request.
+  Known gaps: [#79](https://github.com/100yenadmin/hermes-plan-mode/issues/79).
   In benchmark runs the agent committed in 3 lean runs (2 of 108 through round 7, 1 of 112 in round 8), each after
   loading a TDD skill that commits per step, and in 0 of 70 classic runs
   ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)).
