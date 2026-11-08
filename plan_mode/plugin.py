@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import secrets
 import sys
 import threading
@@ -30,7 +31,7 @@ from .approval import (
 )
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
-    BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, SKILL_EXECUTION, executing_pointer, light_note,
+    BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
     no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
@@ -98,7 +99,7 @@ _EXECUTING_INDEX_KEY = "executing-index"
 _SESSION_INDEX_KEY = "session-index"
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
-                     "user_asked_process")
+                     "user_asked_process", "user_asked_commits")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -127,11 +128,111 @@ EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-c
 _USER_ASKED_PROCESS = re.compile(
     r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]reviews?)\b", re.I)
 # Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
+# What counts as a commit request in the user's words. Push needs an object or a clause end ("push it", "push your
+# changes", "push."), so "push the item onto the stack" or "push notifications" does not lift the guard.
+_USER_ASKED_COMMITS = re.compile(
+    r"\b(?:commit(?:s|ting)?|(?:git\s+)?push(?:\s+up)?(?:"
+    r"\s+(?:it|this|that|them|now|when|after|once|and|pls|please)\b"
+    r"|\s+(?:(?:your|my|our|the|these|those|all|any)\s+)?(?:changes?|code|branch(?:es)?|commits?|work|fix(?:es)?|pr)\b"
+    r"|\s+(?:to\s+)?(?:(?:the|my|our|your|a|new)\s+)*(?:origin|main|master|remote|github|gitlab|upstream|fork|branch|pr)\b"
+    r"|\s+to\s+[\w.-]+/[\w./-]+"
+    r"|(?=\s*(?:$|[.!?,;]))))"
+    r"\b(?![-\w]*\s+(?:message|msg|hook|parser))", re.I)
 _EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
 _IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
 # Core /plan puts its plan-craft text right after the task (agent/plan_prompt.py, v0.21.6 and main); its first words
 # end the user's task. Without it, only the task's first paragraph is read.
 _PLAN_CRAFT_START = "\n\nWrite the plan for an implementer with zero context"
+
+
+def _user_asked_commits(text: str) -> bool:
+    """Accept a commit/push request only outside a nearby negation in its clause."""
+    text = text.replace("\u2019", "'").replace("\u2018", "'")  # "don’t" from phones and chat apps
+    for match in _USER_ASKED_COMMITS.finditer(text):
+        clause = re.split(r"[.!?;,\n]", text[max(0, match.start() - 200):match.start()])[-1]
+        words = re.findall(r"\b[\w']+\b", clause.lower())[-4:]
+        if not any(word in _COMMIT_NEGATORS or word.endswith("n't") for word in words):
+            return True
+    return False
+
+
+_COMMIT_NEGATORS = frozenset({"not", "dont", "cant", "wont", "no", "never", "without", "avoid", "stop", "skip", "nothing",
+                              "neither", "nor", "refrain", "hold"})
+_SHELL_PUNCTUATION = ";&|()<>`"
+_SHELL_KEYWORDS = frozenset({"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case",
+                             "esac", "!", "{", "}"})
+_COMMAND_PREFIXES = frozenset({"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "ionice", "timeout",
+                               "xargs", "stdbuf", "caffeinate"})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+_GIT_VALUE_OPTIONS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace"})
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+_SHLEX_MAX_CHARS = 20_000  # shlex grows faster than linear on long tokens; longer lines use a plain split
+
+
+def _shell_tokens(text: str) -> list[str]:
+    """Split one command line like a POSIX shell would, keeping ; & | ( ) < > ` as separate tokens."""
+    if len(text) <= _SHLEX_MAX_CHARS:
+        for attempt in (text, text.replace("'", " ").replace('"', " ")):
+            try:
+                lexer = shlex.shlex(attempt, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
+                lexer.whitespace_split = True
+                lexer.commenters = ""  # shlex would start a comment at any #, even inside a word (docs/C#-guide.md)
+                return list(lexer)
+            except ValueError:  # an unbalanced quote or a trailing backslash
+                continue
+    plain = text.replace("'", " ").replace('"', " ")
+    return [token for token in re.split(r"\s+|([;&|()<>`]+)", plain) if token]
+
+
+def _runs_git_commit(command: Any, depth: int = 0) -> bool:
+    """Whether a terminal command runs git commit or git push, at the start of any simple command.
+
+    Best effort and linear in the command's length: it follows separators, shell keywords, VAR=value prefixes,
+    wrappers such as sudo, env, xargs and timeout, and `bash -c '...'` scripts. Text that only mentions git, such as
+    `grep "git commit"`, does not count. Aliases, scripts and other commit-creating commands are not seen.
+    """
+    if not isinstance(command, str) or depth > 3:
+        return False
+    # Each line on its own, after joining backslash continuations: a quote opened in a heredoc body or a comment
+    # ("Don't panic") must not hide a later git commit.
+    text = re.sub(r"\\\r?\n", " ", command).replace("\r", "")
+    return any(_line_runs_git_commit(line, depth) for line in text.split("\n") if "git" in line)
+
+
+def _line_runs_git_commit(line: str, depth: int) -> bool:
+    simple: list[list[str]] = [[]]
+    for token in _shell_tokens(line):
+        if token and all(ch in _SHELL_PUNCTUATION for ch in token):
+            simple.append([])
+        else:
+            simple[-1].append(token)
+    for words in simple:
+        i = 0
+        while i < len(words) and (words[i] in _SHELL_KEYWORDS or _ASSIGNMENT.match(words[i])):
+            i += 1
+        if i < len(words) and words[i].rsplit("/", 1)[-1] in _COMMAND_PREFIXES:
+            i = next((k for k in range(i + 1, len(words))
+                      if words[k].rsplit("/", 1)[-1] in {"git", "eval"} | _SHELLS), len(words))
+        if i >= len(words):
+            continue
+        name, args = words[i].rsplit("/", 1)[-1], words[i + 1:]
+        if name == "git":
+            k = 0
+            while k < len(args) and args[k].startswith("-"):
+                k += 2 if args[k] in _GIT_VALUE_OPTIONS else 1
+            if k < len(args) and args[k] in {"commit", "push"}:
+                return True
+        elif name == "eval":
+            if _runs_git_commit(" ".join(args), depth + 1):
+                return True
+        elif name in _SHELLS:
+            flag = next((k for k, arg in enumerate(args)
+                         if arg.startswith("-") and not arg.startswith("--") and "c" in arg[1:]), None)
+            if flag is not None and flag + 1 < len(args) and _runs_git_commit(args[flag + 1], depth + 1):
+                return True
+    return False
 
 
 def _user_message_text(message: Any) -> str | None:
@@ -1372,6 +1473,8 @@ class PlanModePlugin:
                     state["pending_note"] = f"The user's task for this plan (from /planmode on): {remainder[:2000]}"
                 if entered_by == "user" and _USER_ASKED_PROCESS.search(remainder):
                     state["user_asked_process"] = True
+                if entered_by == "user" and _user_asked_commits(remainder):
+                    state["user_asked_commits"] = True
                 if entered_by == "agent":
                     state["agent_activation_id"] = state["activation_id"]
                 if identity.key.startswith("cli:"):
@@ -2229,6 +2332,13 @@ class PlanModePlugin:
                                 return {"action": "block", "message": EXEC_SKILL_GUARD_MESSAGE.format(name=name)}
                     except Exception:
                         return None
+                    try:
+                        if (tool_name == "terminal" and state.get("phase") == "executing"
+                                and not self._allow_commits() and not state.get("user_asked_commits")
+                                and _runs_git_commit(call_args.get("command") or "")):
+                            return {"action": "block", "message": NO_COMMIT_BLOCK}
+                    except Exception:
+                        return None
                     return _block_message(PLAN_MODE_TOOL, "Cannot submit: plan mode is not active for this session.") if is_submit else None
                 assert state_key is not None
                 self._active_keys.add(state_key)
@@ -2546,8 +2656,7 @@ class PlanModePlugin:
                     state_key, state = self._state_for_hook(identity)
                     if not state.get("active"):
                         return None  # Refusal text is never injected into a turn.
-                # exec_skill_guard's escape: record a user request for TDD or a code review. It can only relax a
-                # speed lever, so any failure here is ignored and never changes this hook's result.
+                # Record user requests for process skills or commits; ignore failures without changing this hook's result.
                 try:
                     if state_key is not None and (state.get("active") or state.get("phase") == "executing"):
                         user_text = _user_message_text(message)
@@ -2562,6 +2671,9 @@ class PlanModePlugin:
                                 user_text = user_text.replace(pending_note.strip(), "")
                             if _USER_ASKED_PROCESS.search(user_text):
                                 state["user_asked_process"] = True
+                                self._save_state(state_key, state)
+                            if _user_asked_commits(user_text):
+                                state["user_asked_commits"] = True
                                 self._save_state(state_key, state)
                 except Exception:
                     pass

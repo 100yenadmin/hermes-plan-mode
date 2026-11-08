@@ -238,7 +238,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
 | Approval card (`approval_card`) | on | Ask for plan approval with one card in the lean profile. Off uses Hermes' approval prompt and wins over `levers` and `PLAN_MODE_LEVERS`. Change it between plans: it takes effect at once, and turning it off stops per-edit review of a running plan |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
-| Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask, so changes stay uncommitted for your review. This is an instruction, not enforced (see Known limitations). On: it may commit as the plan style suggests |
+| Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask; terminal-tool `git commit` and `git push` are blocked while an approved plan executes unless you ask. Aliases, scripts, `execute_code`, MCP git tools and other commit-creating git commands (merge, revert, cherry-pick, am) are not caught (see Known limitations). On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
 
 ### The lean profile (default since 0.4.0)
@@ -696,7 +696,14 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
     "Read this approved plan: <file> (use its approved snapshot if available). Check what is already complete and
     continue only the unfinished work; ask me before changing the plan." If status says planning is on, have the
     agent submit the remaining plan and approve it again before edits. This is manual continuation, not restored progress.
-- **The no-commit rule is an instruction.** After approval plan mode is off, and terminal commands are not inspected.
+- **The no-commit block is best-effort.** With `allow_commits` off, terminal-tool `git commit` and `git push` are blocked
+  while an approved plan executes unless the user asks for commits or a push. A plan left executing (classic profile,
+  or a stale pointer) keeps blocking until the user asks or runs `/planmode done`. The check reads the command the way a
+  shell splits it, through `&&`, `;`, pipes, `sudo`/`env`/`xargs` wrappers and `bash -c` scripts; text that only
+  mentions git, such as `grep "git commit"`, is not blocked, but a heredoc line that starts with `git commit` is. Aliases,
+  scripts, `execute_code`, MCP
+  git tools and other commit-creating git commands (merge, revert, cherry-pick, am) are not caught; delegated subagents
+  may not share the executing state.
   In benchmark runs the agent committed in 3 lean runs (2 of 108 through round 7, 1 of 112 in round 8), each after
   loading a TDD skill that commits per step, and in 0 of 70 classic runs
   ([#18](https://github.com/100yenadmin/hermes-plan-mode/issues/18)).
