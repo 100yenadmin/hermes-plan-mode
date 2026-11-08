@@ -327,9 +327,11 @@ def test_round3_commit_forms_blocked(executing, command):
     }
 
 
-@pytest.mark.parametrize("command", ["ls # ; git push", "echo done  # then git commit"])
-def test_round3_comments_allowed(executing, command):
-    assert executing.pre_tool_call("terminal", {"command": command}) is None
+@pytest.mark.parametrize("command", [
+    'git add docs/C#-guide.md && git commit -m "Update guide"', "echo a#b; git push", "git commit -m 'fix #12'",
+])
+def test_embedded_hash_never_hides_a_commit(executing, command):
+    assert executing.pre_tool_call("terminal", {"command": command})["action"] == "block"
 
 
 @pytest.mark.parametrize("message", [

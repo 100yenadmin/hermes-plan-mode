@@ -178,7 +178,7 @@ def _shell_tokens(text: str) -> list[str]:
             try:
                 lexer = shlex.shlex(attempt, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
                 lexer.whitespace_split = True
-                lexer.commenters = "#"
+                lexer.commenters = ""  # shlex would start a comment at any #, even inside a word (docs/C#-guide.md)
                 return list(lexer)
             except ValueError:  # an unbalanced quote or a trailing backslash
                 continue
