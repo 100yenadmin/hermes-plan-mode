@@ -919,6 +919,147 @@ def test_tui_done_finishes_executing_plan_after_session_key_rotation(
     assert plugin.pre_tool_call("terminal", {}) is None
 
 
+def _approve_in_tab(session_env, plugin, tmp_path, key, tab, name):
+    """Approve a plan for TUI tab `tab` on session key `key`; leaves the tab executing after one turn."""
+    session_env.update({"HERMES_SESSION_KEY": key, "HERMES_SESSION_SOURCE": "tui", "HERMES_UI_SESSION_ID": "",
+                        "TERMINAL_CWD": str(tmp_path)})
+    assert "Plan mode is on" in plugin.command(f"on {name}")
+    session_env["HERMES_UI_SESSION_ID"] = tab
+    assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    plan = tmp_path / ".hermes" / "plans" / f"2026-11-08_{name}.md"
+    assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "x"}) is None
+    plan.write_text(name, encoding="utf-8")
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "Plan approved" in plugin.command("approve")
+    session_env["HERMES_UI_SESSION_ID"] = tab
+    plugin.pre_llm_call()
+    return plan
+
+
+def _executing(plugin, key):
+    return plugin._load_state(key).get("phase") == "executing"
+
+
+def test_done_through_an_older_key_also_clears_the_rotated_copy(session_env, plugin, tmp_path):
+    """#6 review: `done` through the pre-rotation key must clear the copy linked after the rotation too."""
+    _approve_in_tab(session_env, plugin, tmp_path, "older-a", "tab-older", "older")
+    session_env.update({"HERMES_SESSION_KEY": "older-b", "HERMES_UI_SESSION_ID": "tab-older"})
+    plugin.pre_llm_call()
+    assert _executing(plugin, "sk:older-b")
+
+    session_env.update({"HERMES_SESSION_KEY": "older-a", "HERMES_UI_SESSION_ID": ""})
+    assert plugin.command("done") == "The executing plan is done."
+    assert not _executing(plugin, "sk:older-b")
+    assert not _executing(plugin, "ui:tab-older")
+    session_env["HERMES_SESSION_KEY"] = "older-b"
+    assert plugin.command("done") == "There is no executing plan to finish."
+    session_env["HERMES_UI_SESSION_ID"] = "tab-older"
+    ctx = plugin.pre_llm_call()
+    assert ctx is None or "Executing the approved plan" not in ctx["context"]
+
+
+def test_done_in_a_rotated_tab_never_overwrites_another_tab_that_reclaimed_the_old_key(
+    session_env, plugin, tmp_path
+):
+    """#6 review: after tab A rotates away from a key and tab B approves its own plan there, A's done leaves B alone."""
+    _approve_in_tab(session_env, plugin, tmp_path, "shared-old", "tab-a", "plan-a")
+    session_env.update({"HERMES_SESSION_KEY": "a-new", "HERMES_UI_SESSION_ID": "tab-a"})
+    plugin.pre_llm_call()
+    assert _executing(plugin, "sk:a-new")
+
+    plan_b = _approve_in_tab(session_env, plugin, tmp_path, "shared-old", "tab-b", "plan-b")
+    assert plugin._load_state("ui:tab-b").get("approved_path") == str(plan_b.resolve())
+    before = dict(plugin._load_state("sk:shared-old"))
+    assert before.get("approved_path") == str(plan_b.resolve())
+
+    session_env.update({"HERMES_SESSION_KEY": "a-new", "HERMES_UI_SESSION_ID": ""})
+    assert plugin.command("done") == "The executing plan is done."
+    assert plugin._load_state("sk:shared-old") == before
+    assert _executing(plugin, "ui:tab-b")
+    session_env["HERMES_SESSION_KEY"] = "shared-old"
+    assert "plan-b" in plugin.command("status")
+
+
+def test_rotated_key_with_an_empty_leftover_copy_is_taken_over(session_env, plugin, tmp_path):
+    """#6 review: `/planmode off` from the command side before the tab's next turn leaves an empty, unmarked copy.
+    The tab takes it over, so `done` really ends the tab's execution instead of reporting a false success."""
+    _approve_in_tab(session_env, plugin, tmp_path, "leftover-a", "tab-leftover", "leftover")
+    session_env.update({"HERMES_SESSION_KEY": "leftover-b", "HERMES_UI_SESSION_ID": ""})
+    plugin.command("off")
+    leftover = plugin._load_state("sk:leftover-b")
+    assert leftover and not any(leftover.values())
+
+    session_env["HERMES_UI_SESSION_ID"] = "tab-leftover"
+    plugin.pre_llm_call()
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert "executing" in plugin.command("status").lower()
+    assert plugin.command("done") == "The executing plan is done."
+    assert not _executing(plugin, "ui:tab-leftover")
+    session_env["HERMES_UI_SESSION_ID"] = "tab-leftover"
+    ctx = plugin.pre_llm_call()
+    assert ctx is None or "Executing the approved plan" not in ctx["context"]
+    assert plugin.pre_tool_call("terminal", {}) is None
+
+
+def test_rotated_key_never_takes_over_an_unmarked_copy_with_its_own_state(session_env, plugin, tmp_path):
+    """#6 review: an unmarked copy holding its own state cannot be attributed to a tab, so it is not linked or changed."""
+    _approve_in_tab(session_env, plugin, tmp_path, "unmarked-a", "tab-unmarked", "unmarked")
+    foreign = {"active": False, "phase": "executing", "approved_path": "/elsewhere/plan.md", "pending_note": ""}
+    plugin._save_state("sk:unmarked-b", foreign)
+    session_env.update({"HERMES_SESSION_KEY": "unmarked-b", "HERMES_UI_SESSION_ID": "tab-unmarked"})
+    plugin.pre_llm_call()
+    assert plugin._load_state("sk:unmarked-b") == foreign
+    linked = plugin._linked_command_storage_keys(plugin._load_state("ui:tab-unmarked"))
+    assert plugin_mod._state_storage_key("sk:unmarked-b") not in linked
+
+
+@pytest.mark.parametrize("owner", ["active", "other-family"])
+def test_rotated_key_owned_by_another_tab_is_not_linked(session_env, plugin, tmp_path, owner):
+    _approve_in_tab(session_env, plugin, tmp_path, "owned-a", "tab-owner-a", "owned")
+    session_env.update({"HERMES_SESSION_KEY": "owned-b", "HERMES_UI_SESSION_ID": ""})
+    if owner == "active":
+        assert "Plan mode is on" in plugin.command("on another tab plans here")
+        session_env["HERMES_UI_SESSION_ID"] = "tab-owner-b"
+        assert plugin.pre_tool_call("terminal", {})["action"] == "block"
+    else:
+        plugin._save_state("sk:owned-b", {"active": False, "phase": "executing", "approved_path": "/b/plan.md",
+                                          "canonical_ui_storage_key": plugin_mod._state_storage_key("ui:tab-owner-b")})
+    before = dict(plugin._load_state("sk:owned-b"))
+    tab_a = plugin._load_state("ui:tab-owner-a")
+    # Called directly: with an active plan on the shared key, the hook then adopts it by the older fallback path.
+    plugin._link_executing_alias("ui:tab-owner-a", tab_a, "sk:owned-b")
+    assert plugin._load_state("sk:owned-b") == before
+    linked = plugin._linked_command_storage_keys(plugin._load_state("ui:tab-owner-a"))
+    assert plugin_mod._state_storage_key("sk:owned-b") not in linked
+
+
+def test_rotated_key_is_not_linked_or_seeded_once_the_plan_is_done(session_env, plugin, tmp_path):
+    _approve_in_tab(session_env, plugin, tmp_path, "finished-a", "tab-finished", "finished")
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert plugin.command("done") == "The executing plan is done."
+    session_env.update({"HERMES_SESSION_KEY": "finished-b", "HERMES_UI_SESSION_ID": "tab-finished"})
+    plugin.pre_llm_call()
+    assert plugin._load_state("sk:finished-b") == {}
+    linked = plugin._linked_command_storage_keys(plugin._load_state("ui:tab-finished"))
+    assert plugin_mod._state_storage_key("sk:finished-b") not in linked
+
+
+def test_failed_alias_link_fails_open_while_executing(session_env, plugin, tmp_path):
+    """#6 review: linking is a convenience; a storage error must not block tools of an approved plan."""
+    _approve_in_tab(session_env, plugin, tmp_path, "fail-a", "tab-fail", "fail")
+    session_env.update({"HERMES_SESSION_KEY": "fail-b", "HERMES_UI_SESSION_ID": "tab-fail"})
+    original = plugin.ctx.state.set
+
+    def failing_set(key, value):
+        raise OSError("disk full")
+
+    plugin.ctx.state.set = failing_set
+    try:
+        assert plugin.pre_tool_call("terminal", {"command": "pytest -q"}) is None
+    finally:
+        plugin.ctx.state.set = original
+
+
 def test_rotated_tui_command_refuses_before_the_next_hook_without_guessing(
     session_env, plugin, tmp_path
 ):

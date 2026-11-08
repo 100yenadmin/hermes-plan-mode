@@ -688,14 +688,25 @@ class PlanModePlugin:
         self, storage_key: str, state: dict[str, Any] | None = None
     ) -> None:
         state = state or self._load_storage_state(storage_key)
-        related = {storage_key, *self._linked_command_storage_keys(state)}
-        canonical = state.get("canonical_ui_storage_key")
-        if isinstance(canonical, str) and canonical.startswith("session:"):
-            related.add(canonical)
+        related, canonical = self._family_storage_keys(storage_key, state)
+        related.add(storage_key)
         for candidate in related:
             if candidate != storage_key and not self._same_family(candidate, canonical):
                 continue  # a stale link to a key another tab has since claimed
             self._clear_storage_key(candidate)
+
+    def _family_storage_keys(self, storage_key: str, state: dict[str, Any]) -> tuple[set[str], Any]:
+        """The state's linked copies and canonical UI state, including keys the canonical state linked later.
+
+        A copy's own list can predate a key linked while executing (#6), so the canonical state's list is added.
+        """
+        related = set(self._linked_command_storage_keys(state))
+        canonical = state.get("canonical_ui_storage_key")
+        if isinstance(canonical, str) and canonical.startswith("session:"):
+            related.add(canonical)
+            if canonical != storage_key:
+                related.update(self._linked_command_storage_keys(self._load_storage_state(canonical)))
+        return related, canonical
 
     def _same_family(self, storage_key: str, canonical: Any) -> bool:
         """Whether a linked copy still names this family's canonical UI state (or names none)."""
@@ -780,8 +791,10 @@ class PlanModePlugin:
     ) -> None:
         """Save a command mutation to its canonical UI state and linked sk copies."""
         self._save_storage_state(storage_key, state, key_hint=raw_key)
+        canonical = state.get("canonical_ui_storage_key")
         for linked_storage in self._linked_command_storage_keys(state):
-            if linked_storage != storage_key:
+            # A linked key another tab has since claimed keeps that tab's copy.
+            if linked_storage != storage_key and self._same_family(linked_storage, canonical):
                 self._save_storage_state(linked_storage, state)
 
     def _command_state(
@@ -836,6 +849,12 @@ class PlanModePlugin:
         state["command_session_storage_keys"] = linked[-256:]
         state["canonical_ui_storage_key"] = canonical_storage
         self._save_state(state_key, state)
+        if state.get("active"):
+            # An active plan that links a key owns it: take over a copy another tab left there, so this tab's later
+            # saves (approval, done) reach it and the other tab's saves and syncs skip it.
+            theirs = self._load_storage_state(command_storage).get("canonical_ui_storage_key")
+            if isinstance(theirs, str) and theirs != canonical_storage:
+                self._save_storage_state(command_storage, state)
 
     def _link_executing_alias(
         self, ui_key: str, state: dict[str, Any], fallback_key: str | None
@@ -859,10 +878,12 @@ class PlanModePlugin:
         resolved, copy, _ = self._command_state(fallback_key)
         if resolved != alias or copy.get("active"):
             return  # another tab's active plan owns this command key
-        if copy and copy.get("canonical_ui_storage_key") not in (None, canonical):
-            return  # another family's copy: never overwrite it
+        ours = copy.get("canonical_ui_storage_key") == canonical
+        if copy and not ours and any(copy.values()):
+            return  # another family's copy, or an unmarked one with its own state: never overwrite it
         self._link_command_key(ui_key, state, fallback_key)
-        if not copy:
+        if not ours:
+            # Empty, or an empty leftover such as `/planmode off` sent before this turn: seed this family's copy.
             self._save_storage_state(alias, dict(state))
 
     @staticmethod
@@ -909,7 +930,10 @@ class PlanModePlugin:
                 self._link_command_key(identity.key, state, identity.fallback_key)
                 return identity.key, state
             if identity.key.startswith("ui:"):
-                self._link_executing_alias(identity.key, state, identity.fallback_key)
+                try:
+                    self._link_executing_alias(identity.key, state, identity.fallback_key)
+                except Exception:
+                    pass  # linking only helps commands find the plan; enforcement never depends on it
         if identity.key and identity.fallback_key:
             fallback_state = self._load_state(identity.fallback_key)
             if fallback_state.get("active"):
@@ -1600,10 +1624,7 @@ class PlanModePlugin:
         TUI/Desktop keep a ``ui:`` copy that hooks read and ``sk:`` copies that commands read; only an active state
         links them, so the executing phase is mirrored here explicitly. Planning copies are never touched.
         """
-        related = set(self._linked_command_storage_keys(state))
-        canonical = state.get("canonical_ui_storage_key")
-        if isinstance(canonical, str) and canonical.startswith("session:"):
-            related.add(canonical)
+        related, canonical = self._family_storage_keys(storage_key, state)
         related.discard(storage_key)
         for other in related:
             copy = self._load_storage_state(other)
@@ -1623,10 +1644,7 @@ class PlanModePlugin:
         a copy holding this exact note is changed, so a different queued note is never dropped. A copy from the same
         activation counts even when its family marker is stale (a reused session key keeps the previous tab's).
         """
-        related = set(self._linked_command_storage_keys(state))
-        canonical = state.get("canonical_ui_storage_key")
-        if isinstance(canonical, str) and canonical.startswith("session:"):
-            related.add(canonical)
+        related, canonical = self._family_storage_keys(storage_key, state)
         related.discard(storage_key)
         for other in related:
             copy = self._load_storage_state(other)
