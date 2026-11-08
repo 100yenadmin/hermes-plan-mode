@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.1 - 2026-11-08
+
+Two fixes for the time after you approve a plan.
+
+- **No commits while an approved plan runs, unless you ask.** With Allow commits off (the default), a terminal
+  `git commit` or `git push` is now blocked while the plan executes, so a loaded skill with a commit step (such as
+  Hermes' TDD skill) can no longer commit your changes. The check reads each command the way a shell splits it: it
+  follows `&&`, `;`, pipes, `sudo`/`env`/`xargs` wrappers and `bash -c` scripts, and text that only mentions git, such
+  as `grep "git commit"`, still runs. Ask for a commit or a push in your task or a later message ("commit when done",
+  "push it") and it runs; "don't commit" keeps the block. Aliases, scripts, `execute_code`, MCP git tools and other
+  commit-creating commands are not caught; known gaps are listed in #79 (#18, #78).
+- **`/planmode status` and `done` find an executing plan after a TUI or Desktop key rotation.** With rotating
+  compression, the tab's new session key was not linked to the approved plan, so the command side said there was no
+  executing plan. The tab now links it at its next turn or tool call, and `done` from either key ends the plan. Tabs
+  that share a session key keep their plans apart, and `done`/`off` no longer leave the approval note behind
+  (#6 item 1, #77).
+
 ## 1.1.0 - 2026-11-08
 
 Support for Hermes 0.22 and 0.23, and a cleaner finish on chat platforms.
