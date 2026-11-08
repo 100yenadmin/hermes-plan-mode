@@ -34,6 +34,16 @@ def executing(request, make_plugin, monkeypatch):
     "git -C /repo commit -am x", "git push", "bash -c 'git commit -m x'",
     "git --no-pager commit -m x", "git status;git push", "git status|git push",
     "(git push)", '`git push`', 'bash -c "git push"',
+    'git add . && git commit -m "x"', "git commit -am x", "cd x && git commit -m y",
+    "git add -A\ngit commit -m z", "git -c commit.gpgsign=false commit -m x",
+    "git push -u origin HEAD", "git push --force-with-lease", "/usr/bin/git commit -m x",
+    'git -C "/my repo" commit -m x', 'git -c user.name="A B" commit -m x',
+    "git --git-dir .git commit -m x", "git --work-tree /x commit -m x", "sudo git push",
+    "GIT_AUTHOR_NAME=a git commit -m x", 'sh -c "cd r && git push"',
+    "(cd r; git commit -m x)", "echo ok; git push", "./git push", "$(git push)",
+    "zsh -c 'git push'", "env GIT_AUTHOR_NAME=a command git push", "exec git push",
+    "nohup git push", "time git push", "git --namespace 'a b' push",
+    'git --git-dir="my repo/.git" push', "git --work-tree=/x push",
 ])
 def test_commit_and_push_blocked(executing, command):
     assert executing.pre_tool_call("terminal", {"command": command}) == {
@@ -44,6 +54,9 @@ def test_commit_and_push_blocked(executing, command):
 @pytest.mark.parametrize("command", [
     "git status", "git diff", "git log --grep commit", "git commit-tree abc",
     "git stash push", "echo hello",
+    'grep -rn "git commit" .', 'rg "git push" README.md', 'echo "git commit"',
+    "echo git commit", 'pytest -k "git push"', "pytest tests/test_git_commit.py",
+    "git log | grep commit", "man git-commit", "git commit-tree x",
 ])
 def test_other_commands_allowed(executing, command):
     assert executing.pre_tool_call("terminal", {"command": command}) is None
@@ -58,6 +71,10 @@ def test_allow_commits_on(executing, command):
 @pytest.mark.parametrize("message", [
     "please commit when done", "commit it", "commit and push", "git push when done",
     "push it to origin", "push the changes", "push to origin", "commits are fine",
+    "please push", "push when done", "push your changes", "push the code", "push to the remote",
+    "push it", "go ahead and commit", "make a commit", "git push", "push now",
+    "push after the tests pass", "ok, push.", "No problem, go ahead and commit",
+    "Tests pass. Commit and push.", "Don't commit; push now", "skip commits, push now",
 ])
 def test_explicit_request_lifts_guard(executing, message):
     executing.pre_llm_call(user_message=message)
@@ -71,6 +88,11 @@ def test_explicit_request_lifts_guard(executing, message):
     "don't commit anything", "do not commit anything", "no commits please", "never commit",
     "finish without committing", "add push notifications", "fix push-to-talk",
     "Commit message parser", "add a commit-msg hook",
+    "don't push", "do not push anything", "push-to-talk", "the commit message parser", "a commit-msg hook",
+    "don't commit", "dont commit", "do not commit", "no commits", "without committing",
+    "do not make any commits", "please don't make commits", "no need to commit", "avoid commits",
+    "stop committing", "don't  commit", "Don't commit or push", "shouldn't commit",
+    "cant commit", "wont push", "skip commits", "git push notifications",
 ])
 def test_refusal_or_feature_name_keeps_guard(executing, message):
     executing.pre_llm_call(user_message=message)
@@ -79,15 +101,23 @@ def test_refusal_or_feature_name_keeps_guard(executing, message):
 
 
 @pytest.mark.parametrize("site", ["command", "planning-turn"])
-def test_request_before_approval(make_plugin, directive_lean, site):
+@pytest.mark.parametrize("message,allowed", [
+    ("please commit when done", True), ("please push", True), ("push when done", True),
+    ("No problem, go ahead and commit", True), ("do not make any commits", False),
+    ("Don't commit or push", False), ("add push notifications", False),
+])
+def test_request_before_approval(make_plugin, directive_lean, site, message, allowed):
     plugin = make_plugin()
     path = write_plan(plugin)
     if site == "command":
-        plugin.command("on please commit when done")
+        plugin.command("on " + message)
     else:
-        plugin.pre_llm_call(user_message="please commit when done")
+        plugin.pre_llm_call(user_message=message)
     approve_gate(plugin, path)
-    assert plugin.pre_tool_call("terminal", {"command": "git commit -m x"}) is None
+    result = plugin.pre_tool_call("terminal", {"command": "git commit -m x"})
+    assert (result is None) is allowed
+    if not allowed:
+        assert result["action"] == "block"
 
 
 @pytest.mark.parametrize("ending", ["done", "todos"])
@@ -129,6 +159,43 @@ def test_config_failure_fails_open(executing, monkeypatch):
     assert executing.pre_tool_call("terminal", {"command": "git commit -m x"}) is None
 
 
+def test_non_terminal_command_argument_allowed(executing):
+    assert executing.pre_tool_call("execute_code", {"command": "git commit -m x"}) is None
+
+
+@pytest.mark.parametrize("profile", ["classic", "lean"])
+@pytest.mark.parametrize("ask_to_push", [False, True])
+def test_tui_request_and_command_side_done(make_plugin, directive_lean, session_env, profile, ask_to_push):
+    session_env.update(HERMES_SESSION_KEY="commit-command", HERMES_SESSION_SOURCE="tui",
+                       HERMES_UI_SESSION_ID="")
+    plugin = make_plugin(plan_profile=profile)
+    path = write_plan(plugin)
+    session_env["HERMES_UI_SESSION_ID"] = "commit-tab"
+    assert plugin.pre_tool_call("terminal", {"command": "git status"})["action"] == "block"
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    plugin.command(f"show {path}")
+    assert "Plan approved" in plugin.command(f"approve {path}")
+    session_env["HERMES_UI_SESSION_ID"] = "commit-tab"
+    assert plugin._load_state("ui:commit-tab")["phase"] == "executing"
+    assert plugin.pre_tool_call("terminal", {"command": "git commit -m x"}) == {
+        "action": "block", "message": render.NO_COMMIT_BLOCK,
+    }
+    if ask_to_push:
+        plugin.pre_llm_call(user_message="please push")
+        for command in ["git commit -m x", "git push"]:
+            assert plugin.pre_tool_call("terminal", {"command": command}) is None
+        assert plugin._load_state("sk:commit-command")["user_asked_commits"] is True
+    session_env["HERMES_UI_SESSION_ID"] = ""
+    assert plugin.command("done") == "The executing plan is done."
+    for ui in ["", "commit-tab"]:
+        session_env["HERMES_UI_SESSION_ID"] = ui
+        for command in ["git commit -m x", "git push"]:
+            assert plugin.pre_tool_call("terminal", {"command": command}) is None
+    for key in ["sk:commit-command", "ui:commit-tab"]:
+        state = plugin._load_state(key)
+        assert "phase" not in state and "user_asked_commits" not in state
+
+
 def test_injected_implementation_does_not_lift_guard(executing):
     assert executing._start_implementation(executing._load_state("sk:unit-session")["approved_path"])
     injected = executing.ctx.injected[-1][0]
@@ -144,7 +211,45 @@ def test_builtin_craft_text_does_not_lift_guard(make_plugin):
     assert not plugin._load_state("sk:unit-session").get("user_asked_commits")
 
 
+def test_builtin_craft_marker_partition_does_not_lift_guard(make_plugin, directive_lean, monkeypatch):
+    plugin = make_plugin()
+    path = write_plan(plugin)
+    prompt = (_BUILTIN_PROMPT.partition("Task to plan:")[0] + "Task to plan:\nship it"
+              + pm._PLAN_CRAFT_START + ". Commit and push when done.")
+    # Start in an existing planning state to bypass core /plan's activation-time paragraph split.
+    # Observe the split calls too: a blank-line fallback would otherwise mask a missing partition.
+    splits = []
+    original_split = pm.re.split
+    def record_split(pattern, *args, **kwargs):
+        splits.append(pattern)
+        return original_split(pattern, *args, **kwargs)
+    monkeypatch.setattr(pm.re, "split", record_split)
+    plugin.pre_llm_call(user_message=prompt)
+    assert r"\n\s*\n" not in splits
+    assert not plugin._load_state("sk:unit-session").get("user_asked_commits")
+    approve_gate(plugin, path)
+    assert plugin.pre_tool_call("terminal", {"command": "git push"}) == {
+        "action": "block", "message": render.NO_COMMIT_BLOCK,
+    }
+
+
 def test_idle_request_does_not_set_flag(make_plugin):
     plugin = make_plugin()
     assert plugin.pre_llm_call(user_message="please commit when done") is None
     assert not plugin._load_state("sk:unit-session").get("user_asked_commits")
+
+
+@pytest.mark.parametrize("command", [
+    "FOO=" + "a" * 5000 + " bar",
+    "git -c " + "a" * 5000 + " status",
+    "git --git-dir " + "a" * 5000 + " status",
+    "git --x=" + "a" * 5000 + " status",
+    'git -c "' + "a b " * 2000 + '" status',
+])
+def test_git_commit_pattern_stays_fast_on_long_tokens(command):
+    """A nested quantifier here once took seconds per extra character, which would hang pre_tool_call."""
+    import time
+
+    start = time.monotonic()
+    assert pm._GIT_COMMIT.search(command) is None
+    assert time.monotonic() - start < 0.5

@@ -56,7 +56,7 @@ NO_COMMITS = (
 )
 NO_COMMIT_BLOCK = (
     "Not run: allow_commits is off for this plan, so git commit and git push are blocked during execution. "
-    "Leave the changes uncommitted for review; the user can ask for a commit."
+    "Leave the changes uncommitted for review; the user can ask for a commit or end the plan with /planmode done."
 )
 COMMIT_OVERRIDE = "This overrides any commit step in a loaded skill, such as a TDD skill's."
 CODEX_COMPACT_PLAN = (

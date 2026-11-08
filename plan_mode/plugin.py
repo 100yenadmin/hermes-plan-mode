@@ -128,16 +128,33 @@ _USER_ASKED_PROCESS = re.compile(
     r"\b(tdd|test[- ]driven|red[- /]?green|red[- ]first|tests?[- ]first|code[- ]reviews?)\b", re.I)
 # Asking for TDD or a code review lifts the guard for those skills only; the approved plan stays the plan.
 _GIT_COMMIT = re.compile(
-    r"(?:^|[\s;&|(`'\"])git(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*\s+(commit|push)(?![\w-])")
+    r"(?:^|[;&|(`\n]|\$\(|-c\s+['\"])\s*"
+    r"(?:(?:sudo|env|command|exec|nohup|time)\s+|[A-Za-z_]\w*=(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+\s+)*"
+    r"(?:\S*/)?git(?:\s+(?:"
+    r"-[cC]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+|"
+    r"--(?:git-dir|work-tree|namespace)\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+|"
+    r"--[\w-]+(?:=(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)?"
+    r"))*\s+(commit|push)(?![\w-])")
 _USER_ASKED_COMMITS = re.compile(
-    r"(?<!\bnot )(?<!n't )(?<!\bno )(?<!\bnever )(?<!\bwithout )\b"
-    r"(?:commit(?:s|ting)?|git\s+push|push\s+(?:it|this|that|them|the\s+(?:changes?|branch|commits?)|"
-    r"to\s+(?:origin|main|master|remote|github)))\b(?![-\w]*\s+(?:message|msg|hook|parser))", re.I)
+    r"\b(?:commit(?:s|ting)?|(?:git\s+)?push(?![ -](?:notifications?|to-talk)\b)"
+    r"(?:\s+(?:it|this|that|them|your|my|our|the|to|now|when|after|once)\b|(?=\s*(?:$|[.!?,;]))))"
+    r"\b(?![-\w]*\s+(?:message|msg|hook|parser))", re.I)
 _EXEC_PLANNING_SKILLS = frozenset({"writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
 _IMPLEMENT_PREFIX = "Implement the approved plan at "  # plan-mode's own injected turn; never a user request
 # Core /plan puts its plan-craft text right after the task (agent/plan_prompt.py, v0.21.6 and main); its first words
 # end the user's task. Without it, only the task's first paragraph is read.
 _PLAN_CRAFT_START = "\n\nWrite the plan for an implementer with zero context"
+
+
+def _user_asked_commits(text: str) -> bool:
+    """Accept a commit/push request only outside a nearby negation in its clause."""
+    for match in _USER_ASKED_COMMITS.finditer(text):
+        clause = re.split(r"[.!?;,\n]", text[:match.start()])[-1]
+        words = re.findall(r"\b[\w']+\b", clause.lower())[-4:]
+        if not any(word in {"not", "dont", "cant", "wont", "no", "never", "without", "avoid", "stop", "skip"}
+                   or word.endswith("n't") for word in words):
+            return True
+    return False
 
 
 def _user_message_text(message: Any) -> str | None:
@@ -1309,7 +1326,7 @@ class PlanModePlugin:
                     state["pending_note"] = f"The user's task for this plan (from /planmode on): {remainder[:2000]}"
                 if entered_by == "user" and _USER_ASKED_PROCESS.search(remainder):
                     state["user_asked_process"] = True
-                if entered_by == "user" and _USER_ASKED_COMMITS.search(remainder):
+                if entered_by == "user" and _user_asked_commits(remainder):
                     state["user_asked_commits"] = True
                 if entered_by == "agent":
                     state["agent_activation_id"] = state["activation_id"]
@@ -2508,7 +2525,7 @@ class PlanModePlugin:
                             if _USER_ASKED_PROCESS.search(user_text):
                                 state["user_asked_process"] = True
                                 self._save_state(state_key, state)
-                            if _USER_ASKED_COMMITS.search(user_text):
+                            if _user_asked_commits(user_text):
                                 state["user_asked_commits"] = True
                                 self._save_state(state_key, state)
                 except Exception:
