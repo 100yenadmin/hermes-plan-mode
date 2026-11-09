@@ -110,6 +110,7 @@ _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
 _RECEIPT_SKIP_PLATFORMS = frozenset({"api_server", "webhook"})
 _RECEIPT_SESSIONS = 64
 _RECEIPT_CALLS = 3
+_RECEIPT_TURNS = 4  # per session: a delegated child shares its parent's key but runs its own turn
 
 
 def _block_detail(args: Any) -> str:
@@ -658,7 +659,7 @@ class PlanModePlugin:
         # (session_id, tool_call_id) -> (state key, targets, activation id, fresh candidates).
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any, dict[str, bool]]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
-        self._turn_blocks: dict[str, dict[str, Any]] = {}  # session key -> blocks not yet named in a reply
+        self._turn_blocks: dict[str, list[dict[str, Any]]] = {}  # session key -> per-turn blocks not yet named
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
         self._hook_platforms: OrderedDict[str, str] = OrderedDict()
@@ -2819,13 +2820,15 @@ class PlanModePlugin:
                 return
             turn = str(kwargs.get("turn_id") or "")
             with self._lock:
-                entry = self._turn_blocks.pop(identity.key, None)
-                if not entry or (turn and entry.get("turn") and entry["turn"] != turn):
-                    entry = {"count": 0, "calls": [], "turn": turn}  # blocks of an earlier turn are never named late
+                entries = self._turn_blocks.pop(identity.key, None) or []
+                entry = next((item for item in entries if item["turn"] == turn), None)
+                if entry is None:
+                    entry = {"count": 0, "calls": [], "turn": turn}
+                    entries = (entries + [entry])[-_RECEIPT_TURNS:]
                 entry["count"] += 1
                 if len(entry["calls"]) < _RECEIPT_CALLS:
                     entry["calls"].append((str(tool_name or "tool"), _block_detail(args)))
-                self._turn_blocks[identity.key] = entry  # most recent last, so the oldest session drops first
+                self._turn_blocks[identity.key] = entries  # most recent last, so the oldest session drops first
                 while len(self._turn_blocks) > _RECEIPT_SESSIONS:
                     self._turn_blocks.pop(next(iter(self._turn_blocks)))
         except Exception:
@@ -2835,8 +2838,9 @@ class PlanModePlugin:
         """Pop this session's recorded blocks (always, so none is named in a later turn) and render them."""
         keys = dict.fromkeys(key for key in (identity.key, identity.fallback_key, f"cli:{os.getpid()}") if key)
         with self._lock:
-            entries = [entry for entry in (self._turn_blocks.pop(key, None) for key in keys) if entry]
-        entries = [entry for entry in entries if not (turn and entry.get("turn") and entry["turn"] != turn)]
+            entries = [entry for key in keys for entry in (self._turn_blocks.pop(key, None) or [])]
+        # Only this turn's blocks: an interrupted or empty earlier turn, or a delegated child's turn, is never named.
+        entries = [entry for entry in entries if not (turn and entry["turn"] and entry["turn"] != turn)]
         if not entries or self._footer_off() or platform in _RECEIPT_SKIP_PLATFORMS:
             return ""
         local = (not platform or platform in LOCAL_PLATFORMS) and not identity.key.startswith("sk:")
@@ -2921,6 +2925,9 @@ class PlanModePlugin:
             return
         platform = str(kwargs.get("platform") or "").strip().lower()
         with self._lock:
+            for key in (identity.key, identity.fallback_key, f"cli:{os.getpid()}"):
+                if key:
+                    self._turn_blocks.pop(key, None)  # a new session never inherits an unnamed block
             if platform in {"cli", "terminal"}:
                 cli_key = f"cli:{os.getpid()}"
                 cli_storage = _state_storage_key(cli_key)

@@ -82,8 +82,7 @@ def test_program_facing_replies_stay_unchanged(make_plugin, session_env, platfor
     plugin = make_plugin("")
     plugin.command("on parser")
     blocked(plugin, "terminal", {"command": "ls"}, platform=platform)
-    reply = plugin.transform_llm_output("Here is the plan.", platform=platform)
-    assert reply is None or RECEIPT not in reply
+    assert plugin.transform_llm_output("Here is the plan.", platform=platform) is None  # exactly as before
 
 
 def test_footer_off_turns_the_receipt_off(planning):
@@ -123,6 +122,21 @@ def test_blocks_of_an_earlier_turn_are_never_named_late(planning):
         "blocked 1 tool call: terminal (ls).")
     blocked(planning, "terminal", {"command": "pwd"}, turn="t3")
     assert planning.transform_llm_output("Turn 4.", platform="cli", turn_id="t4") is None
+    assert planning._turn_blocks == {}
+
+
+def test_a_delegated_childs_blocks_never_reach_the_parent(planning):
+    # A child agent shares the parent's routing key but runs its own turn, interleaved with the parent's.
+    blocked(planning, "terminal", {"command": "ls"}, turn="parent")
+    blocked(planning, "terminal", {"command": "git commit -m child"}, turn="child")
+    blocked(planning, "terminal", {"command": "pwd"}, turn="parent")
+    reply = planning.transform_llm_output("Parent.", platform="cli", turn_id="parent")
+    assert reply.endswith("blocked 2 tool calls: terminal (ls), terminal (pwd).") and "child" not in reply
+
+
+def test_session_reset_forgets_unnamed_blocks(planning):
+    blocked(planning, "terminal", {"command": "ls"}, turn="")
+    planning.on_session_reset(platform="cli")
     assert planning._turn_blocks == {}
 
 
@@ -207,7 +221,7 @@ def test_no_commit_block_during_execution_is_named(make_plugin, session_env, mon
 
 def test_tracked_sessions_are_bounded(planning):
     for n in range(pm._RECEIPT_SESSIONS):
-        planning._turn_blocks[f"sk:other-{n}"] = {"count": 1, "calls": []}
+        planning._turn_blocks[f"sk:other-{n}"] = [{"count": 1, "calls": [], "turn": "t"}]
     blocked(planning, "terminal", {"command": "ls"}, platform="cli")
     assert len(planning._turn_blocks) == pm._RECEIPT_SESSIONS and "sk:other-0" not in planning._turn_blocks
     assert planning.transform_llm_output("x", platform="cli").endswith("terminal (ls).")
