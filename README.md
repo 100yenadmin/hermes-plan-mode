@@ -16,7 +16,7 @@ TUI, Desktop and the messaging platforms) with no core changes.
   choice first. Say "grill me", or set Questions to `thorough`, and it interviews you, one decision at a time,
   before every plan.
 - **One approval for the whole plan.** A card offers: approve and auto-accept edits, approve and review each file
-  edit, or keep planning (Other sends feedback). Approval belongs to the exact plan you saw: if the plan changes, it
+  edit (each `write_file` and `patch`; shell commands keep Hermes' own approvals), or keep planning (Other sends feedback). Approval belongs to the exact plan you saw: if the plan changes, it
   asks again. The classic profile and surfaces without a card use Hermes' own approval prompt.
 - **It builds in the same turn** and tracks progress in a todo list. With Allow commits off (the default), terminal
   `git commit` and `git push` stay blocked while the plan runs, unless you ask for a commit.
@@ -55,7 +55,8 @@ TUI, Desktop and the messaging platforms) with no core changes.
    (unless `footer` is off).
 6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
    `todo_list` (with the default `lean` profile, for plans of 4 or more steps). With "review each file edit", every
-   `write_file` / `patch` gets Hermes' approval prompt first. Typed `/planmode approve` also works while the card is
+   `write_file` / `patch` gets Hermes' approval prompt first. When the last todo is marked done, the plan ends at the
+   end of that turn, so fixes after a failed final test still get the review and the no-commit block. Typed `/planmode approve` also works while the card is
    open and selects auto-accept edits.
 7. Keep planning, or Other with feedback: plan mode stays on. The agent asks what to change (when no feedback came
    with it), revises the plan and submits a complete new revision. Its card says what changed since the last one
@@ -132,11 +133,14 @@ surfaces without a card.
 ## Install
 
 ```bash
-hermes plugins install 100yenadmin/hermes-plan-mode --ref <latest release commit sha> --enable
+hermes plugins install 100yenadmin/hermes-plan-mode --enable
 hermes gateway restart        # only if you run the messaging gateway
 ```
 
-`--ref` takes the exact 40-character commit SHA of the latest release (see its release notes), not a tag. Without
+This installs the repository's main branch. To pin a release, add `--ref` with that release's exact 40-character
+commit SHA (see its release notes); `--ref` does not take a tag. Use the `100yenadmin/hermes-plan-mode` form: on a
+fresh Hermes 0.23.0, installing by catalog name (`plan-mode`) gives version 1.0.0 until
+[NousResearch/hermes-agent#151856](https://github.com/NousResearch/hermes-agent/issues/151856) is fixed. Without
 `--enable`, run `hermes plugins enable plan-mode`. Restart running CLI, TUI and Desktop sessions so they load the
 plugin.
 
@@ -475,6 +479,9 @@ plugins:
 | Agent may enter | yes | no | no | yes |
 | Autonomy choice / clear context at approval | yes | partial | no | auto-accept or review each edit; no clear context |
 
+The Claude Code and Codex columns describe those products as documented and as run in our October 2026 benchmarks
+(below); either may have changed since.
+
 ### Measured against Codex plan mode
 
 Four pre-registered benchmarks, PARITY-1 to PARITY-4, compared plan-mode with Codex's own plan mode.
@@ -693,6 +700,10 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   The agent cannot end plan mode for you. Answer or skip the card first, then send the command again.
 - **Codex app-server runtime.** Hermes' Codex app-server executes native `exec` and `applyPatch` outside
   `pre_tool_call`. Plan mode does not enforce them. Use a normal Hermes tool runtime when enforcement matters.
+- **Remote terminal backends.** Plan mode tracks plan files on the machine Hermes runs on. With a terminal backend
+  that does not share that filesystem (for example SSH, or a container without the working directory mounted), the
+  agent's plan write can land on the backend, where plan mode cannot find it at submit. Use a local backend, or one
+  that mounts the working directory at the same path, for plan mode.
 - **TUI `/background` and `btw`** side agents run under their own task id with no public link to the parent session.
   They keep full tools while the parent chat is in plan mode.
 - **Argument-rewriting plugins.** Another plugin's `modify` directive can rewrite arguments after this plugin checked
@@ -745,10 +756,10 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Approval choices cover file tools:** the lean card offers auto-accept or review each `write_file` / `patch`
   when Hermes approvals are on (see The lean profile). It does not offer **clear-context-and-implement**
   (not reachable from a plugin).
-- **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. A live card needs
-  a new upstream plugin API, proposed in
-  [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306) together with
-  plan-shaped approval wording.
+- **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. Hermes 0.22.7 and
+  newer let a plugin post a message and edit it in place, which a live progress message could use; plan mode does not
+  use it yet. An interactive plan card and plan-shaped approval wording are proposed upstream in
+  [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306).
 - **Footer limits.** Chat platforms only: never CLI, TUI, Desktop (also not for a chat session resumed in Desktop),
   API server, webhook, cron or delegate subagents. Only on replies of 1800 chars or fewer, because adding a footer to
   a longer streamed reply could re-send part of it. The approval pointer applies on every resolved surface regardless
@@ -793,12 +804,17 @@ pytest -q
 Manual walkthrough in a disposable workspace (full surface-by-surface list in
 [`docs/manual-test.md`](docs/manual-test.md)):
 
-1. Run `/plan add a hello-world script`. Ask for `pwd` or a file write outside the plans directory; both are blocked.
-2. Let the agent write the plan, show it and submit. Hermes' approval prompt appears with plan rev 1.
-3. Deny. Plan mode stays on; the agent asks what to change, revises and submits rev 2.
-4. Approve. The agent starts implementing in the same turn and fills `todo_list`; on a chat platform the reply ends
-   with `Plan progress n/m`.
-5. Run `/planmode status`: phase `executing`. Finish the todos or run `/planmode done`; status reports `off`.
+1. Run `/plan add a hello-world script`. Ask for `pwd` or a file write outside the plans directory; both are blocked,
+   and the reply ends with a line naming the blocked calls.
+2. Let the agent write the plan, show it and submit. The approval card appears for plan rev 1 (the classic profile
+   uses Hermes' approval prompt).
+3. Choose Keep planning, or Other with a change. Plan mode stays on; the agent revises and submits rev 2, and the card
+   says what changed.
+4. Approve. The agent implements in the same turn. A plan of 4 or more steps fills `todo_list`, and on a chat
+   platform the reply ends with `Plan progress n/m`; a shorter plan has no todos.
+5. Run `/planmode status`. A plan with todos shows phase `executing` until its turn ends after the last todo; a
+   short plan ends with its turn. If you chose review each file edit, status also says the review is still on until
+   `/planmode done`.
 
 ## Disclosure
 

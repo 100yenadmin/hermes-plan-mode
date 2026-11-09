@@ -241,6 +241,7 @@ def test_explicit_ends_clear_review(reviewed, ending, automatic_clear):
     if ending == "todos":
         todos = [{"id": "1", "content": "work", "status": "completed"}]
         plugin.post_tool_call("todo", {"todos": todos}, status="ok", result=json.dumps({"todos": todos}))
+        plugin.post_llm_call()  # under the todo levers a finished plan ends at turn end
     elif ending == "agent_on":
         plugin.tool({"action": "on"})
     elif ending in {"auto", "typed"}:
@@ -644,3 +645,67 @@ def test_061_fitting_move_is_unchanged_with_short_source(platform, separator):
     expected = prefix + ("s.py, " + destination)[:249] + "…" + counts + separator + f"Move File: s.py -> {destination}"
     assert len(expected) == 998
     assert text == expected
+
+
+DONE = [{"id": "1", "content": "work", "status": "completed"}]
+
+
+def finish_todos(plugin, todos=DONE, tool="todo_list"):
+    plugin.post_tool_call(tool, {"todos": todos}, status="ok", result=json.dumps({"todos": todos}))
+
+
+@pytest.mark.parametrize("lever", ["todo_batch", "todo_inline"])
+def test_final_todos_keep_review_until_turn_end(reviewed, lever):
+    """The lean hint closes the last todos alongside the final test; a failed test's fixes stay under review."""
+    plugin, _ = reviewed
+    plugin.ctx.settings["levers"] = "approval_card " + lever
+    review = copy.deepcopy(state(plugin)["edit_review"])
+    finish_todos(plugin)
+    current = state(plugin)
+    assert current["phase"] == "executing" and current["edit_review"] == review and current["finish_pending"] is True
+    assert plugin.pre_tool_call(*EDITS[0])["action"] == "approve"
+    plugin.post_llm_call()
+    current = state(plugin)
+    assert "phase" not in current and "edit_review" not in current and "finish_pending" not in current
+    assert plugin.pre_tool_call(*EDITS[0]) is None
+
+
+def test_reopened_todo_cancels_finish(reviewed):
+    plugin, _ = reviewed
+    plugin.ctx.settings["levers"] = "approval_card todo_inline"
+    finish_todos(plugin)
+    finish_todos(plugin, DONE + [{"id": "2", "content": "fix the failing test", "status": "in_progress"}])
+    assert "finish_pending" not in state(plugin)
+    plugin.post_llm_call()
+    current = state(plugin)
+    assert current["phase"] == "executing" and "edit_review" in current
+    assert plugin.pre_tool_call(*EDITS[0])["action"] == "approve"
+
+
+def test_next_turn_finishes_when_turn_end_was_missed(reviewed):
+    plugin, _ = reviewed
+    plugin.ctx.settings["levers"] = "approval_card todo_inline"
+    finish_todos(plugin)
+    plugin.pre_llm_call()  # an interrupted turn fired no post_llm_call
+    current = state(plugin)
+    assert "phase" not in current and "edit_review" not in current and "finish_pending" not in current
+
+
+def test_without_todo_levers_todos_still_end_at_once(reviewed):
+    plugin, _ = reviewed
+    finish_todos(plugin, tool="todo")
+    current = state(plugin)
+    assert "phase" not in current and "edit_review" not in current and "finish_pending" not in current
+
+
+@pytest.mark.parametrize("executing", [False, True])
+def test_status_names_retained_review(reviewed, executing):
+    plugin, path = reviewed
+    if not executing:
+        plugin.ctx.settings["levers"] = "approval_card todo_inline"
+        plugin.post_llm_call()  # a short plan: execution ends with the turn, the review stays (on purpose)
+        assert "phase" not in state(plugin)
+    text = plugin.command("status")
+    assert "File-edit review: on for plan rev 1" in text and "/planmode done ends it" in text
+    plugin.command("done")
+    assert "File-edit review" not in plugin.command("status")
