@@ -169,8 +169,10 @@ def test_long_chat_reply_gets_no_receipt(make_plugin, session_env):
     plugin = make_plugin("")
     plugin.command("on parser")
     blocked(plugin, "terminal", {"command": "ls"})
-    assert plugin.transform_llm_output("x" * (pm._FOOTER_MAX_CHARS + 1), platform="discord") is None
+    assert RECEIPT not in plugin.transform_llm_output("x" * (pm._FOOTER_MAX_CHARS - 100), platform="discord")
     assert plugin._turn_blocks == {}
+    blocked(plugin, "terminal", {"command": "ls"})
+    assert RECEIPT in plugin.transform_llm_output("x" * 1500, platform="discord")
 
 
 def test_chat_footer_follows_the_receipt_and_is_not_doubled(make_plugin, session_env):

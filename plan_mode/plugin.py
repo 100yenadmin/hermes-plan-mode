@@ -109,8 +109,9 @@ _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
 _RECEIPT_SKIP_PLATFORMS = frozenset({"api_server", "webhook"})
 _RECEIPT_SESSIONS = 64
+_FOOTER_ALLOWANCE = 80  # room left for a footer or pointer after the receipt on chat platforms
 _RECEIPT_CALLS = 3
-_RECEIPT_TURNS = 4  # per session: a delegated child shares its parent's key but runs its own turn
+_RECEIPT_TURNS = 8  # per session: delegated children share their parent's key but run their own turns
 
 
 def _block_detail(args: Any) -> str:
@@ -2844,12 +2845,13 @@ class PlanModePlugin:
         if not entries or self._footer_off() or platform in _RECEIPT_SKIP_PLATFORMS:
             return ""
         local = (not platform or platform in LOCAL_PLATFORMS) and not identity.key.startswith("sk:")
-        if not local and len(response_text) > _FOOTER_MAX_CHARS:
-            return ""  # like the footer: never push a long chat reply past the platform's split
         count = sum(entry["count"] for entry in entries)
         calls = [call for entry in entries for call in entry["calls"]][:_RECEIPT_CALLS]
         # Commands can carry private text: chat (gateway session) replies name the tools only.
-        return block_receipt(count, calls, details=local)
+        receipt = block_receipt(count, calls, details=local)
+        if not local and len(response_text) + len(receipt) + _FOOTER_ALLOWANCE > _FOOTER_MAX_CHARS:
+            return ""  # like the footer: never push a chat reply past the platform's split
+        return receipt
 
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:
