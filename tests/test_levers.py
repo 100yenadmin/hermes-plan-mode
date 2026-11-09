@@ -311,6 +311,8 @@ def test_light_note_keeps_thorough_outside_budget():
     without = render.light_note(long_dir, levers=levers - {"thorough_questions"})
     assert render.light_note(long_dir, levers=levers) == without + render.LIGHT_THOROUGH
     assert render.LIGHT_THOROUGH not in render.light_note("/p/.hermes/plans", levers=levers - {"thorough_questions"})
+    huge_dir = "/" + "d" * 400 + "/.hermes/plans"  # the base alone passes 400: the early return keeps the reminder
+    assert render.light_note(huge_dir, levers=levers) == render.light_note(huge_dir) + render.LIGHT_THOROUGH
 
 
 def test_sticky(make_plugin):

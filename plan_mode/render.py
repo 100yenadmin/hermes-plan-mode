@@ -253,8 +253,10 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
 def light_note(plans_dir, *, levers=frozenset()) -> str:
     base = (f"Plan mode is ON. Plans directory: {plans_dir}. Submit with plan_mode; "
             'do not ask "should I proceed?" in prose.')
+    # The Questions reminder is opt-in, so it rides outside the measured 400-character budget.
+    thorough = LIGHT_THOROUGH if "thorough_questions" in levers else ""
     if len(base) > 400:
-        return base[:400]
+        return base[:400] + thorough
     sentences = [base]
     for lever, sentence in (("bridge_calls", LIGHT_BRIDGE), ("blocked_tools", LIGHT_BLOCKED),
                             ("skill_policy", LIGHT_SKILL)):
@@ -262,10 +264,7 @@ def light_note(plans_dir, *, levers=frozenset()) -> str:
             sentences.append(sentence)
     while len("".join(sentences)) > 400:
         sentences.pop()
-    # Opt-in (the Questions setting), so it rides outside the measured 400-character budget.
-    if "thorough_questions" in levers:
-        sentences.append(LIGHT_THOROUGH)
-    return "".join(sentences)
+    return "".join(sentences) + thorough
 
 
 def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
