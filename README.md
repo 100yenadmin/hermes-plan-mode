@@ -464,7 +464,7 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 1.2 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 1.3 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | a `clarify` card (lean default) or Hermes' approval prompt, every interactive surface |
