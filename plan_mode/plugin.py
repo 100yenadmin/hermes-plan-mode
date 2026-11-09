@@ -1399,7 +1399,9 @@ class PlanModePlugin:
     def command(self, raw_args: str) -> str:
         raw = str(raw_args or "").strip()
         action, _, remainder = raw.partition(" ")
-        return self._run_command(action.lower() or "status", remainder.strip(), deliver_task=True)
+        result = self._run_command(action.lower() or "status", remainder.strip(), deliver_task=True)
+        # Slash commands print text: a typed `/planmode inspect` gets its fields as JSON, not a Python repr.
+        return json.dumps(result, indent=2, ensure_ascii=False) if isinstance(result, dict) else result
 
     def _run_command(self, action: str, remainder: str, entered_by: str = "user",
                      deliver_task: bool = False) -> str | dict:
@@ -1590,6 +1592,8 @@ class PlanModePlugin:
                 self._save_command_state(identity.key, command_storage_key, state)
                 if state.get("phase") != "executing" and not ("approval_card" in self._levers() and state.get("edit_review")):
                     return "There is no executing plan to finish."
+                if state.get("phase") == "executing":
+                    self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
                 state.pop("edit_review", None)
                 self._clear_execution(state)
                 # Neither a still-open approval card nor a queued note may say "implement it now" after done.
@@ -1762,7 +1766,7 @@ class PlanModePlugin:
                     self._clear_delivered_note(command_storage_key, state, old_note)
                 return "Plan mode is off for this session. No approval note will be injected."
 
-        return "Usage: /planmode on [task] | status | show [file] | edit [file] | approve [file] | reject [feedback] | done | off"
+        return "Usage: /planmode on [task] | status | list | show [file] | edit [file] | approve [file] | reject [feedback] | done | off"
 
     @staticmethod
     def _clear_execution(state: dict[str, Any]) -> None:
@@ -2918,8 +2922,9 @@ class PlanModePlugin:
                 if not key or state.get("phase") != "executing":
                     return
                 files = [item for item in (state.get("changed_files") or []) if isinstance(item, str)]
+                cwd = self._session_cwd()
                 for target in targets:
-                    path = os.path.normpath(target)
+                    path = os.path.normpath(target if os.path.isabs(target) else os.path.join(cwd, target))
                     if path not in files:
                         files.append(path)
                 state["changed_files"] = files[-200:]
@@ -2941,7 +2946,11 @@ class PlanModePlugin:
 
     def _take_finish_receipt(self, identity: Any, platform: str, turn: str, response_text: str) -> str:
         """The finish line when this turn ends an approved plan: every todo done, or a short plan with changes."""
-        keys = dict.fromkeys(key for key in (identity.key, identity.fallback_key, f"cli:{os.getpid()}") if key)
+        # Only this session's own keys: one TUI/Desktop backend serves many tabs from one process, so its cli:<pid>
+        # fallback can hold another tab's plan. The classic CLI is one session per process, so it may use them.
+        classic_cli = str(identity.surface or "").strip().lower() in {"", "cli", "terminal", "local"}
+        candidates = (identity.key, identity.fallback_key, f"cli:{os.getpid()}") if classic_cli else (identity.key,)
+        keys = dict.fromkeys(key for key in candidates if key)
         with self._lock:
             stashed = [self._turn_finishes.pop(key, None) for key in keys]
             states = [self._load_state(key) for key in keys]
@@ -2985,9 +2994,14 @@ class PlanModePlugin:
     def _plan_entries(self, state: dict[str, Any], plans_dir: str) -> list[dict[str, Any]]:
         """The newest plans in this plans directory with what plan mode knows about each."""
         try:
+            files = []
             with os.scandir(plans_dir) as found:
-                files = [(item.stat().st_mtime, item.path) for item in found
-                         if item.name.endswith(".md") and item.is_file(follow_symlinks=False)]
+                for item in found:
+                    try:
+                        if item.name.endswith(".md") and item.is_file(follow_symlinks=False):
+                            files.append((item.stat(follow_symlinks=False).st_mtime, item.path))
+                    except OSError:
+                        continue  # a file removed mid-listing drops out; the rest still list
         except OSError:
             return []
         history = self.ctx.state.get(_PLAN_HISTORY_KEY, {})
@@ -3005,10 +3019,13 @@ class PlanModePlugin:
             elif (state.get("active") and submission.get("status") in {"pending", "awaiting"}
                   and os.path.realpath(str(submission.get("path") or "")) == real):
                 status = f"waiting for approval (rev {submission.get('revision')})"
-            elif state.get("active") and real in {os.path.realpath(item) for item in self._plan_files(state)}:
+            elif (state.get("active") and real in {os.path.realpath(item) for item in self._plan_files(state)}
+                  and not (record.get("status") in {"approved", "done"}
+                           and str(record.get("at") or "") <= str(state.get("entered_at") or ""))):
                 status = "being planned"
             elif record.get("status") in {"approved", "done"}:
-                status = f"{record['status']} (rev {record.get('rev')}, {str(record.get('at') or '')[:10]})"
+                rev = f"rev {record['rev']}, " if record.get("rev") is not None else ""
+                status = f"{record['status']} ({rev}{str(record.get('at') or '')[:10]})"
             else:
                 status = "draft"
             entries.append({"name": os.path.basename(path), "path": path, "status": status,
@@ -3020,6 +3037,9 @@ class PlanModePlugin:
         if not isinstance(plans_dir, str) or not plans_dir:
             # Not _fixed_plans_dir: listing must not create the directory.
             plans_dir = os.path.join(os.path.realpath(self._session_cwd()), ".hermes", "plans")
+        if os.path.lexists(plans_dir) and not _plans_dir_is_still_safe(plans_dir):
+            return ({"plans_dir": plans_dir, "plans": [], "error": "the .hermes plan path contains a symlink"} if as_data
+                    else f"Plan listing was refused: `{plans_dir}` contains a symlink.")
         entries = self._plan_entries(state, plans_dir) if os.path.isdir(plans_dir) else []
         if as_data:
             return {"plans_dir": plans_dir, "plans": entries}

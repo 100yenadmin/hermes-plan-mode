@@ -7,7 +7,8 @@ Find a plan again, and see when one is finished.
 - **A finish line.** When an approved plan ends, the reply ends with one line, for example
   `✅ Plan rev 2 done: 5 of 5 steps, 3 files changed (cli.py, test_cli.py, README.md)`. Until now a plan finished
   silently.
-  - The line appears when the last todo is done, or at the end of a short plan (one without todos) that changed files.
+  - The line appears when the last todo is done, or, in the lean profile, at the end of a short plan (one without
+    todos) that changed files.
   - CLI, TUI and Desktop name up to three files; chat platforms give counts only, and the line replaces the
     `Plan progress n/n` footer there.
   - API server, webhook and cron replies stay unchanged, and `footer: off` turns the line off.

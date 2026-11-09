@@ -158,3 +158,54 @@ def test_agent_inspect_while_planning_and_list(make_plugin, session_env):
     listing = json.loads(plugin.tool({"action": "list"}))
     assert listing["plans_dir"] == str(path.parent)
     assert [(item["name"], item["status"]) for item in listing["plans"]] == [(path.name, "being planned")]
+
+
+def test_ui_tabs_never_show_another_tabs_finish(make_plugin, session_env):
+    """One TUI/Desktop backend serves many tabs from one process: its cli:<pid> state is not this tab's plan."""
+    import os
+    plugin = make_plugin("approval_card todo_inline")
+    other = {"phase": "executing", "approved_revision": 7, "finish_pending": True,
+             "progress": {"total": 1, "completed": 1, "cancelled": 0}, "changed_files": ["/x/other-tab.py"]}
+    plugin._save_state(f"cli:{os.getpid()}", other)
+    session_env["HERMES_SESSION_PLATFORM"] = "desktop"
+    assert "✅" not in (plugin.transform_llm_output("Hi.", platform="desktop", turn_id="t1") or "")
+    session_env["HERMES_SESSION_PLATFORM"] = "cli"  # the classic CLI is one session per process
+    assert (plugin.transform_llm_output("Hi.", platform="cli", turn_id="t1") or "").endswith(
+        "✅ Plan rev 7 done: 1 of 1 steps, 1 file changed (other-tab.py).")
+
+
+def test_list_refuses_a_symlinked_plans_directory(make_plugin, session_env, tmp_path):
+    elsewhere = tmp_path / "elsewhere" / "plans"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "outside.md").write_text("# x", encoding="utf-8")
+    (tmp_path / ".hermes").symlink_to(tmp_path / "elsewhere")
+    plugin = make_plugin("approval_card")
+    listing = plugin.command("list")
+    assert listing.startswith("Plan listing was refused") and "outside.md" not in listing
+    assert json.loads(plugin.tool({"action": "list"}))["plans"] == []
+
+
+def test_relative_and_absolute_spellings_count_once(building, session_env):
+    plugin, _ = building
+    wrote(plugin, "parser.py")
+    wrote(plugin, session_env["TERMINAL_CWD"] + "/parser.py")
+    assert state(plugin)["changed_files"] == [session_env["TERMINAL_CWD"] + "/parser.py"]
+
+
+def test_reentry_keeps_a_finished_plans_status(building):
+    plugin, path = building
+    finish(plugin)
+    plugin.post_llm_call()
+    plugin.command("on next task")
+    assert f"`{path.name}`: done (rev 1, " in plugin.command("list")
+
+
+def test_typed_inspect_prints_json(building):
+    plugin, _ = building
+    assert json.loads(plugin.command("inspect"))["phase"] == "executing"
+
+
+def test_done_command_records_done_in_the_list(building):
+    plugin, path = building
+    assert plugin.command("done") == "The executing plan is done."
+    assert f"`{path.name}`: done (rev 1, " in plugin.command("list")

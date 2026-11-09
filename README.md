@@ -59,7 +59,7 @@ TUI, Desktop and the messaging platforms) with no core changes.
    end of that turn, so fixes made in that turn after a failed final test still get the review and the no-commit block.
    That reply ends with one line, for example `✅ Plan rev 2 done: 5 of 5 steps, 3 files changed (cli.py, test_cli.py,
    README.md)` (chat platforms give counts only; API server, webhook and cron replies stay unchanged; `footer: off`
-   turns it off). A short plan without todos gets the line when it changed files. Typed `/planmode approve` also works while the card is
+   turns it off). With the default lean profile, a short plan without todos gets the line when it changed files. Typed `/planmode approve` also works while the card is
    open and selects auto-accept edits.
 7. Keep planning, or Other with feedback: plan mode stays on. The agent asks what to change (when no feedback came
    with it), revises the plan and submits a complete new revision. Its card says what changed since the last one
