@@ -2,16 +2,47 @@
 
 ![Hermes Plan Mode](docs/media/banner.jpg)
 
-Plan Mode makes the Hermes agent read your code, write a plan and stop. It can't change your project until you approve
-that plan on one card, and then it builds the plan in the same turn. It works on every interactive Hermes surface (CLI,
-TUI, Desktop and the messaging platforms) with no core changes.
+Plan mode for Hermes Agent: it explores read-only and writes a plan, and its edit tools stay blocked until you approve. Hermes'
+Codex app-server runtime and TUI `/background` and `btw` side agents are outside the block ([why](#why-it-exists)).
 
-`/plan` in core Hermes is a prompt, which the model can ignore. Plan Mode turns it into a lock:
+▶ [Watch the 85-second demo](https://x.com/ElectricSheepIO/status/2119788419924570130)
+
+[![Latest release](https://img.shields.io/github/v/release/100yenadmin/hermes-plan-mode)](https://github.com/100yenadmin/hermes-plan-mode/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/100yenadmin/hermes-plan-mode)](LICENSE)
+[![Hermes >= 0.21.3](https://img.shields.io/badge/Hermes-%E2%89%A5%200.21.3-blue)](#compatibility)
+[![CI](https://github.com/100yenadmin/hermes-plan-mode/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/100yenadmin/hermes-plan-mode/actions/workflows/ci.yml)
+
+```bash
+hermes plugins install 100yenadmin/hermes-plan-mode --enable
+```
+
+No API keys and no extra dependencies. It needs Hermes 0.21.3 or newer on the classic CLI, and 0.21.5 (v2026.9.24) or
+newer on the gateway, TUI and Desktop; 0.21.6 or newer is recommended ([Compatibility](#compatibility)). Restart any
+running Hermes session (and `hermes gateway restart` if you use the messaging gateway), then try it.
+[Install](#install) covers pinning a release.
+
+## Try it
+
+1. In a project, start a Hermes session and type `/plan add a --dry-run flag to the import command`.
+2. The agent reads the code, may ask you one question with its recommended answer first, writes a plan and shows it
+   with an approval card: "Approve, auto-accept edits", "Approve, review each file edit" (when Hermes approvals are on)
+   or keep planning, where Other sends feedback.
+3. Approve it. The agent builds the plan in the same turn, tracks the steps in a todo list and ends with a line such as
+   `✅ Plan rev 1 done: 4 of 4 steps, 2 files changed (importer.py, test_importer.py)`.
+
+`/planmode status` shows where you are, `/planmode list` shows your plans, and `/planmode off` leaves plan mode without
+approving anything.
+
+## Why it exists
+
+`/plan` in core Hermes is a prompt, which the model can ignore. Plan Mode turns it into a lock. The lock covers the
+tools Hermes dispatches through its `pre_tool_call` hook; Hermes' Codex app-server runtime and TUI `/background` and
+`btw` side agents run outside that hook, so plan mode does not block them ([Known limitations](#known-limitations)).
+It works on every interactive Hermes surface (CLI, TUI, Desktop and the messaging platforms) with no core changes.
 
 - **A real lock.** While it plans, Plan Mode lets through only a short read-only list of tools and blocks the rest
   at Hermes' `pre_tool_call` hook, including file writes and patches, the terminal, code execution, sub-agents and
   MCP tools. The only file it can write is its own plan, and the reply ends with a line naming any call it blocked.
-  [Known limitations](#known-limitations) lists what that hook does not cover.
 - **Questions before guesses.** It asks about choices only you can make, usually one question with its recommended
   choice first. Say "grill me", or set Questions to `thorough`, and it interviews you, one decision at a time,
   before every plan.
@@ -19,23 +50,17 @@ TUI, Desktop and the messaging platforms) with no core changes.
   edit (each `write_file` and `patch`; shell commands keep Hermes' own approvals), or keep planning (Other sends feedback). Approval belongs to the exact plan you saw: if the plan changes, it
   asks again. The classic profile and surfaces without a card use Hermes' own approval prompt.
 - **It builds in the same turn** and tracks progress in a todo list. With Allow commits off (the default), terminal
-  `git commit` and `git push` stay blocked while the plan runs, unless you ask for a commit.
+  `git commit` and `git push` stay blocked while the plan runs, unless you ask for a commit. When the plan is done,
+  the reply says so in one line.
 - **Wherever you use Hermes:** the same card on the CLI, TUI and Desktop, and as buttons on Telegram, Slack and
   Discord.
 
-## Quick start
-
-1. Install it (see [Install](#install)), then start a new Hermes session.
-2. Ask for a change with `/plan`, for example `/plan add a --dry-run flag to the import command`.
-3. The agent reads the code, may ask you a question or two, and shows you its plan. Until you approve, plan mode blocks
-   changes made through Hermes' tool hook, apart from the plan file. [Known limitations](#known-limitations) lists what
-   that hook does not cover.
-4. Approve the plan, or say what to change; the agent revises it and asks again. Most surfaces show a card with
-   "Approve, auto-accept edits", "Approve, review each file edit" (when Hermes approvals are on) and Other for
-   feedback. [What you see on each channel](#what-you-see-on-each-channel) lists the other forms.
-5. After approval the agent implements the plan in the same turn and tracks its progress.
-
-`/planmode status` shows where you are; `/planmode off` leaves plan mode without approving anything.
+**Contents:** [How it works](#how-it-works) · [What you see on each channel](#what-you-see-on-each-channel) ·
+[Install](#install) · [Commands](#commands) · [The agent tool](#the-agent-tool) ·
+[What is allowed in plan mode](#what-is-allowed-in-plan-mode) · [Configuration](#configuration) ·
+[Compared with other plan modes](#compared-with-other-plan-modes) · [Security model](#security-model) ·
+[Known limitations](#known-limitations) · [Compatibility](#compatibility) · [How to test](#how-to-test) ·
+[Disclosure](#disclosure) · [Troubleshooting and reporting a bug](#troubleshooting-and-reporting-a-bug)
 
 ## How it works
 
@@ -477,19 +502,19 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 1.3 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 1.4 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | a `clarify` card (lean default) or Hermes' approval prompt, every interactive surface |
 | Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted; an opt-in interview (Questions: `thorough`) |
 | Deny with feedback, revise | yes | yes | no | yes; Other on the card, gateway `/deny <reason>`, otherwise the agent asks |
 | Implement after approval | same turn | one click, as a new turn | no | same turn via the prompt; typed approve may need a message |
-| Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list` + footer on chat platforms |
+| Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list`, a footer on chat platforms and a finish line |
 | Agent may enter | yes | no | no | yes |
 | Autonomy choice / clear context at approval | yes | partial | no | auto-accept or review each edit; no clear context |
 
-The Claude Code and Codex columns describe those products as documented and as run in our October 2026 benchmarks
-(below); either may have changed since.
+The plan-mode column is version 1.4 (November 2026). The Claude Code and Codex columns describe those products as
+documented and as run in our October 2026 benchmarks (below); either may have changed since.
 
 ### Measured against Codex plan mode
 
@@ -726,8 +751,8 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
   linked tab has plan mode on; retry from the owning tab after one turn there.
-- **Resuming an approved plan.** Durable resume is not part of 1.0
-  ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
+- **Resuming an approved plan.** Durable resume is not supported yet, as of 1.4 (planned:
+  [#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
   - **Hermes restart:** classic CLI execution state belongs to its process ID and is cleared on normal exit; a new
     CLI process does not recover its execution pointer. Other surfaces can read retained state only when their
     session/tab key still resolves it; there is no automatic unfinished-step recovery.
@@ -895,4 +920,7 @@ Report approval bypasses or writes outside the plans directory through a [privat
 
 ## License
 
-MIT. Maintained by [100yenadmin](https://github.com/100yenadmin).
+MIT ([LICENSE](LICENSE)). Maintained by [100yenadmin](https://github.com/100yenadmin).
+
+[Releases](https://github.com/100yenadmin/hermes-plan-mode/releases) · [Changelog](CHANGELOG.md) ·
+[Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md)
