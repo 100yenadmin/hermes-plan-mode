@@ -2,7 +2,8 @@
 
 ![Hermes Plan Mode](docs/media/banner.jpg)
 
-Plan mode for Hermes Agent: it explores read-only and writes a plan, and its edit tools stay blocked until you approve.
+Plan mode for Hermes Agent: it explores read-only and writes a plan, and its edit tools stay blocked until you approve. Hermes'
+Codex app-server runtime and TUI `/background` and `btw` side agents are outside the block ([why](#why-it-exists)).
 
 ▶ [Watch the 85-second demo](https://x.com/ElectricSheepIO/status/2119788419924570130)
 
