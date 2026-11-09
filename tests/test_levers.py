@@ -295,6 +295,7 @@ def test_thorough_questions_only_by_name_or_setting(make_plugin):
     plugin.command("on")
     assert "interview them" not in plugin.pre_llm_call()["context"]
     assert "Questions:" not in plugin.command("status")
+    assert "thorough_questions" in make_plugin("all thorough_questions")._levers()
     named = make_plugin("question_shape thorough_questions")
     named.command("on")
     assert "interview them before you write the plan" in named.pre_llm_call()["context"]

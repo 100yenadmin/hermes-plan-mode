@@ -1817,7 +1817,7 @@ class PlanModePlugin:
         else:
             names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
             # all = every experimental lever; thorough_questions belongs to the Questions setting, not to "all".
-            levers = set(_LEVERS) - {"thorough_questions"} if "all" in names else names & _LEVERS
+            levers = (set(_LEVERS) - {"thorough_questions"}) | (names & {"thorough_questions"}) if "all" in names else names & _LEVERS
         # The Settings switch wins over both the profile and custom lever overrides.
         # YAML 1.1 reads a bare off/no as False; accept the quoted allow_commits off-words too.
         card = self._config("approval_card", True)
