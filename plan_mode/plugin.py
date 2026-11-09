@@ -2844,7 +2844,11 @@ class PlanModePlugin:
         entries = [entry for entry in entries if not (turn and entry["turn"] and entry["turn"] != turn)]
         if not entries or self._footer_off() or platform in _RECEIPT_SKIP_PLATFORMS:
             return ""
-        local = (not platform or platform in LOCAL_PLATFORMS) and not identity.key.startswith("sk:")
+        # Local only when both the session's own platform and the reply's platform are local: a gateway agent
+        # with an empty reply platform still carries its chat platform in the session context.
+        surface = str(identity.surface or "").strip().lower()
+        local = ((not platform or platform in LOCAL_PLATFORMS)
+                 and (not surface or surface in LOCAL_PLATFORMS))
         count = sum(entry["count"] for entry in entries)
         calls = [call for entry in entries for call in entry["calls"]][:_RECEIPT_CALLS]
         # Commands can carry private text: chat (gateway session) replies name the tools only.

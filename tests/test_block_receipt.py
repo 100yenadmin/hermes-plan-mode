@@ -163,6 +163,18 @@ def test_gateway_session_never_shows_details(make_plugin, session_env, platform)
     assert reply == "Plan.\n\n🔒 Plan mode blocked 1 tool call: terminal."
 
 
+def test_cli_with_a_session_key_shows_details(make_plugin, session_env):
+    # Hermes 0.23's classic CLI runs with a session key too; its session platform says cli.
+    session_env["HERMES_SESSION_PLATFORM"] = "cli"
+    session_env["HERMES_SESSION_KEY"] = "agent:main:cli:local-123"
+    plugin = make_plugin("")
+    plugin.command("on parser")
+    assert pm.derive_session_identity("cli").key.startswith("sk:")
+    blocked(plugin, "terminal", {"command": "mkdir -p /repo/.hermes/plans"})
+    assert plugin.transform_llm_output("Plan.", platform="cli").endswith(
+        "🔒 Plan mode blocked 1 tool call: terminal (mkdir -p /repo/.hermes/plans).")
+
+
 def test_long_chat_reply_gets_no_receipt(make_plugin, session_env):
     session_env["HERMES_SESSION_PLATFORM"] = "discord"
     session_env["HERMES_SESSION_KEY"] = "agent:main:discord:dm:9"
