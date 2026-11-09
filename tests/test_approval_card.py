@@ -609,3 +609,29 @@ def test_061_card_switch_flat_value_wins_and_classic_stays_classic(make_plugin):
     plugin = make_plugin(approval_card=True, **{"plan_mode.approval_card": False})
     assert "approval_card" in plugin._levers()
     assert make_plugin(plan_profile="classic", approval_card=True)._levers() == set()
+
+
+@pytest.mark.parametrize("choices", [
+    [APPROVE, KEEP], [APPROVE], [" " + APPROVE + " ", "Something else"],
+])
+def test_card_without_its_tag_is_sent_back(card, choices):
+    """A model that shortens the card's question drops the tag; its "Approve" answer must not pass as a plain question
+    (live run 2026-11-09: the model then believed the plan approved while plan mode still blocked every edit)."""
+    plugin, path, result = card
+    shortened = {"questions": [{"question": f"Approve plan rev 1 ({path.name})?", "choices": choices}]}
+    blocked = plugin.pre_tool_call("clarify", shortened, tool_call_id="ask")
+    assert blocked["action"] == "block" and blocked["message"].startswith("Use exactly these clarify args: ")
+    assert json.loads(blocked["message"].removeprefix("Use exactly these clarify args: ")) == ask_args(result)
+    assert state(plugin)["submission"]["status"] == "awaiting"
+    assert answer_card(plugin, result, APPROVE)  # the exact card still approves afterwards
+    assert state(plugin)["phase"] == "executing"
+
+
+@pytest.mark.parametrize("call", [
+    {"questions": [{"question": "Which JSON shape?", "choices": ["Full objects", "Text only"]}]},
+    {"questions": [{"question": "Keep the old flag?", "choices": [KEEP, "Remove it"]}]},
+    {"question": "Anything else?"},
+])
+def test_other_questions_still_pass_while_the_card_waits(card, call):
+    plugin, _, _ = card
+    assert plugin.pre_tool_call("clarify", call, tool_call_id="other") is None

@@ -129,6 +129,7 @@ def test_completion_clears_execution_and_request(executing, ending):
     else:
         todos = [{"id": "1", "content": "work", "status": "completed"}]
         executing.post_tool_call("todo_list", {"todos": todos}, status="ok", result=json.dumps({"todos": todos}))
+        executing.post_llm_call()  # under the todo levers a finished plan ends at turn end
     state = executing._load_state("sk:unit-session")
     assert "phase" not in state and "user_asked_commits" not in state
     assert executing.pre_tool_call("terminal", {"command": "git commit -m x"}) is None
@@ -359,3 +360,13 @@ def test_round3_scan_stays_fast_on_megabyte_commands(command):
     start = time.monotonic()
     pm._runs_git_commit(command)
     assert time.monotonic() - start < 1.0
+
+
+def test_final_todos_keep_commit_block_until_turn_end(executing):
+    todos = [{"id": "1", "content": "work", "status": "completed"}]
+    executing.post_tool_call("todo_list", {"todos": todos}, status="ok", result=json.dumps({"todos": todos}))
+    held = bool({"todo_batch", "todo_inline"} & executing._levers())  # classic has no turn-end hook: it ends at once
+    result = executing.pre_tool_call("terminal", {"command": "git commit -m x"})
+    assert (result is not None and result["action"] == "block") is held
+    executing.post_llm_call()
+    assert executing.pre_tool_call("terminal", {"command": "git commit -m x"}) is None

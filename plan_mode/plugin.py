@@ -99,7 +99,7 @@ _EXECUTING_INDEX_KEY = "executing-index"
 _SESSION_INDEX_KEY = "session-index"
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
-                     "user_asked_process", "user_asked_commits")
+                     "user_asked_process", "user_asked_commits", "finish_pending")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -1179,6 +1179,11 @@ class PlanModePlugin:
         else:
             phase = "planning" if state.get("active") else "off"
         last = f"\nLast submission: rev {submission['revision']} {submission['status']}" if submission else ""
+        review = state.get("edit_review")
+        if isinstance(review, dict) and review.get("key") and "approval_card" in self._levers():
+            # Kept on purpose after a short plan's turn ends, so the next edit's prompt is not a surprise (gap review).
+            last += (f"\nFile-edit review: on for plan rev {review.get('rev') or '?'} (it prompts while Hermes approvals "
+                     "are on); /planmode done ends it")
         custom = " (custom levers)" if self._lever_override() else ""
         questions = "\nQuestions: thorough" if "thorough_questions" in self._levers() else ""
         return (
@@ -2193,6 +2198,13 @@ class PlanModePlugin:
         return (bool({"todo_batch", "todo_inline"} & self._levers()) and state.get("phase") == "executing"
                 and not (state.get("progress") or {}).get("total"))
 
+    def _finish_plan(self, key: str, state: dict[str, Any]) -> None:
+        """Every todo finished earlier in the turn: end the execution and its edit review now."""
+        state.pop("edit_review", None)
+        self._clear_execution(state)
+        self._save_state(key, state)
+        self._sync_execution_family(_state_storage_key(key), state)
+
     def post_llm_call(self, **kwargs: Any) -> None:
         """Turn-end hook (after the tool loop), including local surfaces without footers."""
         if not {"todo_batch", "todo_inline"} & self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
@@ -2203,7 +2215,9 @@ class PlanModePlugin:
                 return
             with self._lock:
                 key, state = self._state_for_hook(identity)
-                if key and self._execution_ends_with_turn(state):
+                if key and state.get("finish_pending"):
+                    self._finish_plan(key, state)
+                elif key and self._execution_ends_with_turn(state):
                     self._clear_execution(state)
                     self._save_state(key, state)
                     self._sync_execution_family(_state_storage_key(key), state)
@@ -2405,11 +2419,20 @@ class PlanModePlugin:
                     texts = [item if isinstance(item, str) else item.get("question", "")
                              if isinstance(item, dict) else "" for item in questions]
                     tag = f"[plan-mode {clarify['nonce']}]"
-                    if not any(isinstance(text, str) and tag in text for text in texts):
-                        return None
                     required = {"questions": [{"question": clarify["question"],
                                                "choices": clarify["choices"], "multi_select": False}]}
                     blocked = {"action": "block", "message": "Use exactly these clarify args: " + json.dumps(required)}
+                    if not any(isinstance(text, str) and tag in text for text in texts):
+                        # A model that shortens the card's question drops its tag. Its "Approve" answer would then pass
+                        # as a plain question: the model believes the plan approved while every edit stays blocked.
+                        # An approval choice identifies the card, so send the exact args back instead.
+                        approvals = {item for item in clarify["choices"] if item != "Keep planning"}
+                        if any(isinstance(item, dict) and isinstance(item.get("choices"), list)
+                               and any(isinstance(choice, str) and choice.strip() in approvals
+                                       for choice in item["choices"])
+                               for item in questions):
+                            return blocked
+                        return None
                     if len(questions) != 1 or not isinstance(questions[0], dict):
                         return blocked
                     question = questions[0]
@@ -2578,8 +2601,15 @@ class PlanModePlugin:
                         if progress is not None:
                             state["progress"] = progress
                             if progress["total"] > 0 and progress["completed"] + progress["cancelled"] == progress["total"]:
-                                state.pop("edit_review", None)
-                                self._clear_execution(state)
+                                if {"todo_batch", "todo_inline"} & self._levers():
+                                    # The lean hint closes the last todos alongside the final test run; ending here
+                                    # would drop the edit review and no-commit block before a failed test's fixes.
+                                    state["finish_pending"] = True
+                                else:
+                                    state.pop("edit_review", None)
+                                    self._clear_execution(state)
+                            elif progress["total"] > 0:
+                                state.pop("finish_pending", None)  # a reopened step: the plan is not finished
                             assert state_key is not None
                             self._save_state(state_key, state)
                             self._sync_execution_family(_state_storage_key(state_key), state)
@@ -2673,6 +2703,8 @@ class PlanModePlugin:
 
             with self._lock:
                 state_key, state = self._state_for_hook(identity)
+                if state_key and state.get("finish_pending"):
+                    self._finish_plan(state_key, state)  # the previous turn ended without post_llm_call
                 if "approval_card" in self._levers() and state_key:
                     self._hook_platforms.pop(_state_storage_key(state_key), None)  # re-insert: most recently used last
                     self._hook_platforms[_state_storage_key(state_key)] = str(kwargs.get("platform") or "").strip().lower()

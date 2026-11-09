@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.3.1 - 2026-11-09
+
+Fixes from an adversarial gap review and a live run.
+
+- **A shortened approval card no longer fakes an approval.** Some models shorten the card's question and drop the
+  hidden `[plan-mode …]` tag. Plan mode then let it through as an ordinary question, so the model saw "Approve,
+  auto-accept edits" as the answer and started building while every edit stayed blocked, and the user had to type
+  `/planmode approve`. A question that offers one of the card's approval choices is now sent back to the model with the
+  exact text to use, so the card the user answers is the real one. Found in a live run with deepseek-v4-flash.
+- **A failed final test stays under the plan's rules.** The lean profile marks the last todos done in the same step as
+  the final test run. Plan mode used to end the plan right then, so if that test failed, the fixes that followed
+  skipped "review each file edit" and the no-commit block. The plan now ends at the end of that turn (or at the start
+  of the next one if the turn was interrupted), and reopening a todo keeps it running. The classic profile is
+  unchanged.
+- **`/planmode status` shows file-edit review that is still on.** After a short plan, review each file edit stays on
+  until `/planmode done`, but status said only "Phase: off", so the next edit's prompt came as a surprise. Status now
+  adds a `File-edit review: on for plan rev N` line that says `/planmode done` ends it.
+- **README:**
+  - a copyable install line;
+  - why to use the `100yenadmin/hermes-plan-mode` form rather than the catalog name on a fresh Hermes 0.23.0
+    (NousResearch/hermes-agent#151856);
+  - what review each file edit covers, stated next to the choice;
+  - when a plan with todos ends;
+  - remote terminal backends added to Known limitations;
+  - the live-progress limitation brought up to date (Hermes 0.22.3 added editable plugin messages);
+  - the manual walkthrough updated for the approval card and short plans;
+  - the comparison table dated to the products as benchmarked.
+
 ## 1.3.0 - 2026-11-09
 
 See the lock work.

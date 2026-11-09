@@ -2103,6 +2103,9 @@ def test_u2_todo_progress_and_completion(plugin, executing_plan, tool):
     todos[0]["status"] = "completed"
     result["summary"]["completed"] = 2
     plugin.post_tool_call(tool, {"todos": []}, status="ok", result=json.dumps(result))
+    if {"todo_batch", "todo_inline"} & plugin._levers():
+        assert plugin._load_state("sk:unit-session")["finish_pending"] is True  # the plan ends at turn end
+        plugin.post_llm_call()
     state = plugin._load_state("sk:unit-session")
     assert not _EXECUTION_FIELDS & state.keys()
     assert state["submission"]["status"] == "approved"
