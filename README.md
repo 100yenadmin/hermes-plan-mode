@@ -16,8 +16,10 @@ Codex app-server runtime and TUI `/background` and `btw` side agents are outside
 hermes plugins install 100yenadmin/hermes-plan-mode --enable
 ```
 
-No API keys and no extra dependencies. Restart any running Hermes session (and `hermes gateway restart` if you use the
-messaging gateway), then try it. [Install](#install) covers pinning a release.
+No API keys and no extra dependencies. It needs Hermes 0.21.3 or newer on the classic CLI, and 0.21.5 (v2026.9.24) or
+newer on the gateway, TUI and Desktop; 0.21.6 or newer is recommended ([Compatibility](#compatibility)). Restart any
+running Hermes session (and `hermes gateway restart` if you use the messaging gateway), then try it.
+[Install](#install) covers pinning a release.
 
 ## Try it
 
