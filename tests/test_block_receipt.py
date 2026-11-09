@@ -134,6 +134,16 @@ def test_a_delegated_childs_blocks_never_reach_the_parent(planning):
     assert reply.endswith("blocked 2 tool calls: terminal (ls), terminal (pwd).") and "child" not in reply
 
 
+def test_a_busy_parent_turn_is_not_evicted_by_its_children(planning):
+    blocked(planning, "terminal", {"command": "ls"}, turn="parent")
+    for n in range(pm._RECEIPT_TURNS - 1):
+        blocked(planning, "terminal", {"command": "x"}, turn=f"child{n}")
+    blocked(planning, "terminal", {"command": "pwd"}, turn="parent")
+    blocked(planning, "terminal", {"command": "y"}, turn="child-last")
+    reply = planning.transform_llm_output("Parent.", platform="cli", turn_id="parent")
+    assert reply.endswith("blocked 2 tool calls: terminal (ls), terminal (pwd).")
+
+
 def test_session_reset_forgets_unnamed_blocks(planning):
     blocked(planning, "terminal", {"command": "ls"}, turn="")
     planning.on_session_reset(platform="cli")

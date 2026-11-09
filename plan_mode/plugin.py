@@ -2825,7 +2825,8 @@ class PlanModePlugin:
                 entry = next((item for item in entries if item["turn"] == turn), None)
                 if entry is None:
                     entry = {"count": 0, "calls": [], "turn": turn}
-                    entries = (entries + [entry])[-_RECEIPT_TURNS:]
+                # The touched turn moves to the end, so the least recently blocked turn is the one dropped.
+                entries = ([item for item in entries if item is not entry] + [entry])[-_RECEIPT_TURNS:]
                 entry["count"] += 1
                 if len(entry["calls"]) < _RECEIPT_CALLS:
                     entry["calls"].append((str(tool_name or "tool"), _block_detail(args)))
