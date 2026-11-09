@@ -1533,7 +1533,7 @@ def test_t3_agent_tool_off_cannot_end_user_plan_mode(
 def test_t4_agent_tool_cannot_approve_or_reject(plugin, session_env, tmp_path, action):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     schema = plugin.ctx.tools["plan_mode"]["schema"]
-    assert schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off", "submit"]
+    assert schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off", "submit", "inspect", "list"]
     _tool(plugin, action="on")
     plan = tmp_path / ".hermes" / "plans" / "2026-09-26_120000-plan.md"
     assert plugin.pre_tool_call("write_file", {"path": str(plan), "content": "#"}) is None
@@ -1687,7 +1687,7 @@ def _submit_result(plugin):
 def test_u1_schema_and_search_description(plugin):
     tool = plugin.ctx.tools["plan_mode"]
     props = tool["schema"]["parameters"]["properties"]
-    assert props["action"]["enum"] == ["on", "status", "off", "submit"]
+    assert props["action"]["enum"] == ["on", "status", "off", "submit", "inspect", "list"]
     assert {"path", "summary"} <= props.keys()
     description = tool["description"]
     assert len(description) < 900
@@ -2159,7 +2159,7 @@ def test_u2_hint_and_command_hint_registered(plugin, plan_profile):
     else:
         assert section["content"] == 'For multi-step or risky changes you can enter enforced plan mode with the plan_mode tool (action "on"; find it with tool_search) and submit a plan for the user\'s approval before building.'
     assert len(section["content"]) <= 200
-    assert plugin.ctx.command_hints["planmode"] == "[on|status|show|edit|approve|reject|done|off] [task]"
+    assert plugin.ctx.command_hints["planmode"] == "[on|status|list|show|edit|approve|reject|done|off] [task]"
 
 
 @pytest.mark.parametrize("key", ["agent_hint", "plan_mode.agent_hint"])

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.0 - 2026-11-09
+
+Find a plan again, and see when one is finished.
+
+- **A finish line.** When an approved plan ends, the reply ends with one line, for example
+  `✅ Plan rev 2 done: 5 of 5 steps, 3 files changed (cli.py, test_cli.py, README.md)`. Until now a plan finished
+  silently.
+  - The line appears when the last todo is done, or at the end of a short plan (one without todos) that changed files.
+  - CLI, TUI and Desktop name up to three files; chat platforms give counts only, and the line replaces the
+    `Plan progress n/n` footer there.
+  - API server, webhook and cron replies stay unchanged, and `footer: off` turns the line off.
+- **`/planmode list`.** It shows the newest 20 plans in the plans directory, each with its status: being planned,
+  waiting for approval, building (with steps done), approved, done, or draft. It does not create the directory.
+- **The agent can read its own state.** `plan_mode(action="inspect")` returns phase, plan and revision, approval
+  status, edit policy, todo progress, files changed and the next allowed steps as fields, and
+  `plan_mode(action="list")` returns the plan list. Both are read-only, and only the user approves.
+
 ## 1.3.1 - 2026-11-09
 
 Fixes from an adversarial gap review and a live run.

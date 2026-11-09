@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import os
 
 
 AGENT_HINT = (
@@ -332,6 +333,23 @@ def block_receipt(count: int, calls, *, details: bool) -> str:
     listed = ", ".join(shown) + (f" and {more} more" if more > 0 else "")
     noun = "tool call" if count == 1 else "tool calls"
     return f"🔒 Plan mode blocked {count} {noun}: {listed}."
+
+
+def finish_receipt(revision, progress, files, *, details: bool) -> str:
+    """One line when an approved plan finishes: Hermes has no completion event for a plan."""
+    parts = []
+    total = (progress or {}).get("total", 0)
+    if total:
+        cancelled = progress.get("cancelled", 0)
+        parts.append(f"{progress.get('completed', 0)} of {total} steps" + (f" ({cancelled} cancelled)" if cancelled else ""))
+    if files:
+        changed = f"{len(files)} {'file' if len(files) == 1 else 'files'} changed"
+        if details:
+            names = ", ".join(os.path.basename(path) for path in files[:3])
+            changed += f" ({names}{f' and {len(files) - 3} more' if len(files) > 3 else ''})"
+        parts.append(changed)
+    head = "✅ Plan" + (f" rev {revision}" if revision is not None else "") + " done"
+    return head + (": " + ", ".join(parts) if parts else "") + "."
 
 
 def response_footer(response_text: str, state: dict) -> str | None:

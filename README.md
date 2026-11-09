@@ -56,7 +56,10 @@ TUI, Desktop and the messaging platforms) with no core changes.
 6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
    `todo_list` (with the default `lean` profile, for plans of 4 or more steps). With "review each file edit", every
    `write_file` / `patch` gets Hermes' approval prompt first. When the last todo is marked done, the plan ends at the
-   end of that turn, so fixes made in that turn after a failed final test still get the review and the no-commit block. Typed `/planmode approve` also works while the card is
+   end of that turn, so fixes made in that turn after a failed final test still get the review and the no-commit block.
+   That reply ends with one line, for example `✅ Plan rev 2 done: 5 of 5 steps, 3 files changed (cli.py, test_cli.py,
+   README.md)` (chat platforms give counts only; API server, webhook and cron replies stay unchanged; `footer: off`
+   turns it off). A short plan without todos gets the line when it changed files. Typed `/planmode approve` also works while the card is
    open and selects auto-accept edits.
 7. Keep planning, or Other with feedback: plan mode stays on. The agent asks what to change (when no feedback came
    with it), revises the plan and submits a complete new revision. Its card says what changed since the last one
@@ -151,6 +154,7 @@ plugin.
 | `/plan <task>` | Core Hermes plan prompt. With this plugin it also turns on enforced plan mode for the session (CLI, gateway, TUI and Desktop all send core's prompt). |
 | `/planmode on [task]` | Fixes an absolute plans directory for this session and turns enforcement on. |
 | `/planmode status` | Mode, phase (`planning`, `awaiting approval (rev N)`, `executing (rev N: <path>)`, `off`), the plans directory, plan files and the last submission. |
+| `/planmode list` | The newest 20 plans in the plans directory, each with its status: being planned, waiting for approval, building (with steps done), approved, done, or draft. Does not create the directory. |
 | `/planmode show [file]` | Displays the submitted plan (else the newest), or a named tracked file, up to 64 KiB. Complete local display records the exact reviewed text for edited-plan approval. |
 | `/planmode edit [file]` | Gives the absolute tracked plan path and instructions to edit, save, show and approve it. Does not launch an editor. |
 | `/planmode approve [file]` | Approves an unchanged submitted revision, or a changed/named new file after a matching complete local `show`. A reviewed replacement becomes rev N+1 once. |
@@ -214,6 +218,11 @@ does not, which happens when a tool selection was saved there without it. Add `p
 - `submit` (optional `path`, `summary`): asks you to approve the plan, on the approval card or through Hermes'
   approval prompt (see How it works). The agent
   should call it on its own, not batched with other tool calls.
+- `inspect`: the current state as fields, so the agent can check where it stands (for example after a compaction)
+  without parsing text: phase, plan and revision, approval status, edit policy (`auto_accept` or `review_each_edit`),
+  todo progress, files changed by the approved plan, whether the plan finishes this turn, and the next steps allowed.
+  Read-only.
+- `list`: the plans in the plans directory with their status, as `/planmode list` shows them. Read-only.
 
 The tool cannot approve or reject a plan. Approval is your act, recorded by Hermes' approval hooks or the
 plugin-issued `clarify` question's answer when Hermes approves automatically.
