@@ -32,7 +32,7 @@ from .approval import (
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
     BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
-    no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
+    block_receipt, no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
 READ_ONLY_TOOLS = frozenset(
@@ -104,6 +104,26 @@ _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_sn
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
+# Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
+# names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
+_RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
+_RECEIPT_SKIP_PLATFORMS = frozenset({"api_server", "webhook", "cron"})  # cron output can be delivered to a chat
+_RECEIPT_SESSIONS = 64
+_FOOTER_ALLOWANCE = 80  # room left for a footer or pointer after the receipt on chat platforms
+_RECEIPT_CALLS = 3
+_RECEIPT_TURNS = 8  # per session: delegated children share their parent's key but run their own turns
+
+
+def _block_detail(args: Any) -> str:
+    """A short, single-line hint of what a blocked call wanted to do (command, path, code or goal)."""
+    if not isinstance(args, dict):
+        return ""
+    for field in ("command", "path", "code", "goal"):
+        value = args.get(field)
+        if isinstance(value, str) and value.strip():
+            line = " ".join(value.split())
+            return line if len(line) <= 60 else line[:59] + "…"
+    return ""
 _NO_CLARIFY_PLATFORMS = frozenset({"acp", "api_server", "cron", "webhook", "msgraph_webhook"})
 _TODO_HINT = (
     "mirror the plan's steps into todo_list, called as todo_list(todos=[{\"id\": \"1\", \"content\": \"...\", "
@@ -640,6 +660,7 @@ class PlanModePlugin:
         # (session_id, tool_call_id) -> (state key, targets, activation id, fresh candidates).
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any, dict[str, bool]]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
+        self._turn_blocks: dict[str, list[dict[str, Any]]] = {}  # session key -> per-turn blocks not yet named
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
         self._hook_platforms: OrderedDict[str, str] = OrderedDict()
@@ -2456,6 +2477,8 @@ class PlanModePlugin:
 
     def post_tool_call(self, tool_name: str = "", args: Any = None, **kwargs: Any) -> None:
         """Make a pending plan write approvable only after Hermes reports ``ok``."""
+        if kwargs.get("status") == "blocked":
+            self._record_block(tool_name, args, kwargs)
         try:
             call_id = str(kwargs.get("tool_call_id") or "")
             with self._lock:
@@ -2781,14 +2804,92 @@ class PlanModePlugin:
         except Exception:
             return
 
+    def _record_block(self, tool_name: str, args: Any, kwargs: dict[str, Any]) -> None:
+        """Remember a call the lock blocked so this turn's reply can name it. Display only; never raises."""
+        try:
+            message = kwargs.get("error_message")
+            if not isinstance(message, str) or not message:
+                try:
+                    message = json.loads(kwargs.get("result") or "").get("error")
+                except (TypeError, ValueError, AttributeError):
+                    message = None
+            if not isinstance(message, str) or not message.startswith(_RECEIPT_PREFIXES):
+                return
+            # Hermes passes no platform to post_tool_call; identity comes from the session context, as in transform.
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if identity.unsupported or identity.non_cli_without_key or not identity.key:
+                return
+            turn = str(kwargs.get("turn_id") or "")
+            with self._lock:
+                entries = self._turn_blocks.pop(identity.key, None) or []
+                entry = next((item for item in entries if item["turn"] == turn), None)
+                if entry is None:
+                    entry = {"count": 0, "calls": [], "turn": turn}
+                # The touched turn moves to the end, so the least recently blocked turn is the one dropped.
+                entries = ([item for item in entries if item is not entry] + [entry])[-_RECEIPT_TURNS:]
+                entry["count"] += 1
+                if len(entry["calls"]) < _RECEIPT_CALLS:
+                    entry["calls"].append((str(tool_name or "tool"), _block_detail(args)))
+                self._turn_blocks[identity.key] = entries  # most recent last, so the oldest session drops first
+                while len(self._turn_blocks) > _RECEIPT_SESSIONS:
+                    self._turn_blocks.pop(next(iter(self._turn_blocks)))
+        except Exception:
+            return
+
+    def _take_block_receipt(self, identity: Any, platform: str, turn: str, response_text: str) -> str:
+        """Pop this session's recorded blocks (always, so none is named in a later turn) and render them."""
+        keys = dict.fromkeys(key for key in (identity.key, identity.fallback_key, f"cli:{os.getpid()}") if key)
+        with self._lock:
+            entries = [entry for key in keys for entry in (self._turn_blocks.pop(key, None) or [])]
+        # Only this turn's blocks: an interrupted or empty earlier turn, or a delegated child's turn, is never named.
+        entries = [entry for entry in entries if not (turn and entry["turn"] and entry["turn"] != turn)]
+        if not entries or self._footer_off() or platform in _RECEIPT_SKIP_PLATFORMS:
+            return ""
+        # Local only when both the session's own platform and the reply's platform are local: a gateway agent
+        # with an empty reply platform still carries its chat platform in the session context.
+        surface = str(identity.surface or "").strip().lower()
+        local = ((not platform or platform in LOCAL_PLATFORMS)
+                 and (not surface or surface in LOCAL_PLATFORMS))
+        count = sum(entry["count"] for entry in entries)
+        calls = [call for entry in entries for call in entry["calls"]][:_RECEIPT_CALLS]
+        # Commands can carry private text: chat (gateway session) replies name the tools only.
+        receipt = block_receipt(count, calls, details=local)
+        if not local and len(response_text) + len(receipt) + _FOOTER_ALLOWANCE > _FOOTER_MAX_CHARS:
+            return ""  # like the footer: never push a chat reply past the platform's split
+        return receipt
+
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:
             platform = str(kwargs.get("platform") or "").strip().lower()
-            if self._footer_off() or platform in _NO_TURN_NOTE_PLATFORMS:
-                return None  # `footer: off` opts out of every plan-mode output transform; child turns belong to the parent.
+            if platform in _NO_TURN_NOTE_PLATFORMS:
+                return None  # child turns belong to the parent
             identity = derive_session_identity(platform)
             if identity.unsupported or identity.non_cli_without_key or not identity.key:
                 return None
+            receipt = ""
+            try:  # popped even with `footer: off`, so a later switch never prints stale blocks
+                receipt = self._take_block_receipt(identity, platform, str(kwargs.get("turn_id") or ""), response_text)
+            except Exception:
+                receipt = ""
+            if self._footer_off():
+                return None  # `footer: off` opts out of every plan-mode output transform
+            result = self._reply_transform(response_text, platform, identity)
+            if not receipt:
+                return result
+            # A pure append, like the pointer: the streamed reply stays an exact prefix. The pointer and footer
+            # decide on the model's own text, then follow the receipt on their own line.
+            sep = ("" if not response_text or response_text.endswith("\n\n")
+                   else "\n" if response_text.endswith("\n") else "\n\n")
+            with_receipt = response_text + sep + receipt
+            base = response_text.rstrip()
+            if result is None or not result.startswith(base):
+                return with_receipt
+            return with_receipt + "\n\n" + result[len(base):].lstrip()
+        except Exception:
+            return None  # Output transforms fail open; approval and enforcement are unchanged.
+
+    def _reply_transform(self, response_text: str, platform: str, identity: Any) -> str | None:
+        try:
             with self._lock:
                 # Match hook lookup precedence without claiming or linking state just to render a reply.
                 state = self._load_state(identity.key)
@@ -2831,6 +2932,9 @@ class PlanModePlugin:
             return
         platform = str(kwargs.get("platform") or "").strip().lower()
         with self._lock:
+            for key in (identity.key, identity.fallback_key, f"cli:{os.getpid()}"):
+                if key:
+                    self._turn_blocks.pop(key, None)  # a new session never inherits an unnamed block
             if platform in {"cli", "terminal"}:
                 cli_key = f"cli:{os.getpid()}"
                 cli_storage = _state_storage_key(cli_key)
