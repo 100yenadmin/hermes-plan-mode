@@ -193,7 +193,9 @@ def test_relative_and_absolute_spellings_count_once(building, session_env):
 
 
 def test_reentry_keeps_a_finished_plans_status(building):
+    import os
     plugin, path = building
+    os.utime(path, (1, 1))  # written during an earlier round, not touched since
     finish(plugin)
     plugin.post_llm_call()
     plugin.command("on next task")
@@ -209,3 +211,36 @@ def test_done_command_records_done_in_the_list(building):
     plugin, path = building
     assert plugin.command("done") == "The executing plan is done."
     assert f"`{path.name}`: done (rev 1, " in plugin.command("list")
+
+
+def test_symlinked_spelling_counts_once(building, session_env, tmp_path):
+    plugin, _ = building
+    link = tmp_path / "cwd-link"
+    link.symlink_to(session_env["TERMINAL_CWD"])
+    wrote(plugin, "parser.py")
+    wrote(plugin, str(link / "parser.py"))
+    assert len(state(plugin)["changed_files"]) == 1
+
+
+def test_reworking_a_finished_plan_in_place_shows_being_planned(building):
+    import os
+    plugin, path = building
+    finish(plugin)
+    plugin.post_llm_call()
+    plugin.command("on rework the same plan")
+    entered = state(plugin)["entered_at"]
+    from datetime import datetime
+    stamp = datetime.fromisoformat(entered).timestamp() + 5
+    path.write_text("# reworked", encoding="utf-8")
+    os.utime(path, (stamp, stamp))  # edited in this round
+    assert f"`{path.name}`: being planned" in plugin.command("list")
+
+
+def test_a_ui_tab_reporting_the_cli_surface_reads_only_its_own_key(make_plugin, session_env):
+    import os
+    plugin = make_plugin("approval_card todo_inline")
+    other = {"phase": "executing", "approved_revision": 7, "finish_pending": True,
+             "progress": {"total": 1, "completed": 1, "cancelled": 0}, "changed_files": ["/x/other-tab.py"]}
+    plugin._save_state(f"cli:{os.getpid()}", other)
+    session_env.update(HERMES_SESSION_PLATFORM="cli", HERMES_UI_SESSION_ID="ui-7")
+    assert "✅" not in (plugin.transform_llm_output("Hi.", platform="cli", turn_id="t1") or "")

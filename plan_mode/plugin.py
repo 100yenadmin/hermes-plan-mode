@@ -2924,7 +2924,7 @@ class PlanModePlugin:
                 files = [item for item in (state.get("changed_files") or []) if isinstance(item, str)]
                 cwd = self._session_cwd()
                 for target in targets:
-                    path = os.path.normpath(target if os.path.isabs(target) else os.path.join(cwd, target))
+                    path = os.path.realpath(target if os.path.isabs(target) else os.path.join(cwd, target))
                     if path not in files:
                         files.append(path)
                 state["changed_files"] = files[-200:]
@@ -2948,7 +2948,8 @@ class PlanModePlugin:
         """The finish line when this turn ends an approved plan: every todo done, or a short plan with changes."""
         # Only this session's own keys: one TUI/Desktop backend serves many tabs from one process, so its cli:<pid>
         # fallback can hold another tab's plan. The classic CLI is one session per process, so it may use them.
-        classic_cli = str(identity.surface or "").strip().lower() in {"", "cli", "terminal", "local"}
+        classic_cli = (str(identity.surface or "").strip().lower() in {"", "cli", "terminal", "local"}
+                       and not str(identity.key or "").startswith("ui:"))
         candidates = (identity.key, identity.fallback_key, f"cli:{os.getpid()}") if classic_cli else (identity.key,)
         keys = dict.fromkeys(key for key in candidates if key)
         with self._lock:
@@ -3009,8 +3010,10 @@ class PlanModePlugin:
         submission = state.get("submission") or {}
         progress = state.get("progress") or {}
         entries = []
+        entered = str(state.get("entered_at") or "")
         for mtime, path in sorted(files, reverse=True)[:20]:
             real = os.path.realpath(path)
+            modified = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
             record = history.get(real) if isinstance(history.get(real), dict) else {}
             if state.get("phase") == "executing" and os.path.realpath(str(state.get("approved_path") or "")) == real:
                 status = f"building rev {state.get('approved_revision')}"
@@ -3020,16 +3023,15 @@ class PlanModePlugin:
                   and os.path.realpath(str(submission.get("path") or "")) == real):
                 status = f"waiting for approval (rev {submission.get('revision')})"
             elif (state.get("active") and real in {os.path.realpath(item) for item in self._plan_files(state)}
-                  and not (record.get("status") in {"approved", "done"}
-                           and str(record.get("at") or "") <= str(state.get("entered_at") or ""))):
+                  and not (record.get("status") in {"approved", "done"}  # an earlier round's plan, untouched since
+                           and str(record.get("at") or "") <= entered and modified < entered)):
                 status = "being planned"
             elif record.get("status") in {"approved", "done"}:
                 rev = f"rev {record['rev']}, " if record.get("rev") is not None else ""
                 status = f"{record['status']} ({rev}{str(record.get('at') or '')[:10]})"
             else:
                 status = "draft"
-            entries.append({"name": os.path.basename(path), "path": path, "status": status,
-                            "modified": datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")})
+            entries.append({"name": os.path.basename(path), "path": path, "status": status, "modified": modified})
         return entries
 
     def _plan_list(self, state: dict[str, Any], *, as_data: bool = False) -> str | dict:
