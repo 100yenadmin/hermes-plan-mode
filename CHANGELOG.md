@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.1 - 2026-11-09
+
+README only; the plugin code is unchanged.
+
+- **The first screen says what the lock covers.** The opening used to say the agent "can't change your project until you
+  approve". It now says the edit tools stay blocked until you approve, and names right there what Hermes runs outside
+  that hook (the Codex app-server runtime and TUI `/background` and `btw` side agents).
+- **Install and a first result up front:** the install command, a link to the demo, badges, and a three-step "Try it".
+- A contents line; the comparison table is labelled plan-mode 1.4 (November 2026); the durable-resume limitation says
+  "not supported yet, as of 1.4"; links to Releases, the changelog, contributing and the security policy at the end.
+
 ## 1.4.0 - 2026-11-09
 
 Find a plan again, and see when one is finished.
