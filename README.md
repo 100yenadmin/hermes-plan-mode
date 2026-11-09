@@ -10,8 +10,8 @@ TUI, Desktop and the messaging platforms) with no core changes.
 
 - **A real lock.** While it plans, Plan Mode lets through only a short read-only list of tools and blocks the rest
   at Hermes' `pre_tool_call` hook, including file writes and patches, the terminal, code execution, sub-agents and
-  MCP tools. The only file it can write is its own plan. [Known limitations](#known-limitations) lists what that hook
-  does not cover.
+  MCP tools. The only file it can write is its own plan, and the reply ends with a line naming any call it blocked.
+  [Known limitations](#known-limitations) lists what that hook does not cover.
 - **Questions before guesses.** It asks about choices only you can make, usually one question with its recommended
   choice first. Say "grill me", or set Questions to `thorough`, and it interviews you, one decision at a time,
   before every plan.
@@ -245,7 +245,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 |---|---|---|
 | Enforce core /plan (`enforce_builtin_plan`) | on | Core `/plan` turns on enforced plan mode for the session |
 | Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`. It applies when Hermes next loads plugins: a new CLI process, or a restart of the gateway or app |
-| Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms |
+| Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms. Off also turns off the approval pointer and the blocked-calls line on every surface |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
 | Approval card (`approval_card`) | on | Ask for plan approval with one card in the lean profile. Off uses Hermes' approval prompt and wins over `levers` and `PLAN_MODE_LEVERS`. Change it between plans: it takes effect at once, and turning it off stops per-edit review of a running plan |
@@ -680,10 +680,13 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 
 - **The agent can skip the approval card** when you say not to ask questions
   ([#19](https://github.com/100yenadmin/hermes-plan-mode/issues/19)); the turn-end `/planmode approve` pointer is the fallback.
-- **Blocked calls are not shown by Hermes.** When plan mode stops a tool call, Hermes prints nothing for it on any
-  surface ([NousResearch/hermes-agent#151276](https://github.com/NousResearch/hermes-agent/issues/151276)); the CLI only
-  flashes "Preparing terminal…" in its spinner. The block itself is enforced, and the session record keeps the call and
-  the block message (`hermes sessions export --format md`). Whether the agent mentions it depends on the model.
+- **Blocked calls are not shown by Hermes while they happen.** When plan mode stops a tool call, Hermes prints nothing
+  for it on any surface ([NousResearch/hermes-agent#151276](https://github.com/NousResearch/hermes-agent/issues/151276));
+  the CLI only flashes "Preparing terminal…" in its spinner. Since 1.3.0, plan mode adds one line at the end of that
+  turn's reply instead, for example `🔒 Plan mode blocked 1 tool call: terminal (mkdir -p …)`. On chat platforms it
+  names only the tools, because a command can hold private text. API server and webhook replies are left unchanged,
+  `footer: off` turns the line off, and another plugin that rewrites replies can take precedence. The session record
+  keeps every call and block message (`hermes sessions export --format md`).
 - **A plan-mode command sent while the agent is busy does not run on chat platforms.** If you send `/planmode off`
   (or any plugin command) while the agent is working or waiting on a question card, Hermes queues it and later hands it
   to the agent as plain text ([NousResearch/hermes-agent#131051](https://github.com/NousResearch/hermes-agent/issues/131051)).

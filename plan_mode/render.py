@@ -323,6 +323,17 @@ def todo_progress(result) -> dict | None:
         return None
 
 
+def block_receipt(count: int, calls, *, details: bool) -> str:
+    """One line naming the calls plan mode blocked since the last reply: Hermes shows blocked calls nowhere."""
+    shown = []
+    for name, detail in calls:
+        shown.append(f"{name} ({detail})" if details and detail else name)
+    more = count - len(shown)
+    listed = ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+    noun = "tool call" if count == 1 else "tool calls"
+    return f"🔒 Plan mode blocked {count} {noun}: {listed}."
+
+
 def response_footer(response_text: str, state: dict) -> str | None:
     last_line = response_text.rstrip().split("\n")[-1]
     if last_line.startswith(("⏸ Plan mode", "Plan progress", "Executing approved plan")):
