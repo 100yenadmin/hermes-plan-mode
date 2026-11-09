@@ -107,7 +107,7 @@ _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
 # names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
-_RECEIPT_SKIP_PLATFORMS = frozenset({"api_server", "webhook"})
+_RECEIPT_SKIP_PLATFORMS = frozenset({"api_server", "webhook", "cron"})  # cron output can be delivered to a chat
 _RECEIPT_SESSIONS = 64
 _FOOTER_ALLOWANCE = 80  # room left for a footer or pointer after the receipt on chat platforms
 _RECEIPT_CALLS = 3

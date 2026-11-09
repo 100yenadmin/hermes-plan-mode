@@ -684,7 +684,7 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   for it on any surface ([NousResearch/hermes-agent#151276](https://github.com/NousResearch/hermes-agent/issues/151276));
   the CLI only flashes "Preparing terminal…" in its spinner. Since 1.3.0, plan mode adds one line at the end of that
   turn's reply instead, for example `🔒 Plan mode blocked 1 tool call: terminal (mkdir -p …)`. On chat platforms it
-  names only the tools, because a command can hold private text. API server and webhook replies are left unchanged,
+  names only the tools, because a command can hold private text. API server, webhook and cron replies are left unchanged,
   `footer: off` turns the line off, and another plugin that rewrites replies can take precedence. The session record
   keeps every call and block message (`hermes sessions export --format md`).
 - **A plan-mode command sent while the agent is busy does not run on chat platforms.** If you send `/planmode off`

@@ -75,7 +75,7 @@ def test_chat_replies_name_tools_only(make_plugin, session_env, platform):
     assert reply.startswith("Here is the plan.")
 
 
-@pytest.mark.parametrize("platform", ["api_server", "webhook"])
+@pytest.mark.parametrize("platform", ["api_server", "webhook", "cron"])
 def test_program_facing_replies_stay_unchanged(make_plugin, session_env, platform):
     session_env["HERMES_SESSION_PLATFORM"] = platform
     session_env["HERMES_SESSION_KEY"] = f"agent:main:{platform}:dm:7"
