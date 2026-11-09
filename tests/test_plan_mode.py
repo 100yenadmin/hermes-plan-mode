@@ -2243,7 +2243,10 @@ def test_v033_config_schema_declares_the_flat_settings():
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
     assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools",
-                           "plan_style", "allow_commits", "plan_skill", "plan_profile", "approval_card"}
+                           "plan_style", "allow_commits", "plan_skill", "plan_profile", "approval_card", "questions"}
+    assert schema["questions"]["choices"] == list(plugin_mod._QUESTIONS)
+    assert schema["questions"]["default"] == plugin_mod._DEFAULT_QUESTIONS == "normal"
+    assert schema["questions"]["label"] == "Questions"
     assert schema["approval_card"] == {**schema["approval_card"], "type": "bool", "default": True, "label": "Approval card"}
     assert schema["plan_profile"]["type"] == schema["plan_style"]["type"] == "str"
     assert schema["plan_profile"]["choices"] == ["lean", "classic"]

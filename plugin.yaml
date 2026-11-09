@@ -52,6 +52,12 @@ config_schema:
     default: true
     label: Approval card
     description: "Ask for plan approval with one card in the lean profile; off uses Hermes' approval prompt. Change it between plans: it takes effect at once, and turning it off stops per-edit review of a running plan."
+  questions:
+    type: str
+    choices: ["normal", "thorough"]
+    default: "normal"
+    label: Questions
+    description: "normal asks only what reading the code cannot settle, usually one question (say \"grill me\" in a request to get more). thorough interviews you before every plan: one decision per question, until no open choice is left, and the plan records each answer."
   allow_commits:
     type: bool
     default: false

@@ -21,6 +21,7 @@ LEVER_NAMES = {
     "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
     "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard", "approval_card",
+    "thorough_questions",
 }
 NEW_044 = {"rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final"}
 TEXT = "# Parser plan\n\nChange parser.py and its caller cli.py. Add a behaviour test; run pytest tests/test_parser.py."
@@ -241,6 +242,62 @@ def test_question_shape(make_plugin):
         assert text in note
     assert "up to 4 short choices" not in note
     assert "Otherwise record an assumption" not in note  # v1 wording suppressed asking (round 3, N4)
+
+
+def test_question_shape_asks_more_on_request(make_plugin):
+    plugin = make_plugin("question_shape")
+    plugin.command("on")
+    note = plugin.pre_llm_call()["context"]
+    assert render.ASK_MORE_ON_REQUEST in note and '"grill me"' in note
+    assert "interview them" not in note
+
+
+INTERVIEW = ["The user asked to be questioned thoroughly", "interview them before you write the plan",
+             "one decision per clarify call", "2–4 short choices", "your recommended choice first",
+             "until no such choice is left", "Settle facts by reading", render.CHOICE_RECORD]
+
+
+@pytest.mark.parametrize("settings", [{}, {"plan_profile": "classic"}, {"plan_style": "core"}])
+def test_thorough_questions_setting(make_plugin, settings):
+    plugin = make_plugin("", questions="thorough", **settings)
+    assert "thorough_questions" in plugin._levers()
+    plugin.command("on")
+    note = plugin.pre_llm_call()["context"]
+    for text in INTERVIEW:
+        assert text in note, text
+    for text in ["prefer 1 question", "up to 4 short choices", render.ASK_MORE_ON_REQUEST]:
+        assert text not in note, text
+    assert note.count(render.CHOICE_RECORD) == 1
+    assert "Questions: thorough" in plugin.command("status")
+
+
+def test_thorough_questions_wins_over_custom_levers(make_plugin):
+    plugin = make_plugin("question_shape choice_record", questions=" Thorough ")
+    plugin.command("on")
+    note = plugin.pre_llm_call()["context"]
+    assert "interview them before you write the plan" in note and "prefer 1 question" not in note
+    assert note.count(render.CHOICE_RECORD) == 1
+
+
+@pytest.mark.parametrize("value", ["normal", "", None, "loud", True])
+def test_questions_normal_or_unknown_changes_nothing(make_plugin, value):
+    plugin = make_plugin("", questions=value)
+    assert "thorough_questions" not in plugin._levers()
+    plugin.command("on")
+    note = plugin.pre_llm_call()["context"]
+    assert "prefer 1 question" in note and "interview them" not in note
+    assert "Questions:" not in plugin.command("status")
+
+
+def test_light_note_keeps_thorough_outside_budget():
+    levers = {"thorough_questions", "bridge_calls", "blocked_tools", "skill_policy"}
+    short = render.light_note("/p/.hermes/plans", levers=levers)
+    assert short.endswith(render.LIGHT_THOROUGH)
+    assert all(text in short for text in (render.LIGHT_BRIDGE, render.LIGHT_BLOCKED, render.LIGHT_SKILL))
+    long_dir = "/" + "d" * 150 + "/.hermes/plans"
+    without = render.light_note(long_dir, levers=levers - {"thorough_questions"})
+    assert render.light_note(long_dir, levers=levers) == without + render.LIGHT_THOROUGH
+    assert render.LIGHT_THOROUGH not in render.light_note("/p/.hermes/plans", levers=levers - {"thorough_questions"})
 
 
 def test_sticky(make_plugin):
@@ -596,6 +653,11 @@ def test_043_agent_bridge(make_plugin, profile, levers, bridge):
     assert expected in note and absent not in note
 
 
+def _without_ask_more(text):
+    """1.2.0 appended ASK_MORE_ON_REQUEST to the question_shape sentence; the older fixtures predate it."""
+    return text.replace(" " + render.ASK_MORE_ON_REQUEST, "")
+
+
 def test_043_differential_notes():
     cases = json.loads((Path(__file__).parent / "fixtures/notes_042.json").read_text())
     assert len(cases) == 67
@@ -605,7 +667,7 @@ def test_043_differential_notes():
             "test_commands", "choice_fidelity", "refactor_scope", "todo_inline"}
         if case["kind"] == "planning_note":
             kwargs["now"] = datetime(2026, 10, 11, 12, 34, 56)
-        assert getattr(render, case["kind"])(**kwargs) == case["text"], case
+        assert _without_ask_more(getattr(render, case["kind"])(**kwargs)) == case["text"], case
 
 
 def test_043_typed_approve_todo_hint_carries_the_lean_qualifier(make_plugin):
@@ -718,7 +780,7 @@ def test_044_differential_notes():
         kwargs["levers"] = (set(kwargs["levers"]) | NEW_044) - NEW_044
         if case["kind"] == "planning_note":
             kwargs["now"] = datetime(2026, 10, 11, 12, 34, 56)
-        assert getattr(render, case["kind"])(**kwargs) == case["text"], case
+        assert _without_ask_more(getattr(render, case["kind"])(**kwargs)) == case["text"], case
 
 
 @pytest.mark.parametrize("commits", [False, True])
