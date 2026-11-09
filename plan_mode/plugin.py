@@ -1180,9 +1180,10 @@ class PlanModePlugin:
             phase = "planning" if state.get("active") else "off"
         last = f"\nLast submission: rev {submission['revision']} {submission['status']}" if submission else ""
         review = state.get("edit_review")
-        if isinstance(review, dict) and review:
+        if isinstance(review, dict) and review.get("key") and "approval_card" in self._levers():
             # Kept on purpose after a short plan's turn ends, so the next edit's prompt is not a surprise (gap review).
-            last += f"\nFile-edit review: on for plan rev {review.get('rev') or '?'}; /planmode done ends it"
+            last += (f"\nFile-edit review: on for plan rev {review.get('rev') or '?'} (it prompts while Hermes approvals "
+                     "are on); /planmode done ends it")
         custom = " (custom levers)" if self._lever_override() else ""
         questions = "\nQuestions: thorough" if "thorough_questions" in self._levers() else ""
         return (
@@ -2418,11 +2419,20 @@ class PlanModePlugin:
                     texts = [item if isinstance(item, str) else item.get("question", "")
                              if isinstance(item, dict) else "" for item in questions]
                     tag = f"[plan-mode {clarify['nonce']}]"
-                    if not any(isinstance(text, str) and tag in text for text in texts):
-                        return None
                     required = {"questions": [{"question": clarify["question"],
                                                "choices": clarify["choices"], "multi_select": False}]}
                     blocked = {"action": "block", "message": "Use exactly these clarify args: " + json.dumps(required)}
+                    if not any(isinstance(text, str) and tag in text for text in texts):
+                        # A model that shortens the card's question drops its tag. Its "Approve" answer would then pass
+                        # as a plain question: the model believes the plan approved while every edit stays blocked.
+                        # An approval choice identifies the card, so send the exact args back instead.
+                        approvals = {item for item in clarify["choices"] if item != "Keep planning"}
+                        if any(isinstance(item, dict) and isinstance(item.get("choices"), list)
+                               and any(isinstance(choice, str) and choice.strip() in approvals
+                                       for choice in item["choices"])
+                               for item in questions):
+                            return blocked
+                        return None
                     if len(questions) != 1 or not isinstance(questions[0], dict):
                         return blocked
                     question = questions[0]
@@ -2598,8 +2608,8 @@ class PlanModePlugin:
                                 else:
                                     state.pop("edit_review", None)
                                     self._clear_execution(state)
-                            else:
-                                state.pop("finish_pending", None)
+                            elif progress["total"] > 0:
+                                state.pop("finish_pending", None)  # a reopened step: the plan is not finished
                             assert state_key is not None
                             self._save_state(state_key, state)
                             self._sync_execution_family(_state_storage_key(state_key), state)

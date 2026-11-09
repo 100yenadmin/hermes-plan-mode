@@ -56,7 +56,7 @@ TUI, Desktop and the messaging platforms) with no core changes.
 6. Approve: plan mode turns off and the agent implements the plan in the same turn. It mirrors the steps into
    `todo_list` (with the default `lean` profile, for plans of 4 or more steps). With "review each file edit", every
    `write_file` / `patch` gets Hermes' approval prompt first. When the last todo is marked done, the plan ends at the
-   end of that turn, so fixes after a failed final test still get the review and the no-commit block. Typed `/planmode approve` also works while the card is
+   end of that turn, so fixes made in that turn after a failed final test still get the review and the no-commit block. Typed `/planmode approve` also works while the card is
    open and selects auto-accept edits.
 7. Keep planning, or Other with feedback: plan mode stays on. The agent asks what to change (when no feedback came
    with it), revises the plan and submits a complete new revision. Its card says what changed since the last one
@@ -756,7 +756,7 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Approval choices cover file tools:** the lean card offers auto-accept or review each `write_file` / `patch`
   when Hermes approvals are on (see The lean profile). It does not offer **clear-context-and-implement**
   (not reachable from a plugin).
-- **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. Hermes 0.22.7 and
+- **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. Hermes 0.22.3 and
   newer let a plugin post a message and edit it in place, which a live progress message could use; plan mode does not
   use it yet. An interactive plan card and plan-shaped approval wording are proposed upstream in
   [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306).
@@ -810,11 +810,11 @@ Manual walkthrough in a disposable workspace (full surface-by-surface list in
    uses Hermes' approval prompt).
 3. Choose Keep planning, or Other with a change. Plan mode stays on; the agent revises and submits rev 2, and the card
    says what changed.
-4. Approve. The agent implements in the same turn. A plan of 4 or more steps fills `todo_list`, and on a chat
+4. Approve. The agent implements in the same turn. With the default lean profile, a plan of 4 or more steps fills `todo_list`, and on a chat
    platform the reply ends with `Plan progress n/m`; a shorter plan has no todos.
 5. Run `/planmode status`. A plan with todos shows phase `executing` until its turn ends after the last todo; a
-   short plan ends with its turn. If you chose review each file edit, status also says the review is still on until
-   `/planmode done`.
+   short plan ends with its turn. If you chose review each file edit for a short plan, status also says the review is
+   still on until `/planmode done`.
 
 ## Disclosure
 

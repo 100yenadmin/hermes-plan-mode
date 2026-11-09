@@ -682,6 +682,16 @@ def test_reopened_todo_cancels_finish(reviewed):
     assert plugin.pre_tool_call(*EDITS[0])["action"] == "approve"
 
 
+def test_cleared_todo_list_keeps_finish(reviewed):
+    plugin, _ = reviewed
+    plugin.ctx.settings["levers"] = "approval_card todo_inline"
+    finish_todos(plugin)
+    finish_todos(plugin, [])
+    assert state(plugin)["finish_pending"] is True
+    plugin.post_llm_call()
+    assert "edit_review" not in state(plugin) and "phase" not in state(plugin)
+
+
 def test_next_turn_finishes_when_turn_end_was_missed(reviewed):
     plugin, _ = reviewed
     plugin.ctx.settings["levers"] = "approval_card todo_inline"
@@ -707,5 +717,8 @@ def test_status_names_retained_review(reviewed, executing):
         assert "phase" not in state(plugin)
     text = plugin.command("status")
     assert "File-edit review: on for plan rev 1" in text and "/planmode done ends it" in text
+    plugin.ctx.settings["levers"] = "todo_inline"  # without the card lever the gate does not prompt
+    assert "File-edit review" not in plugin.command("status")
+    plugin.ctx.settings["levers"] = "approval_card todo_inline"
     plugin.command("done")
     assert "File-edit review" not in plugin.command("status")
