@@ -2,15 +2,26 @@
 
 ![Hermes Plan Mode](docs/media/banner.jpg)
 
-Claude Code / Codex-style plan mode for Hermes, on every interactive Hermes surface (CLI, TUI, Desktop and the
-messaging platforms), with no core changes. The agent explores with
-read-only tools, asks clarifying questions, writes a plan file and shows it to you. You approve it on one card:
-approve and auto-accept edits, approve and review each file edit, or keep planning (Other sends feedback). The classic
-profile and surfaces without a card use Hermes' own approval prompt. Then the agent implements it in the same turn and
-tracks progress. Until you approve, the plugin blocks mutating tools dispatched through Hermes' `pre_tool_call`
-hook, except writes to the plan file.
+Plan Mode makes the Hermes agent read your code, write a plan and stop. It can't change your project until you approve
+that plan on one card, and then it builds the plan in the same turn. It works on every interactive Hermes surface (CLI,
+TUI, Desktop and the messaging platforms) with no core changes.
 
-`/plan` in core Hermes is a prompt only. This plugin turns it into an enforced mode.
+`/plan` in core Hermes is a prompt, which the model can ignore. Plan Mode turns it into a lock:
+
+- **A real lock.** While it plans, Plan Mode lets through only a short read-only list of tools and blocks the rest
+  at Hermes' `pre_tool_call` hook, including file writes and patches, the terminal, code execution, sub-agents and
+  MCP tools. The only file it can write is its own plan. [Known limitations](#known-limitations) lists what that hook
+  does not cover.
+- **Questions before guesses.** It asks about choices only you can make, usually one question with its recommended
+  choice first. Say "grill me", or set Questions to `thorough`, and it interviews you, one decision at a time,
+  before every plan.
+- **One approval for the whole plan.** A card offers: approve and auto-accept edits, approve and review each file
+  edit, or keep planning (Other sends feedback). Approval belongs to the exact plan you saw: if the plan changes, it
+  asks again. The classic profile and surfaces without a card use Hermes' own approval prompt.
+- **It builds in the same turn** and tracks progress in a todo list. With Allow commits off (the default), terminal
+  `git commit` and `git push` stay blocked while the plan runs, unless you ask for a commit.
+- **Wherever you use Hermes:** the same card on the CLI, TUI and Desktop, and as buttons on Telegram, Slack and
+  Discord.
 
 ## Quick start
 

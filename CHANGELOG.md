@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.0 - 2026-11-09
+
+An interview before the plan, when you want one.
+
+- **Questions setting (`questions`: `normal` or `thorough`).** With `thorough`, the agent interviews you before every
+  plan. It asks one decision per question, each with 2–4 choices and its recommendation first, lets each answer shape
+  the next question, and keeps going until no choice that only you can make is left. The plan records each answer as
+  your decision. This works in every profile, and `/planmode status` shows it. `normal` (the default) keeps the
+  lean bound: it prefers one question and asks at most three (#82).
+- **"Grill me" works in normal mode too.** If you ask to be questioned more, the lean profile asks one decision at a
+  time until none is left, instead of stopping at three (#82).
+- **README:** a plan-mode command sent while the agent is busy on a chat platform (for example `/planmode off` while a
+  question card is open) is queued by Hermes and later reaches the agent as plain text, so it does not run
+  (NousResearch/hermes-agent#131051). Answer or skip the card first. The comparison table now describes 1.2, and the
+  opening now leads with what Plan Mode adds to Hermes.
+
 ## 1.1.1 - 2026-11-08
 
 Two fixes for the time after you approve a plan.
