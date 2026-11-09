@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0 - 2026-11-09
+
+See the lock work.
+
+- **The reply names what plan mode blocked.** When a plugin stops a tool call, Hermes shows nothing for it
+  (NousResearch/hermes-agent#151276), so you couldn't tell an agent that never tried from one that plan mode stopped.
+  Now the end of that turn's reply carries one line, for example
+  `🔒 Plan mode blocked 1 tool call: terminal (mkdir -p …)`.
+  - CLI, TUI and Desktop show the command, path or code in a short form; chat platforms name only the tools, since a
+    command can hold private text.
+  - API server, webhook and cron replies stay unchanged, and `footer: off` turns the line off.
+  - Only the current turn's blocks are named, never an earlier turn's or a delegated agent's, and the line comes
+    before the approval pointer and the chat footer.
+  - It is display only: what plan mode blocks and how a plan is approved are unchanged (#84).
+
 ## 1.2.0 - 2026-11-09
 
 An interview before the plan, when you want one.
