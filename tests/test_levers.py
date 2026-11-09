@@ -94,7 +94,7 @@ def test_default_off_golden(make_plugin, monkeypatch):
     assert plugin._reply_captures == {}
 
 
-@pytest.mark.parametrize("value,expected", [("all", LEVER_NAMES), ("sticky, reentry unknown", {"sticky", "reentry"}), ("", set())])
+@pytest.mark.parametrize("value,expected", [("all", LEVER_NAMES - {"thorough_questions"}), ("sticky, reentry unknown", {"sticky", "reentry"}), ("", set())])
 def test_switch(make_plugin, value, expected, monkeypatch):
     plugin = make_plugin(value, plan_profile="classic")
     assert plugin._levers() == expected
@@ -287,6 +287,18 @@ def test_questions_normal_or_unknown_changes_nothing(make_plugin, value):
     note = plugin.pre_llm_call()["context"]
     assert "prefer 1 question" in note and "interview them" not in note
     assert "Questions:" not in plugin.command("status")
+
+
+def test_thorough_questions_only_by_name_or_setting(make_plugin):
+    plugin = make_plugin("all")
+    assert "thorough_questions" not in plugin._levers()
+    plugin.command("on")
+    assert "interview them" not in plugin.pre_llm_call()["context"]
+    assert "Questions:" not in plugin.command("status")
+    named = make_plugin("question_shape thorough_questions")
+    named.command("on")
+    assert "interview them before you write the plan" in named.pre_llm_call()["context"]
+    assert "Questions: thorough" in named.command("status")
 
 
 def test_light_note_keeps_thorough_outside_budget():

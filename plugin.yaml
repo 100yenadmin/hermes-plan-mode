@@ -57,7 +57,7 @@ config_schema:
     choices: ["normal", "thorough"]
     default: "normal"
     label: Questions
-    description: "normal asks only what reading the code cannot settle, usually one question (say \"grill me\" in a request to get more). thorough interviews you before every plan: one decision per question, until no open choice is left, and the plan records each answer."
+    description: "normal asks only what reading the code cannot settle; in the lean profile that is usually one question (say \"grill me\" in a request to get more). thorough interviews you before every plan: one decision per question, until no open choice is left, and the plan records each answer as your decision."
   allow_commits:
     type: bool
     default: false

@@ -238,7 +238,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
 | Approval card (`approval_card`) | on | Ask for plan approval with one card in the lean profile. Off uses Hermes' approval prompt and wins over `levers` and `PLAN_MODE_LEVERS`. Change it between plans: it takes effect at once, and turning it off stops per-edit review of a running plan |
-| Questions (`questions`) | `normal` | `normal`: the agent asks only what reading the code cannot settle (in the lean profile it prefers one question; say "grill me" for more). `thorough`: it interviews you before every plan, one decision per question with a recommended choice, until no open choice is left, and the plan records each answer. Applies to every profile |
+| Questions (`questions`) | `normal` | `normal`: the agent asks only what reading the code cannot settle (in the lean profile it prefers one question; say "grill me" for more). `thorough`: it interviews you before every plan, one decision per question with a recommended choice, until no open choice is left, and the plan is asked to record each answer as your decision. Applies to every profile |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
 | Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask; terminal-tool `git commit` and `git push` are blocked while an approved plan executes unless you ask. Aliases, scripts, `execute_code`, MCP git tools and other commit-creating git commands (merge, revert, cherry-pick, am) are not caught (see Known limitations). On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
@@ -362,10 +362,11 @@ plugins:
 - `test_plan_only` (lean since 0.4.5) tells the model to leave git status, git diff and other repo-hygiene checks out of
   the test plan unless asked. Plans with them fell from 10 of 26 to 0 in S45 (7 of 22 to 0 in S44).
 - `choice_record` (opt-in) tells the model to record answered clarify choices in Assumptions as the user's decision.
-- `thorough_questions` is what Questions `thorough` turns on (it is added to any lever set, custom or not): the interview
-  instruction replaces `question_shape`'s bound, includes `choice_record`, and later planning turns get a one-line reminder.
   With it, 6 of 6 plans did so in S45. Without it, the probe counted 2 of 6, but read directly 4 of 6 already
   attributed the choice to the user, so the deficit the lever targets was not shown and it stays opt-in.
+- `thorough_questions` is what Questions `thorough` turns on; it is added to any lever set, custom or not, and `all`
+  does not include it. The interview instruction replaces `question_shape`'s bound and includes `choice_record`, and
+  later planning turns get a one-line reminder. It has not been benchmarked.
 - `edit_batch` (lean since 0.6.7) tells the model to edit each file in one call where the tool allows, and to send
   edits to different files, including tests, in the same response. Execution rounds with edits fell from 49 to 27 on
   the two edit-heavy tasks in S45 (48 to 20 in S44). It joined lean after EB-2 (2026-10-14, pre-registered, decided by

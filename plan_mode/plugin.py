@@ -1159,7 +1159,7 @@ class PlanModePlugin:
             phase = "planning" if state.get("active") else "off"
         last = f"\nLast submission: rev {submission['revision']} {submission['status']}" if submission else ""
         custom = " (custom levers)" if self._lever_override() else ""
-        questions = "\nQuestions: thorough" if self._questions() == "thorough" else ""
+        questions = "\nQuestions: thorough" if "thorough_questions" in self._levers() else ""
         return (
             f"Plan mode: {mode}\nPlan profile: {self._plan_profile()}{custom}{questions}\nEntered at: {entered}\n"
             f"Phase: {phase}{last}\nPlans directory: {plans_dir}\nPlan files:\n{rendered}"
@@ -1816,7 +1816,8 @@ class PlanModePlugin:
                 levers.add("write_once")
         else:
             names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
-            levers = set(_LEVERS) if "all" in names else names & _LEVERS
+            # all = every experimental lever; thorough_questions belongs to the Questions setting, not to "all".
+            levers = set(_LEVERS) - {"thorough_questions"} if "all" in names else names & _LEVERS
         # The Settings switch wins over both the profile and custom lever overrides.
         # YAML 1.1 reads a bare off/no as False; accept the quoted allow_commits off-words too.
         card = self._config("approval_card", True)
