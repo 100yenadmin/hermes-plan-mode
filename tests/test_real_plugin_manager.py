@@ -877,7 +877,7 @@ def test_real_agent_tool_in_gateway_turn_enforces_plan_mode(tmp_path, monkeypatc
         entry = registry.get_entry("plan_mode", scope=manager.scope_key)
         assert entry is not None and entry.toolset == "plan-mode"
         assert "plan_mode" in manager._plugin_tool_names
-        assert entry.schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off", "submit"]
+        assert entry.schema["parameters"]["properties"]["action"]["enum"] == ["on", "status", "off", "submit", "inspect", "list"]
 
         # Bind exactly what a gateway turn binds before the agent runs (run_turn.py:2063).
         source = SessionSource(platform=Platform.TELEGRAM, chat_id="4242", user_id="7")
@@ -1137,7 +1137,7 @@ def test_u2_real_telegram_menu_rule(real_u2_host):
     if not callable(requires):
         pytest.skip("Hermes lacks the private _requires_argument menu rule")
     hint = real_u2_host.plugins.get_plugin_commands()["planmode"]["args_hint"]
-    assert hint == "[on|status|show|edit|approve|reject|done|off] [task]"
+    assert hint == "[on|status|list|show|edit|approve|reject|done|off] [task]"
     assert requires(hint) is False
     assert "planmode" in {name for name, _ in commands.telegram_bot_commands()}
 

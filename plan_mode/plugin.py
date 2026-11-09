@@ -32,7 +32,7 @@ from .approval import (
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
     BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
-    block_receipt, no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
+    block_receipt, finish_receipt, no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
 )
 
 READ_ONLY_TOOLS = frozenset(
@@ -68,8 +68,9 @@ _TOOL_DESCRIPTION = (
     "call action='submit' ALONE (not batched with other tool calls) to ask for approval. "
     "Approval or denial is the user's act. action='off' ends only an agent-entered plan mode. "
     "While on, writes are allowed only under the session's plans directory; other mutating "
-    "tools are blocked. action='status' reports state. submit defaults to the newest tracked "
-    "plan; path selects a plan and summary gives the approval prompt a title."
+    "tools are blocked. action='status' reports state as text; action='inspect' returns it as fields (phase, plan, "
+    "revision, edit policy, progress, files changed); action='list' lists the plans in the plans directory with their "
+    "status. submit defaults to the newest tracked plan; path selects a plan and summary gives the approval prompt a title."
 )
 _TOOL_SCHEMA = {
     "name": PLAN_MODE_TOOL,
@@ -77,7 +78,7 @@ _TOOL_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["on", "status", "off", "submit"]},
+            "action": {"type": "string", "enum": ["on", "status", "off", "submit", "inspect", "list"]},
             "reason": {"type": "string", "description": "What the plan is for."},
             "path": {"type": "string", "description": "Absolute path or file name of a plan written in this plan mode; default: the newest one"},
             "summary": {"type": "string", "description": "Optional one-line title for the approval prompt"},
@@ -97,9 +98,10 @@ _AGENT_NOTE_BRIDGE = (
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
 _SESSION_INDEX_KEY = "session-index"
+_PLAN_HISTORY_KEY = "plan-history"  # realpath -> {status, rev, at}: what /planmode list shows for plans of ended sessions
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
-                     "user_asked_process", "user_asked_commits", "finish_pending")
+                     "user_asked_process", "user_asked_commits", "finish_pending", "changed_files")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -661,6 +663,7 @@ class PlanModePlugin:
         self._pending_plan_writes: dict[tuple[str, str], tuple[str, list[str], Any, dict[str, bool]]] = {}
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
         self._turn_blocks: dict[str, list[dict[str, Any]]] = {}  # session key -> per-turn blocks not yet named
+        self._turn_finishes: dict[str, dict[str, Any]] = {}  # session key -> a plan that ended mid-turn (classic)
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
         self._hook_platforms: OrderedDict[str, str] = OrderedDict()
@@ -689,7 +692,7 @@ class PlanModePlugin:
             "planmode",
             self.command,
             "Enforce plan-only tool access for this session",
-            args_hint="[on|status|show|edit|approve|reject|done|off] [task]",
+            args_hint="[on|status|list|show|edit|approve|reject|done|off] [task]",
         )
         self.ctx.register_tool(
             name=PLAN_MODE_TOOL,
@@ -1206,12 +1209,12 @@ class PlanModePlugin:
         """Agent-callable plan mode, including completion of a human-approved submission."""
         call_args = args if isinstance(args, dict) else {}
         action = str(call_args.get("action") or "").strip().lower()
-        if action in {"on", "status", "off", "submit"}:
+        if action in {"on", "status", "off", "submit", "inspect", "list"}:
             reason = str(call_args.get("reason") or "").strip()
             message = self._run_command(action, reason, entered_by="agent")
         else:
             message = (
-                "Unsupported plan_mode action: use on, status, off or submit. Approving or "
+                "Unsupported plan_mode action: use on, status, off, submit, inspect or list. Approving or "
                 "rejecting a plan is the user's act (/planmode approve or /planmode reject)."
             )
         return json.dumps(message if isinstance(message, dict) else {"message": message}, ensure_ascii=False)
@@ -1274,6 +1277,7 @@ class PlanModePlugin:
             state.pop(field, None)
         state.update(phase="executing", approved_path=submission["path"],
                      approved_revision=submission["revision"], approved_at=_utc_now(), pending_note="")
+        self._note_history(submission["path"], "approved", submission["revision"])
         submission["status"] = "approved"
         if via:
             submission["approved_via"] = via
@@ -1395,7 +1399,9 @@ class PlanModePlugin:
     def command(self, raw_args: str) -> str:
         raw = str(raw_args or "").strip()
         action, _, remainder = raw.partition(" ")
-        return self._run_command(action.lower() or "status", remainder.strip(), deliver_task=True)
+        result = self._run_command(action.lower() or "status", remainder.strip(), deliver_task=True)
+        # Slash commands print text: a typed `/planmode inspect` gets its fields as JSON, not a Python repr.
+        return json.dumps(result, indent=2, ensure_ascii=False) if isinstance(result, dict) else result
 
     def _run_command(self, action: str, remainder: str, entered_by: str = "user",
                      deliver_task: bool = False) -> str | dict:
@@ -1415,8 +1421,8 @@ class PlanModePlugin:
                 "only exposed inherited session identity, so activation cannot be "
                 "bound safely to one session."
             )
-        if action in {"on", "off", "approve", "reject", "submit", "done", "show", "edit"}:
-            # Every state-mutating command, and show (it prints plan contents), must run in the plugin
+        if action in {"on", "off", "approve", "reject", "submit", "done", "show", "edit", "list"}:
+            # Every state-mutating command, and show and list (they print plan contents or names), must run in the plugin
             # instance of the session's own profile; status stays read-only and is not gated.
             refused = (
                 "Plan mode activation was refused"
@@ -1535,6 +1541,12 @@ class PlanModePlugin:
             if action == "status":
                 return self._status_text(state, self._plan_files(state))
 
+            if action == "inspect":
+                return self._inspect(state)
+
+            if action == "list":
+                return self._plan_list(state, as_data=entered_by == "agent")
+
             if action in {"show", "edit"}:
                 files = self._plan_files(state)
                 submission = state.get("submission") or {}
@@ -1580,6 +1592,8 @@ class PlanModePlugin:
                 self._save_command_state(identity.key, command_storage_key, state)
                 if state.get("phase") != "executing" and not ("approval_card" in self._levers() and state.get("edit_review")):
                     return "There is no executing plan to finish."
+                if state.get("phase") == "executing":
+                    self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
                 state.pop("edit_review", None)
                 self._clear_execution(state)
                 # Neither a still-open approval card nor a queued note may say "implement it now" after done.
@@ -1692,6 +1706,7 @@ class PlanModePlugin:
                     state["pending_note"] = self._saved_plan_note(submission) + state["pending_note"]
                 self._forget_submission(state)
                 state["pending_note"] += self._approved_excerpt({"path": approved_path, "revision": state.get("approved_revision", 0)})
+                self._note_history(approved_path, "approved", state.get("approved_revision"))
                 self._save_command_state(identity.key, command_storage_key, state)
                 if card_open and "approved_while_open" in state:
                     # Approving the open prompt resumes this turn; a deny or timeout starts the work from post_tool_call.
@@ -1752,7 +1767,7 @@ class PlanModePlugin:
                     self._clear_delivered_note(command_storage_key, state, old_note)
                 return "Plan mode is off for this session. No approval note will be injected."
 
-        return "Usage: /planmode on [task] | status | show [file] | edit [file] | approve [file] | reject [feedback] | done | off"
+        return "Usage: /planmode on [task] | status | list | show [file] | edit [file] | approve [file] | reject [feedback] | done | off"
 
     @staticmethod
     def _clear_execution(state: dict[str, Any]) -> None:
@@ -2200,6 +2215,7 @@ class PlanModePlugin:
 
     def _finish_plan(self, key: str, state: dict[str, Any]) -> None:
         """Every todo finished earlier in the turn: end the execution and its edit review now."""
+        self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
         state.pop("edit_review", None)
         self._clear_execution(state)
         self._save_state(key, state)
@@ -2218,6 +2234,7 @@ class PlanModePlugin:
                 if key and state.get("finish_pending"):
                     self._finish_plan(key, state)
                 elif key and self._execution_ends_with_turn(state):
+                    self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
                     self._clear_execution(state)
                     self._save_state(key, state)
                     self._sync_execution_family(_state_storage_key(key), state)
@@ -2502,6 +2519,8 @@ class PlanModePlugin:
         """Make a pending plan write approvable only after Hermes reports ``ok``."""
         if kwargs.get("status") == "blocked":
             self._record_block(tool_name, args, kwargs)
+        elif kwargs.get("status") == "ok" and tool_name in PLAN_WRITERS:
+            self._record_change(tool_name, args, kwargs)
         try:
             call_id = str(kwargs.get("tool_call_id") or "")
             with self._lock:
@@ -2606,6 +2625,8 @@ class PlanModePlugin:
                                     # would drop the edit review and no-commit block before a failed test's fixes.
                                     state["finish_pending"] = True
                                 else:
+                                    self._stash_finish(state_key, state, str(kwargs.get("turn_id") or ""))
+                                    self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
                                     state.pop("edit_review", None)
                                     self._clear_execution(state)
                             elif progress["total"] > 0:
@@ -2890,6 +2911,181 @@ class PlanModePlugin:
             return ""  # like the footer: never push a chat reply past the platform's split
         return receipt
 
+    def _record_change(self, tool_name: str, args: Any, kwargs: dict[str, Any]) -> None:
+        """Count the files an approved plan changed, for its finish line. Display only; never raises."""
+        try:
+            targets = _write_targets(str(tool_name or ""), args if isinstance(args, dict) else {}) or []
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
+            if not targets or identity.unsupported or identity.non_cli_without_key or not identity.key:
+                return
+            with self._lock:
+                key, state = self._state_for_hook(identity)
+                if not key or state.get("phase") != "executing":
+                    return
+                files = [item for item in (state.get("changed_files") or []) if isinstance(item, str)]
+                cwd = self._session_cwd()
+                for target in targets:
+                    path = os.path.realpath(target if os.path.isabs(target) else os.path.join(cwd, target))
+                    if path not in files:
+                        files.append(path)
+                state["changed_files"] = files[-200:]
+                self._save_state(key, state)
+                self._sync_execution_family(_state_storage_key(key), state)
+        except Exception:
+            return
+
+    def _stash_finish(self, key: Any, state: dict[str, Any], turn: str) -> None:
+        """A plan that ends mid-turn (classic profile): keep its finish line for this turn's reply."""
+        if not key or state.get("phase") != "executing":
+            return
+        self._turn_finishes.pop(key, None)
+        self._turn_finishes[key] = {"turn": turn, "revision": state.get("approved_revision"),
+                                    "progress": dict(state.get("progress") or {}),
+                                    "files": list(state.get("changed_files") or [])}
+        while len(self._turn_finishes) > _RECEIPT_SESSIONS:
+            self._turn_finishes.pop(next(iter(self._turn_finishes)))
+
+    def _take_finish_receipt(self, identity: Any, platform: str, turn: str, response_text: str) -> str:
+        """The finish line when this turn ends an approved plan: every todo done, or a short plan with changes."""
+        # Only this session's own keys: one TUI/Desktop backend serves many tabs from one process, so its cli:<pid>
+        # fallback can hold another tab's plan. The classic CLI is one session per process, so it may use them.
+        classic_cli = (str(identity.surface or "").strip().lower() in {"", "cli", "terminal", "local"}
+                       and not str(identity.key or "").startswith("ui:"))
+        candidates = (identity.key, identity.fallback_key, f"cli:{os.getpid()}") if classic_cli else (identity.key,)
+        keys = dict.fromkeys(key for key in candidates if key)
+        with self._lock:
+            stashed = [self._turn_finishes.pop(key, None) for key in keys]
+            states = [self._load_state(key) for key in keys]
+        stash = next((item for item in stashed if item and not (turn and item["turn"] and item["turn"] != turn)), None)
+        state = next((item for item in states if item.get("phase") == "executing"), {})
+        if self._footer_off() or platform in _RECEIPT_SKIP_PLATFORMS:
+            return ""
+        if stash:
+            revision, progress, files = stash["revision"], stash["progress"], stash["files"]
+        elif state.get("finish_pending"):
+            revision, progress, files = state.get("approved_revision"), state.get("progress"), state.get("changed_files")
+        elif self._execution_ends_with_turn(state) and state.get("changed_files"):
+            revision, progress, files = state.get("approved_revision"), None, state.get("changed_files")
+        else:
+            return ""
+        surface = str(identity.surface or "").strip().lower()
+        local = ((not platform or platform in LOCAL_PLATFORMS)
+                 and (not surface or surface in LOCAL_PLATFORMS))
+        receipt = finish_receipt(revision, progress, [item for item in (files or []) if isinstance(item, str)],
+                                 details=local)
+        if not local and len(response_text) + len(receipt) + _FOOTER_ALLOWANCE > _FOOTER_MAX_CHARS:
+            return ""  # like the footer: never push a chat reply past the platform's split
+        return receipt
+
+    def _note_history(self, path: Any, status: str, revision: Any) -> None:
+        """Remember a plan's last approval or finish for /planmode list. Display only; never raises."""
+        try:
+            if not isinstance(path, str) or not path:
+                return
+            history = self.ctx.state.get(_PLAN_HISTORY_KEY, {})
+            history = dict(history) if isinstance(history, dict) else {}
+            key = os.path.realpath(path)
+            history.pop(key, None)
+            history[key] = {"status": status, "rev": revision, "at": _utc_now()}
+            while len(history) > 200:
+                history.pop(next(iter(history)))
+            self.ctx.state.set(_PLAN_HISTORY_KEY, history)
+        except Exception:
+            return
+
+    def _plan_entries(self, state: dict[str, Any], plans_dir: str) -> list[dict[str, Any]]:
+        """The newest plans in this plans directory with what plan mode knows about each."""
+        try:
+            files = []
+            with os.scandir(plans_dir) as found:
+                for item in found:
+                    try:
+                        if item.name.endswith(".md") and item.is_file(follow_symlinks=False):
+                            files.append((item.stat(follow_symlinks=False).st_mtime, item.path))
+                    except OSError:
+                        continue  # a file removed mid-listing drops out; the rest still list
+        except OSError:
+            return []
+        history = self.ctx.state.get(_PLAN_HISTORY_KEY, {})
+        history = history if isinstance(history, dict) else {}
+        submission = state.get("submission") or {}
+        progress = state.get("progress") or {}
+        entries = []
+        entered = str(state.get("entered_at") or "")
+        for mtime, path in sorted(files, reverse=True)[:20]:
+            real = os.path.realpath(path)
+            modified = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+            record = history.get(real) if isinstance(history.get(real), dict) else {}
+            if state.get("phase") == "executing" and os.path.realpath(str(state.get("approved_path") or "")) == real:
+                status = "building" + (f" rev {state['approved_revision']}" if state.get("approved_revision") is not None else "")
+                if progress.get("total"):
+                    status += f" ({progress.get('completed', 0) + progress.get('cancelled', 0)} of {progress['total']} steps)"
+            elif (state.get("active") and submission.get("status") in {"pending", "awaiting"}
+                  and os.path.realpath(str(submission.get("path") or "")) == real):
+                status = f"waiting for approval (rev {submission.get('revision')})"
+            elif (state.get("active") and real in {os.path.realpath(item) for item in self._plan_files(state)}
+                  and not (record.get("status") in {"approved", "done"}  # an earlier round's plan, untouched since
+                           and str(record.get("at") or "") <= entered and modified < entered)):
+                status = "being planned"
+            elif record.get("status") in {"approved", "done"}:
+                rev = f"rev {record['rev']}, " if record.get("rev") is not None else ""
+                status = f"{record['status']} ({rev}{str(record.get('at') or '')[:10]})"
+            else:
+                status = "draft"
+            entries.append({"name": os.path.basename(path), "path": path, "status": status, "modified": modified})
+        return entries
+
+    def _plan_list(self, state: dict[str, Any], *, as_data: bool = False) -> str | dict:
+        plans_dir = state.get("plans_dir")
+        if not isinstance(plans_dir, str) or not plans_dir:
+            # Not _fixed_plans_dir: listing must not create the directory.
+            plans_dir = os.path.join(os.path.realpath(self._session_cwd()), ".hermes", "plans")
+        if os.path.lexists(plans_dir) and not _plans_dir_is_still_safe(plans_dir):
+            return ({"plans_dir": plans_dir, "plans": [], "error": "the .hermes plan path contains a symlink"} if as_data
+                    else f"Plan listing was refused: `{plans_dir}` contains a symlink.")
+        entries = self._plan_entries(state, plans_dir) if os.path.isdir(plans_dir) else []
+        if as_data:
+            return {"plans_dir": plans_dir, "plans": entries}
+        if not entries:
+            return f"No plans yet in `{plans_dir}`."
+        lines = [f"Plans in `{plans_dir}`, newest first:"]
+        lines += [f"{number}. `{item['name']}`: {item['status']}" for number, item in enumerate(entries, 1)]
+        lines.append("/planmode show <file> prints a plan this session wrote.")
+        return "\n".join(lines)
+
+    def _inspect(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Plan-mode state as fields, for the agent. Read-only: it never arms a review the way show does."""
+        submission = state.get("submission") or {}
+        review = state.get("edit_review")
+        executing = state.get("phase") == "executing"
+        if state.get("active"):
+            phase = "awaiting_approval" if submission.get("status") in {"pending", "awaiting"} else "planning"
+        else:
+            phase = "executing" if executing else "off"
+        reviewing = isinstance(review, dict) and bool(review.get("key")) and "approval_card" in self._levers()
+        next_steps = {
+            "planning": ["read and ask only what reading cannot settle", "write the plan under plans_dir",
+                         "plan_mode(action='submit')"],
+            "awaiting_approval": ["wait for the user's answer; only the user approves"],
+            "executing": ["implement the approved plan", "keep todo_list current (plans of 4+ steps)"],
+            "off": ["plan_mode(action='on') before a multi-step or risky change"],
+        }[phase]
+        return {
+            "plan_mode": "on" if state.get("active") else "off",
+            "phase": phase,
+            "entered_by": state.get("entered_by"),
+            "plans_dir": state.get("plans_dir"),
+            "plan": state.get("approved_path") if executing else submission.get("path"),
+            "revision": state.get("approved_revision") if executing else submission.get("revision"),
+            "approval": submission.get("status"),
+            "edit_policy": ("review_each_edit" if reviewing else "auto_accept") if executing or reviewing else None,
+            "progress": state.get("progress") or None,
+            "files_changed": len(state.get("changed_files") or []),
+            "finishing_this_turn": bool(state.get("finish_pending")),
+            "approved_snapshot": state.get("approved_snapshot"),
+            "next": next_steps,
+        }
+
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:
             platform = str(kwargs.get("platform") or "").strip().lower()
@@ -2903,6 +3099,12 @@ class PlanModePlugin:
                 receipt = self._take_block_receipt(identity, platform, str(kwargs.get("turn_id") or ""), response_text)
             except Exception:
                 receipt = ""
+            try:
+                finish = self._take_finish_receipt(identity, platform, str(kwargs.get("turn_id") or ""),
+                                                   response_text + receipt)
+            except Exception:
+                finish = ""
+            receipt = "\n".join(line for line in (receipt, finish) if line)
             if self._footer_off():
                 return None  # `footer: off` opts out of every plan-mode output transform
             result = self._reply_transform(response_text, platform, identity)
@@ -2952,7 +3154,7 @@ class PlanModePlugin:
                 if (not platform or platform in LOCAL_PLATFORMS
                         or len(response_text) > _FOOTER_MAX_CHARS or identity.key.startswith("ui:")):
                     return None
-                if self._execution_ends_with_turn(state):
+                if self._execution_ends_with_turn(state) or state.get("finish_pending"):
                     return None  # this is the execution's last reply: post_llm_call ends it right after (#71)
                 return response_footer(response_text, state)
         except Exception:
