@@ -244,3 +244,14 @@ def test_a_ui_tab_reporting_the_cli_surface_reads_only_its_own_key(make_plugin, 
     plugin._save_state(f"cli:{os.getpid()}", other)
     session_env.update(HERMES_SESSION_PLATFORM="cli", HERMES_UI_SESSION_ID="ui-7")
     assert "✅" not in (plugin.transform_llm_output("Hi.", platform="cli", turn_id="t1") or "")
+
+
+def test_typed_approve_and_done_are_listed(make_plugin, session_env):
+    plugin = make_plugin("approval_card")
+    path = write_plan(plugin)
+    assert plugin.command("approve").startswith("Plan approved.")
+    import os
+    assert plugin.ctx.state.get("plan-history")[os.path.realpath(path)]["status"] == "approved"  # what other sessions list
+    assert f"`{path.name}`: building\n" in plugin.command("list") + "\n"
+    assert plugin.command("done") == "The executing plan is done."
+    assert f"`{path.name}`: done (" in plugin.command("list")

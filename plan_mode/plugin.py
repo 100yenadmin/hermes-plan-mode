@@ -1706,6 +1706,7 @@ class PlanModePlugin:
                     state["pending_note"] = self._saved_plan_note(submission) + state["pending_note"]
                 self._forget_submission(state)
                 state["pending_note"] += self._approved_excerpt({"path": approved_path, "revision": state.get("approved_revision", 0)})
+                self._note_history(approved_path, "approved", state.get("approved_revision"))
                 self._save_command_state(identity.key, command_storage_key, state)
                 if card_open and "approved_while_open" in state:
                     # Approving the open prompt resumes this turn; a deny or timeout starts the work from post_tool_call.
@@ -3016,7 +3017,7 @@ class PlanModePlugin:
             modified = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
             record = history.get(real) if isinstance(history.get(real), dict) else {}
             if state.get("phase") == "executing" and os.path.realpath(str(state.get("approved_path") or "")) == real:
-                status = f"building rev {state.get('approved_revision')}"
+                status = "building" + (f" rev {state['approved_revision']}" if state.get("approved_revision") is not None else "")
                 if progress.get("total"):
                     status += f" ({progress.get('completed', 0) + progress.get('cancelled', 0)} of {progress['total']} steps)"
             elif (state.get("active") and submission.get("status") in {"pending", "awaiting"}
