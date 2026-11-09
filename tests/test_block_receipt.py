@@ -11,13 +11,16 @@ from test_plan_mode import session_env
 RECEIPT = "🔒 Plan mode blocked"
 
 
-def blocked(plugin, name, args, platform=""):
-    """Run one call through the lock the way Hermes does: pre_tool_call blocks, post_tool_call reports it."""
+def blocked(plugin, name, args, platform="", turn="t1"):
+    """Run one call through the lock the way Hermes does: pre_tool_call blocks, post_tool_call reports it.
+
+    Like Hermes, post_tool_call gets ids and the outcome but no platform (``platform`` is unused there)."""
     decision = plugin.pre_tool_call(name, args, tool_call_id=f"call-{name}")
     assert decision and decision["action"] == "block", decision
     message = decision["message"]
-    plugin.post_tool_call(name, args, tool_call_id=f"call-{name}", status="blocked", error_type="plugin_block",
-                          error_message=message, result=json.dumps({"error": message}), platform=platform)
+    plugin.post_tool_call(name, args, tool_call_id=f"call-{name}", turn_id=turn, session_id="s", task_id="",
+                          status="blocked", error_type="plugin_block", error_message=message,
+                          result=json.dumps({"error": message}))
     return message
 
 
@@ -92,17 +95,16 @@ def test_footer_off_turns_the_receipt_off(planning):
 def test_other_blocks_and_successes_are_not_named(planning):
     # Another plugin's block, a guardrail block, a plain error and a successful call are not the lock's doing.
     planning.post_tool_call("terminal", {"command": "ls"}, status="blocked", error_message="Blocked by policy X",
-                            result=json.dumps({"error": "Blocked by policy X"}), platform="cli")
+                            result=json.dumps({"error": "Blocked by policy X"}))
     planning.post_tool_call("terminal", {"command": "ls"}, status="error", error_message="Plan mode is on: fake",
                             platform="cli")
-    planning.post_tool_call("read_file", {"path": "/x"}, status="ok", result="{}", platform="cli")
+    planning.post_tool_call("read_file", {"path": "/x"}, status="ok", result="{}")
     assert planning.transform_llm_output("Here is the plan.", platform="cli") is None
 
 
 def test_message_from_the_result_when_error_message_is_missing(planning):
     message = render.BLOCKED_TOOL_MESSAGE.format(name="patch")
-    planning.post_tool_call("patch", {"path": "/repo/a.py"}, status="blocked", result=json.dumps({"error": message}),
-                            platform="cli")
+    planning.post_tool_call("patch", {"path": "/repo/a.py"}, status="blocked", result=json.dumps({"error": message}))
     assert planning.transform_llm_output("x", platform="cli").endswith("blocked 1 tool call: patch (/repo/a.py).")
 
 
@@ -113,10 +115,63 @@ def test_malformed_reports_never_raise(planning):
     assert planning.transform_llm_output("x", platform="cli") is None
 
 
-def test_subagent_blocks_stay_with_the_child(planning):
-    planning.post_tool_call("terminal", {"command": "ls"}, status="blocked", platform="subagent",
-                            error_message=render.BLOCKED_TOOL_MESSAGE.format(name="terminal"))
-    assert planning.transform_llm_output("Parent reply.", platform="cli") is None
+def test_blocks_of_an_earlier_turn_are_never_named_late(planning):
+    # Turn 1 blocked a call but ended with no text (Hermes then skips transform_llm_output).
+    blocked(planning, "terminal", {"command": "make"}, turn="t1")
+    blocked(planning, "terminal", {"command": "ls"}, turn="t2")
+    assert planning.transform_llm_output("Turn 2.", platform="cli", turn_id="t2").endswith(
+        "blocked 1 tool call: terminal (ls).")
+    blocked(planning, "terminal", {"command": "pwd"}, turn="t3")
+    assert planning.transform_llm_output("Turn 4.", platform="cli", turn_id="t4") is None
+    assert planning._turn_blocks == {}
+
+
+def test_footer_off_and_program_platforms_still_forget_the_blocks(planning):
+    planning.ctx.settings["footer"] = "off"
+    blocked(planning, "terminal", {"command": "ls"})
+    assert planning.transform_llm_output("x", platform="cli") is None
+    planning.ctx.settings["footer"] = "auto"
+    assert planning.transform_llm_output("y", platform="cli") is None
+    blocked(planning, "terminal", {"command": "ls"})
+    assert planning.transform_llm_output("z", platform="api_server") is None
+    assert planning._turn_blocks == {}
+
+
+@pytest.mark.parametrize("platform", ["", "cli"])
+def test_gateway_session_never_shows_details(make_plugin, session_env, platform):
+    # A gateway agent with an empty or local-looking platform is still a chat: its key is a session key.
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+    session_env["HERMES_SESSION_KEY"] = "agent:main:telegram:dm:42"
+    plugin = make_plugin("")
+    plugin.command("on parser")
+    blocked(plugin, "terminal", {"command": "cat secret.txt"})
+    reply = plugin.transform_llm_output("Plan.", platform=platform)
+    assert reply == "Plan.\n\n🔒 Plan mode blocked 1 tool call: terminal."
+
+
+def test_long_chat_reply_gets_no_receipt(make_plugin, session_env):
+    session_env["HERMES_SESSION_PLATFORM"] = "discord"
+    session_env["HERMES_SESSION_KEY"] = "agent:main:discord:dm:9"
+    plugin = make_plugin("")
+    plugin.command("on parser")
+    blocked(plugin, "terminal", {"command": "ls"})
+    assert plugin.transform_llm_output("x" * (pm._FOOTER_MAX_CHARS + 1), platform="discord") is None
+    assert plugin._turn_blocks == {}
+
+
+def test_chat_footer_follows_the_receipt_and_is_not_doubled(make_plugin, session_env):
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+    session_env["HERMES_SESSION_KEY"] = "agent:main:telegram:dm:42"
+    plugin = make_plugin("")
+    plugin.command("on parser")
+    footer = "⏸ Plan mode: nothing changes until you approve the plan."
+    blocked(plugin, "terminal", {"command": "ls"})
+    assert plugin.transform_llm_output("Plan.", platform="telegram") == (
+        "Plan.\n\n🔒 Plan mode blocked 1 tool call: terminal.\n\n" + footer)
+    blocked(plugin, "terminal", {"command": "ls"})
+    reply = plugin.transform_llm_output("Plan.\n\n" + footer, platform="telegram")
+    assert reply == "Plan.\n\n" + footer + "\n\n🔒 Plan mode blocked 1 tool call: terminal."
+    assert reply.count(footer) == 1
 
 
 def test_receipt_goes_before_the_approval_pointer(make_plugin, session_env):
@@ -145,7 +200,7 @@ def test_no_commit_block_during_execution_is_named(make_plugin, session_env, mon
     plugin._save_state(key, state)
     message = render.NO_COMMIT_BLOCK
     plugin.post_tool_call("terminal", {"command": "git commit -m x"}, status="blocked", error_message=message,
-                          result=json.dumps({"error": message}), platform="cli")
+                          result=json.dumps({"error": message}))
     assert plugin.transform_llm_output("Done.", platform="cli").endswith(
         "🔒 Plan mode blocked 1 tool call: terminal (git commit -m x).")
 

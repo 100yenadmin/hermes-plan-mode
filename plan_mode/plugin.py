@@ -2813,14 +2813,15 @@ class PlanModePlugin:
                     message = None
             if not isinstance(message, str) or not message.startswith(_RECEIPT_PREFIXES):
                 return
-            platform = str(kwargs.get("platform") or "").strip().lower()
-            if platform in _NO_TURN_NOTE_PLATFORMS:
-                return
-            identity = derive_session_identity(platform)
+            # Hermes passes no platform to post_tool_call; identity comes from the session context, as in transform.
+            identity = derive_session_identity(str(kwargs.get("platform") or ""))
             if identity.unsupported or identity.non_cli_without_key or not identity.key:
                 return
+            turn = str(kwargs.get("turn_id") or "")
             with self._lock:
-                entry = self._turn_blocks.pop(identity.key, None) or {"count": 0, "calls": []}
+                entry = self._turn_blocks.pop(identity.key, None)
+                if not entry or (turn and entry.get("turn") and entry["turn"] != turn):
+                    entry = {"count": 0, "calls": [], "turn": turn}  # blocks of an earlier turn are never named late
                 entry["count"] += 1
                 if len(entry["calls"]) < _RECEIPT_CALLS:
                     entry["calls"].append((str(tool_name or "tool"), _block_detail(args)))
@@ -2830,39 +2831,49 @@ class PlanModePlugin:
         except Exception:
             return
 
-    def _take_block_receipt(self, identity: Any, platform: str) -> str:
-        if platform in _RECEIPT_SKIP_PLATFORMS:
-            return ""
+    def _take_block_receipt(self, identity: Any, platform: str, turn: str, response_text: str) -> str:
+        """Pop this session's recorded blocks (always, so none is named in a later turn) and render them."""
         keys = dict.fromkeys(key for key in (identity.key, identity.fallback_key, f"cli:{os.getpid()}") if key)
         with self._lock:
             entries = [entry for entry in (self._turn_blocks.pop(key, None) for key in keys) if entry]
-        if not entries:
+        entries = [entry for entry in entries if not (turn and entry.get("turn") and entry["turn"] != turn)]
+        if not entries or self._footer_off() or platform in _RECEIPT_SKIP_PLATFORMS:
             return ""
+        local = (not platform or platform in LOCAL_PLATFORMS) and not identity.key.startswith("sk:")
+        if not local and len(response_text) > _FOOTER_MAX_CHARS:
+            return ""  # like the footer: never push a long chat reply past the platform's split
         count = sum(entry["count"] for entry in entries)
         calls = [call for entry in entries for call in entry["calls"]][:_RECEIPT_CALLS]
-        # Commands can carry private text: chat replies name the tools only.
-        return block_receipt(count, calls, details=not platform or platform in LOCAL_PLATFORMS)
+        # Commands can carry private text: chat (gateway session) replies name the tools only.
+        return block_receipt(count, calls, details=local)
 
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:
             platform = str(kwargs.get("platform") or "").strip().lower()
-            if self._footer_off() or platform in _NO_TURN_NOTE_PLATFORMS:
-                return None  # `footer: off` opts out of every plan-mode output transform; child turns belong to the parent.
+            if platform in _NO_TURN_NOTE_PLATFORMS:
+                return None  # child turns belong to the parent
             identity = derive_session_identity(platform)
             if identity.unsupported or identity.non_cli_without_key or not identity.key:
                 return None
             receipt = ""
-            try:
-                receipt = self._take_block_receipt(identity, platform)
+            try:  # popped even with `footer: off`, so a later switch never prints stale blocks
+                receipt = self._take_block_receipt(identity, platform, str(kwargs.get("turn_id") or ""), response_text)
             except Exception:
                 receipt = ""
-            if receipt:
-                # A pure append, like the pointer below: the streamed reply stays an exact prefix.
-                sep = ("" if not response_text or response_text.endswith("\n\n")
-                       else "\n" if response_text.endswith("\n") else "\n\n")
-                with_receipt = response_text + sep + receipt
-                return self._reply_transform(with_receipt, platform, identity) or with_receipt
-            return self._reply_transform(response_text, platform, identity)
+            if self._footer_off():
+                return None  # `footer: off` opts out of every plan-mode output transform
+            result = self._reply_transform(response_text, platform, identity)
+            if not receipt:
+                return result
+            # A pure append, like the pointer: the streamed reply stays an exact prefix. The pointer and footer
+            # decide on the model's own text, then follow the receipt on their own line.
+            sep = ("" if not response_text or response_text.endswith("\n\n")
+                   else "\n" if response_text.endswith("\n") else "\n\n")
+            with_receipt = response_text + sep + receipt
+            base = response_text.rstrip()
+            if result is None or not result.startswith(base):
+                return with_receipt
+            return with_receipt + "\n\n" + result[len(base):].lstrip()
         except Exception:
             return None  # Output transforms fail open; approval and enforcement are unchanged.
 
