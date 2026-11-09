@@ -122,7 +122,8 @@ _LEVERS = frozenset({"plan_once", "write_once", "lean_craft", "todo_batch", "cod
                      "sticky", "reentry", "approved_text", "light_notes", "plan_budget",
                      "commit_override", "approval_ask", "bridge_calls", "blocked_tools", "skill_policy",
                      "test_commands", "choice_fidelity", "refactor_scope", "todo_inline",
-                     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard", "approval_card"})
+                     "rename_scope", "test_plan_only", "choice_record", "edit_batch", "brief_final", "exec_skill_guard", "approval_card",
+                     "thorough_questions"})
 EXEC_PROCESS_SKILLS = frozenset({"test-driven-development", "tdd", "requesting-code-review", "receiving-code-review",
                                  "code-review", "writing-plans", "plan", "planning", "brainstorming", "executing-plans"})
 _USER_ASKED_PROCESS = re.compile(
@@ -256,6 +257,8 @@ PROFILE_DEFAULT = "lean"
 _PLAN_STYLES = frozenset({"compact", "core"})
 _DEFAULT_PLAN_STYLE = "compact"
 _DEFAULT_ALLOW_COMMITS = False
+_QUESTIONS = ("normal", "thorough")  # the Questions setting; thorough adds the thorough_questions lever
+_DEFAULT_QUESTIONS = "normal"
 _PLAN_SKILL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
 
 _V4A_HEADER_RE = re.compile(
@@ -1156,8 +1159,9 @@ class PlanModePlugin:
             phase = "planning" if state.get("active") else "off"
         last = f"\nLast submission: rev {submission['revision']} {submission['status']}" if submission else ""
         custom = " (custom levers)" if self._lever_override() else ""
+        questions = "\nQuestions: thorough" if "thorough_questions" in self._levers() else ""
         return (
-            f"Plan mode: {mode}\nPlan profile: {self._plan_profile()}{custom}\nEntered at: {entered}\n"
+            f"Plan mode: {mode}\nPlan profile: {self._plan_profile()}{custom}{questions}\nEntered at: {entered}\n"
             f"Phase: {phase}{last}\nPlans directory: {plans_dir}\nPlan files:\n{rendered}"
         )
 
@@ -1804,20 +1808,28 @@ class PlanModePlugin:
         if isinstance(value, str) and not value:
             lean = self._plan_profile() == "lean" and self._plan_style() == "compact" and not self._plan_skill()
             if not lean:
-                return set()
+                # Classic keeps 0.3.5 behaviour; only the Questions setting below applies.
+                return {"thorough_questions"} if self._questions() == "thorough" else set()
             # plan_once was measured on tui_gateway sessions only (rounds 7 and 8), so it joins lean only there.
             levers = set(LEAN_LEVERS) | ({"plan_once"} if _tui_ui_session_id() else set())
             if self._classic_cli() is not None:
                 levers.add("write_once")
         else:
             names = set(re.split(r"[,\s]+", value.strip().lower())) if isinstance(value, str) else set()
-            levers = set(_LEVERS) if "all" in names else names & _LEVERS
+            # all = every experimental lever; thorough_questions belongs to the Questions setting, not to "all".
+            levers = (set(_LEVERS) - {"thorough_questions"}) | (names & {"thorough_questions"}) if "all" in names else names & _LEVERS
         # The Settings switch wins over both the profile and custom lever overrides.
         # YAML 1.1 reads a bare off/no as False; accept the quoted allow_commits off-words too.
         card = self._config("approval_card", True)
         if card is False or (isinstance(card, str) and card.strip().lower() in {"false", "off", "no", "0"}):
             levers.discard("approval_card")
+        if self._questions() == "thorough":
+            levers.add("thorough_questions")
         return levers
+
+    def _questions(self) -> str:
+        value = str(self._config("questions", _DEFAULT_QUESTIONS)).strip().lower()
+        return value if value in _QUESTIONS else _DEFAULT_QUESTIONS
 
     def _classic_cli(self):
         """Use the same manager seam as ctx.dispatch_tool; gateway and one-shot calls never qualify."""

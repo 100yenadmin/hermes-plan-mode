@@ -32,7 +32,8 @@ hook, except writes to the plan file.
    `plan_mode` tool.
 2. The agent explores with read-only tools. For a choice only you can make, it asks with `clarify` before it writes
    the plan. With the default `lean` profile it prefers one question and asks at most three, each with 2–3 choices,
-   recommended first.
+   recommended first. Say "grill me" in your request for more, or set Questions to `thorough` for an interview before
+   every plan: one decision per question, until no open choice is left.
 3. It writes the plan as Markdown under `<cwd>/.hermes/plans`.
 4. It shows the complete plan in its reply, then calls `plan_mode(action="submit")`.
 5. With the default `lean` profile, plan mode asks one `clarify` card for plan revision N: "Approve, auto-accept
@@ -237,6 +238,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
 | Approval card (`approval_card`) | on | Ask for plan approval with one card in the lean profile. Off uses Hermes' approval prompt and wins over `levers` and `PLAN_MODE_LEVERS`. Change it between plans: it takes effect at once, and turning it off stops per-edit review of a running plan |
+| Questions (`questions`) | `normal` | `normal`: the agent asks only what reading the code cannot settle (in the lean profile it prefers one question; say "grill me" for more). `thorough`: it interviews you before every plan, one decision per question with a recommended choice, until no open choice is left, and the plan is asked to record each answer as your decision. Applies to every profile |
 | Plan style (`plan_style`) | `compact` | `compact`: a short, decision-complete plan (Goal, Decisions, Changes, Steps, Validation), as in Claude Code and Codex. `core`: Hermes' own `/plan` craft (zero-context tasks, full code, a commit per step) |
 | Allow commits (`allow_commits`) | off | Off: the agent is told not to plan or make git commits unless you ask; terminal-tool `git commit` and `git push` are blocked while an approved plan executes unless you ask. Aliases, scripts, `execute_code`, MCP git tools and other commit-creating git commands (merge, revert, cherry-pick, am) are not caught (see Known limitations). On: it may commit as the plan style suggests |
 | Plan skill (`plan_skill`) | none | The name of a skill whose plan format to use instead, such as your own planning contract; it wins over Plan style. When plan mode has to block `skill_view` (`skills.inline_shell` is on), Plan style is used |
@@ -250,7 +252,9 @@ the rest.
 - **Plan format.** It is Codex-style: Summary; Key changes, grouped by behaviour and naming every touched file and
   every consumer of a changed interface; Test plan with exact commands; Assumptions.
 - **Questions.** The agent asks only about choices that reading the repo cannot settle. It prefers one question, asks
-  at most three, and gives each 2–3 choices written as label — consequence, recommended first.
+  at most three, and gives each 2–3 choices written as label — consequence, recommended first. If you ask to be
+  questioned more ("grill me"), it asks one decision per question until none is left. The Questions setting
+  (`thorough`) makes that the default.
 - **Fewer bookkeeping calls.**
   - `todo_list` is used only for plans with 4 or more steps, and status updates ride along with real work.
   - Later planning turns get a short reminder instead of the full note.
@@ -360,6 +364,9 @@ plugins:
 - `choice_record` (opt-in) tells the model to record answered clarify choices in Assumptions as the user's decision.
   With it, 6 of 6 plans did so in S45. Without it, the probe counted 2 of 6, but read directly 4 of 6 already
   attributed the choice to the user, so the deficit the lever targets was not shown and it stays opt-in.
+- `thorough_questions` is what Questions `thorough` turns on; it is added to any lever set, custom or not, and `all`
+  does not include it. The interview instruction replaces `question_shape`'s bound and includes `choice_record`, and
+  later planning turns get a one-line reminder. It has not been benchmarked.
 - `edit_batch` (lean since 0.6.7) tells the model to edit each file in one call where the tool allows, and to send
   edits to different files, including tests, in the same response. Execution rounds with edits fell from 49 to 27 on
   the two edit-heavy tasks in S45 (48 to 20 in S44). It joined lean after EB-2 (2026-10-14, pre-registered, decided by
@@ -446,11 +453,11 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 0.6.0 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 1.2 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | a `clarify` card (lean default) or Hermes' approval prompt, every interactive surface |
-| Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted |
+| Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted; an opt-in interview (Questions: `thorough`) |
 | Deny with feedback, revise | yes | yes | no | yes; Other on the card, gateway `/deny <reason>`, otherwise the agent asks |
 | Implement after approval | same turn | one click, as a new turn | no | same turn via the prompt; typed approve may need a message |
 | Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list` + footer on chat platforms |
@@ -666,6 +673,10 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   surface ([NousResearch/hermes-agent#151276](https://github.com/NousResearch/hermes-agent/issues/151276)); the CLI only
   flashes "Preparing terminal…" in its spinner. The block itself is enforced, and the session record keeps the call and
   the block message (`hermes sessions export --format md`). Whether the agent mentions it depends on the model.
+- **A plan-mode command sent while the agent is busy does not run on chat platforms.** If you send `/planmode off`
+  (or any plugin command) while the agent is working or waiting on a question card, Hermes queues it and later hands it
+  to the agent as plain text ([NousResearch/hermes-agent#131051](https://github.com/NousResearch/hermes-agent/issues/131051)).
+  The agent cannot end plan mode for you. Answer or skip the card first, then send the command again.
 - **Codex app-server runtime.** Hermes' Codex app-server executes native `exec` and `applyPatch` outside
   `pre_tool_call`. Plan mode does not enforce them. Use a normal Hermes tool runtime when enforcement matters.
 - **TUI `/background` and `btw`** side agents run under their own task id with no public link to the parent session.

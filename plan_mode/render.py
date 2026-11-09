@@ -36,6 +36,18 @@ TEST_PLAN_ONLY = (
     "diff and other repo-hygiene checks unless the user asked for them."
 )
 CHOICE_RECORD = "Record each answered clarify choice in Assumptions as the user's decision."
+# Questions: thorough (setting) replaces the question bound with an interview; the lean note keeps a one-line on-request path.
+THOROUGH_QUESTIONS = (
+    "such as behaviour, policy, format, scope, edge cases, error handling or tests). The user asked to be questioned "
+    "thoroughly, so interview them before you write the plan: ask one decision per clarify call, each with 2–4 short "
+    "choices written as label — consequence, your recommended choice first; let each answer shape the next question, "
+    "and keep going until no such choice is left. Settle facts by reading, never by asking."
+)
+ASK_MORE_ON_REQUEST = (
+    "If the user asks to be questioned more (for example \"grill me\"), ask one decision per clarify call instead, "
+    "until no such choice is left."
+)
+LIGHT_THOROUGH = " Questions are thorough: before writing or revising the plan, ask about each open choice, one decision per clarify call."
 EDIT_BATCH = (
     "Make all changes to one file in a single edit call where the tool allows it, and send edits to different files, "
     "including the tests, in the same response."
@@ -161,16 +173,21 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
     )
     if ui_session and not ("plan_once" in levers and reply_plan):  # a reply-saved plan has no path until after the reply
         note += "\nInclude a markdown link to the plan file in your plan reply."
-    if "question_shape" in levers:
+    if "thorough_questions" in levers:
+        # The Questions setting: an interview, one decision per question, instead of the bounded lean questions.
+        note = note.replace("such as behaviour, policy, format or scope): up to 4 short choices, recommended first.",
+                            THOROUGH_QUESTIONS)
+    elif "question_shape" in levers:
         # v2: keep the ask-before-writing directive; only bound the number and shape of questions.
         note = note.replace(
             "such as behaviour, policy, format or scope): up to 4 short choices, recommended first.",
             "such as behaviour, policy, format or scope) and that reading the repo cannot settle: prefer 1 question, "
-            "at most 3, each with 2–3 short choices written as label — consequence, recommended first.",
+            "at most 3, each with 2–3 short choices written as label — consequence, recommended first. "
+            + ASK_MORE_ON_REQUEST,
         )
     if "choice_fidelity" in levers:
         note = note.replace("\n2. ", " " + CHOICE_FIDELITY + "\n2. ", 1)
-    if "choice_record" in levers:
+    if "choice_record" in levers or "thorough_questions" in levers:
         note = note.replace("\n2. ", " " + CHOICE_RECORD + "\n2. ", 1)
     if not card_path and "plan_once" in levers and str(platform).strip().lower() == "mattermost":
         note = note.replace(
@@ -236,8 +253,10 @@ def planning_note(plans_dir, now=None, *, style="core", plan_skill="", commits=T
 def light_note(plans_dir, *, levers=frozenset()) -> str:
     base = (f"Plan mode is ON. Plans directory: {plans_dir}. Submit with plan_mode; "
             'do not ask "should I proceed?" in prose.')
+    # The Questions reminder is opt-in, so it rides outside the measured 400-character budget.
+    thorough = LIGHT_THOROUGH if "thorough_questions" in levers else ""
     if len(base) > 400:
-        return base[:400]
+        return base[:400] + thorough
     sentences = [base]
     for lever, sentence in (("bridge_calls", LIGHT_BRIDGE), ("blocked_tools", LIGHT_BLOCKED),
                             ("skill_policy", LIGHT_SKILL)):
@@ -245,7 +264,7 @@ def light_note(plans_dir, *, levers=frozenset()) -> str:
             sentences.append(sentence)
     while len("".join(sentences)) > 400:
         sentences.pop()
-    return "".join(sentences)
+    return "".join(sentences) + thorough
 
 
 def executing_pointer(state: dict, *, commits=True, levers=frozenset()) -> str:
