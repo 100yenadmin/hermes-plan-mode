@@ -7,6 +7,8 @@ Codex app-server runtime and TUI `/background` and `btw` side agents are outside
 
 ▶ [Watch the 85-second demo](https://x.com/ElectricSheepIO/status/2119788419924570130)
 
+https://github.com/user-attachments/assets/a900f39d-417c-4517-be9e-58bad3cf3538
+
 [![Latest release](https://img.shields.io/github/v/release/100yenadmin/hermes-plan-mode)](https://github.com/100yenadmin/hermes-plan-mode/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/100yenadmin/hermes-plan-mode)](LICENSE)
 [![Hermes >= 0.21.3](https://img.shields.io/badge/Hermes-%E2%89%A5%200.21.3-blue)](#compatibility)

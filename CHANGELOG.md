@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2 - 2026-11-10
+
+README only; the plugin code is unchanged.
+
+- **The demo film plays on the README.** The 85-second demo now has an inline player under the demo link, so it
+  can be watched without leaving GitHub or signing in to X.
+
 ## 1.4.1 - 2026-11-09
 
 README only; the plugin code is unchanged.
