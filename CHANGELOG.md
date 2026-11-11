@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0 - 2026-11-11
+
+- **A live progress card.** While an approved plan is being built, one message lists its steps and updates as each
+  finishes (✓ done, ▶ now, ○ next), ending with "✅ Plan rev N done: n of n steps". It shows on Desktop, the TUI and
+  chat platforms that edit messages in place (Telegram, Discord, Slack, Matrix, Mattermost, WhatsApp, Feishu, DingTalk,
+  Google Chat), and needs Hermes 0.22.7 or newer. The classic CLI keeps Hermes' own todo list. Turn it off with the
+  new Progress card setting (`progress_card`).
+- The card is display only: it never changes the lock, an approval or the plan's state, and a failed post is ignored.
+
 ## 1.4.2 - 2026-11-10
 
 README only; the plugin code is unchanged.
