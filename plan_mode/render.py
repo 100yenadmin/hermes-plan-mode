@@ -324,6 +324,33 @@ def todo_progress(result) -> dict | None:
         return None
 
 
+def progress_card(revision, result) -> str:
+    """Render the observed todo result without changing execution state."""
+    progress = todo_progress(result)
+    if not progress or not progress["total"]:
+        return ""
+    todos = json.loads(result)["todos"]
+    markers = {"completed": "✓", "in_progress": "▶", "pending": "○", "cancelled": "✗"}
+    if any(not isinstance(todo.get("content"), str) or not isinstance(todo.get("status"), str)
+           or todo["status"] not in markers for todo in todos):
+        return ""
+    head = "Plan" + (f" rev {revision}" if revision is not None else "")
+    completed, total, cancelled = progress["completed"], progress["total"], progress["cancelled"]
+    if completed + cancelled == total:
+        head = f"✅ {head} done: {completed} of {total} steps" + (f" ({cancelled} cancelled)" if cancelled else "")
+    else:
+        head += f": {completed} of {total} done" + (f", {cancelled} cancelled" if cancelled else "")
+    lines = [head]
+    for todo in todos[:8]:
+        content = " ".join(todo["content"].split())
+        if len(content) > 60:
+            content = content[:59] + "…"
+        lines.append(f"{markers[todo['status']]} {content}")
+    if total > 8:
+        lines.append(f"… and {total - 8} more")
+    return "\n".join(lines)
+
+
 def block_receipt(count: int, calls, *, details: bool) -> str:
     """One line naming the calls plan mode blocked since the last reply: Hermes shows blocked calls nowhere."""
     shown = []

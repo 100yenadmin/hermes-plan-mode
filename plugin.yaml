@@ -35,6 +35,11 @@ config_schema:
     default: auto
     label: Chat footer
     description: A one-line plan-mode or progress footer under short replies on chat platforms. Off also turns off the line that tells you how to approve a plan still waiting for approval, the line that names tool calls plan mode blocked, and the line that ends a finished plan.
+  progress_card:
+    type: bool
+    default: true
+    label: Progress card
+    description: "While an approved plan is being built, one message shows its steps and updates as they finish, on Telegram, Discord, Slack and other chat platforms, Desktop and the TUI. The classic CLI shows Hermes' own todo list instead."
   plan_style:
     type: str
     choices: [compact, core]

@@ -1,0 +1,324 @@
+"""Display-only live progress, using disposable approved plans and fake host messages."""
+import copy
+import json
+import threading
+import time
+
+import pytest
+import yaml
+
+from plan_mode import render
+from plan_mode.progress_card import ProgressCards
+from test_approval_card import APPROVE, answer_card, card, state  # noqa: F401 (fixtures)
+from test_finish_receipt import building  # noqa: F401 (fixture)
+from test_levers import make_plugin, write_plan  # noqa: F401 (fixtures)
+from test_plan_mode import session_env  # noqa: F401 (fixture)
+
+
+class Handle:
+    ok = True
+
+    def __init__(self):
+        self.edits = []
+
+    def edit(self, text):
+        self.edits.append(text)
+        return {"ok": True}
+
+
+class Messages:
+    def __init__(self, plugin):
+        self.plugin = plugin
+        self.posts = []
+        self.handles = []
+        self.threads = []
+
+    def post(self, text):
+        assert not self.plugin._lock._is_owned()
+        self.posts.append(text)
+        self.threads.append(threading.current_thread())
+        handle = Handle()
+        self.handles.append(handle)
+        return handle
+
+
+@pytest.fixture
+def chat(building, session_env):
+    plugin, path = building
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+    messages = Messages(plugin)
+    plugin.ctx.post_message = messages.post
+    yield plugin, path, messages
+    assert plugin._progress_cards.drain(3)
+
+
+def todos(*statuses):
+    return [{"id": str(i), "content": f"Step {i}", "status": status} for i, status in enumerate(statuses)]
+
+
+def write_todos(plugin, items, tool="todo_list", **kwargs):
+    return plugin.post_tool_call(tool, {"todos": items}, turn_id="t1", status="ok",
+                                 result=json.dumps({"todos": items}), **kwargs)
+
+
+def test_one_card_tracks_progress_and_finishes(chat):
+    plugin, _, messages = chat
+    assert write_todos(plugin, todos("in_progress", "pending", "pending")) is None
+    assert messages.posts == ["Plan rev 1: 0 of 3 done\n▶ Step 0\n○ Step 1\n○ Step 2"]
+    assert messages.threads == [threading.current_thread()]
+    items = todos("completed", "in_progress", "pending")
+    write_todos(plugin, items)
+    assert plugin._progress_cards.drain(2)
+    handle = messages.handles[0]
+    assert len(handle.edits) == 1 and handle.edits[0].startswith("Plan rev 1: 1 of 3 done")
+    write_todos(plugin, items)
+    assert plugin._progress_cards.drain(2)
+    assert len(handle.edits) == 1
+    write_todos(plugin, todos("completed", "completed", "completed"))
+    assert plugin._progress_cards.drain(2)
+    assert len(messages.posts) == 1 and len(handle.edits) == 2
+    assert handle.edits[-1].startswith("✅ Plan rev 1 done: 3 of 3 steps")
+    assert state(plugin)["finish_pending"] is True
+
+
+@pytest.mark.parametrize("surface,eligible", [
+    ("telegram", True), ("discord", True), ("slack", True), ("desktop", True), ("tui", True),
+    ("DeSkToP", True), ("cli", False), ("", False), ("local", False), ("terminal", False),
+    ("api_server", False), ("webhook", False), ("cron", False), ("batch", False),
+    ("subagent", False), ("curator", False), ("acp", False), ("dashboard", False),
+    # Platforms without in-place edits would get a new message per update.
+    ("signal", False), ("sms", False), ("email", False), ("matrix", True), ("mattermost", True),
+])
+def test_surfaces(chat, session_env, surface, eligible):
+    plugin, _, messages = chat
+    session_env["HERMES_SESSION_PLATFORM"] = surface
+    write_todos(plugin, todos("pending"))
+    assert len(messages.posts) == int(eligible)
+
+
+@pytest.mark.parametrize("surface,environment,eligible", [("desktop", "local", True), ("cli", "telegram", False)])
+def test_host_surface_wins(chat, session_env, surface, environment, eligible):
+    plugin, _, messages = chat
+    session_env["HERMES_SESSION_PLATFORM"] = environment
+    plugin.ctx.session_surface = lambda: surface
+    write_todos(plugin, todos("pending"))
+    assert len(messages.posts) == int(eligible)
+
+
+@pytest.mark.parametrize("surface", [None, "", 42])
+def test_invalid_host_surface_falls_back(chat, surface):
+    plugin, _, messages = chat
+    plugin.ctx.session_surface = lambda: surface
+    write_todos(plugin, todos("pending"))
+    assert len(messages.posts) == 1
+
+
+@pytest.mark.parametrize("setting,eligible", [(False, False), (True, True), (0, True), (None, True)])
+def test_setting_only_false_disables(chat, setting, eligible):
+    plugin, _, messages = chat
+    plugin.ctx.settings["progress_card"] = setting
+    write_todos(plugin, todos("pending"))
+    assert len(messages.posts) == int(eligible)
+
+
+def test_missing_post_preserves_state(chat):
+    plugin, _, messages = chat
+    before = copy.deepcopy(state(plugin))
+    items = todos("completed", "pending")
+    write_todos(plugin, items)
+    expected = copy.deepcopy(state(plugin))
+    plugin._save_state("sk:unit-session", before)
+    del plugin.ctx.post_message
+    assert write_todos(plugin, items) is None
+    assert state(plugin) == expected
+    assert expected["progress"] == {"total": 2, "completed": 1, "cancelled": 0, "current": ""}
+    assert len(messages.posts) == 1
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_failed_post_is_not_retried_and_preserves_state(chat, raises):
+    plugin, _, messages = chat
+    calls = []
+
+    def post(text):
+        calls.append(text)
+        if raises:
+            raise RuntimeError("unavailable")
+        handle = Handle()
+        handle.ok = False
+        return handle
+
+    plugin.ctx.settings["progress_card"] = False
+    before = copy.deepcopy(state(plugin))
+    write_todos(plugin, todos("pending", "pending"))
+    expected = copy.deepcopy(state(plugin))
+    plugin._save_state("sk:unit-session", before)
+    plugin.ctx.settings["progress_card"] = True
+    plugin.ctx.post_message = post
+    assert write_todos(plugin, todos("pending", "pending")) is None
+    assert state(plugin) == expected
+    assert write_todos(plugin, todos("completed", "pending")) is None
+    assert state(plugin)["progress"]["completed"] == 1
+    assert len(calls) == 1 and not messages.posts
+
+
+def test_slow_edit_does_not_block_hook(chat):
+    plugin, _, messages = chat
+    write_todos(plugin, todos("pending", "pending"))
+    entered = threading.Event()
+
+    def slow_edit(text):
+        entered.set()
+        time.sleep(1)
+        messages.handles[0].edits.append(text)
+        return {"ok": True}
+
+    messages.handles[0].edit = slow_edit
+    start = time.monotonic()
+    write_todos(plugin, todos("completed", "pending"))
+    elapsed = time.monotonic() - start
+    assert entered.wait(1)
+    assert elapsed < 0.5
+    assert not plugin._progress_cards.drain(0.01)
+    assert plugin._progress_cards.drain(2)
+
+
+def test_planning_todos_never_post(card, session_env):
+    plugin, _, _ = card
+    session_env["HERMES_SESSION_PLATFORM"] = "telegram"
+    messages = Messages(plugin)
+    plugin.ctx.post_message = messages.post
+    write_todos(plugin, todos("pending"))
+    assert not messages.posts and "progress" not in state(plugin)
+
+
+def test_only_successful_todo_writes_post(chat):
+    plugin, _, messages = chat
+    result = json.dumps({"todos": todos("pending")})
+    plugin.post_tool_call("todo_list", {}, status="ok", result=result)
+    plugin.post_tool_call("todo_list", {"todos": todos("pending")}, status="error", result=result)
+    plugin.post_tool_call("other", {"todos": todos("pending")}, status="ok", result=result)
+    assert not messages.posts and "progress" not in state(plugin)
+    write_todos(plugin, todos("pending"), tool="todo")
+    assert len(messages.posts) == 1
+
+
+def test_new_revision_and_path_get_new_cards(chat):
+    plugin, path, messages = chat
+    write_todos(plugin, todos("pending", "pending"))
+    current = state(plugin)
+    current["approved_revision"] = 2
+    plugin._save_state("sk:unit-session", current)
+    write_todos(plugin, todos("completed", "pending"))
+    current = state(plugin)
+    current["approved_path"] = str(path.with_name("another.md"))
+    plugin._save_state("sk:unit-session", current)
+    write_todos(plugin, todos("completed", "pending"))
+    assert len(messages.posts) == 3
+    assert messages.posts[1].startswith("Plan rev 2: 1 of 2 done")
+    assert not any(handle.edits for handle in messages.handles)
+
+
+def test_classic_completion_keeps_final_card(chat):
+    plugin, _, messages = chat
+    plugin.ctx.settings["levers"] = "approval_card"
+    write_todos(plugin, todos("completed"))
+    assert messages.posts == ["✅ Plan rev 1 done: 1 of 1 steps\n✓ Step 0"]
+    assert "phase" not in state(plugin)
+
+
+def test_render_limit_and_content():
+    items = todos(*(["pending"] * 10))
+    items[0]["content"] = "  multi\nline\t content  "
+    items[1]["content"] = "x" * 61
+    lines = render.progress_card(1, json.dumps({"todos": items})).splitlines()
+    assert len(lines) == 10
+    assert lines[1] == "○ multi line content"
+    assert lines[2] == "○ " + "x" * 59 + "…"
+    assert lines[-1] == "… and 2 more"
+
+
+def test_render_cancelled_and_no_revision():
+    result = json.dumps({"todos": todos("completed", "cancelled", "pending")})
+    assert render.progress_card(None, result) == "Plan: 1 of 3 done, 1 cancelled\n✓ Step 0\n✗ Step 1\n○ Step 2"
+    result = json.dumps({"todos": todos("completed", "cancelled")})
+    assert render.progress_card(2, result) == "✅ Plan rev 2 done: 1 of 2 steps (1 cancelled)\n✓ Step 0\n✗ Step 1"
+
+
+@pytest.mark.parametrize("result", [None, "bad", "null", "[]", "{}", '{"todos": []}',
+    '{"todos": [1]}', '{"todos": [{"content": 3, "status": "pending"}]}',
+    '{"todos": [{"content": "x", "status": []}]}', '{"todos": [{"content": "x", "status": "bad"}]}'])
+def test_render_malformed_is_empty(result):
+    assert render.progress_card(1, result) == ""
+
+
+def test_delivery_coalesces_and_uses_one_daemon():
+    cards = ProgressCards()
+    entered, release = threading.Event(), threading.Event()
+    handle = Handle()
+    threads = []
+
+    def edit(text):
+        threads.append(threading.current_thread())
+        if text == "second":
+            entered.set()
+            assert release.wait(2)
+        handle.edits.append(text)
+        return {"ok": True}
+
+    handle.edit = edit
+    cards.update("key", "first", lambda text: handle)
+    cards.update("key", "second", None)
+    try:
+        assert entered.wait(1)
+        cards.update("key", "third", None)
+        cards.update("key", "latest", None)
+        cards.update("key", "latest", None)
+    finally:
+        release.set()
+    assert cards.drain(2)
+    assert handle.edits == ["second", "latest"]
+    assert len(set(threads)) == 1 and threads[0].daemon
+    assert threads[0].name == "plan-mode-progress-card"
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_edit_failure_keeps_handle(raises):
+    cards = ProgressCards()
+    handle = Handle()
+
+    def edit(text):
+        handle.edits.append(text)
+        if raises:
+            raise RuntimeError("unavailable")
+        return {"ok": False}
+
+    handle.edit = edit
+    cards.update("key", "first", lambda text: handle)
+    for text in ("second", "third"):
+        cards.update("key", text, None)
+        assert cards.drain(2)
+    assert handle.edits == ["second", "third"]
+
+
+def test_delivery_is_bounded_and_empty_updates_do_nothing():
+    cards = ProgressCards()
+    posts = []
+
+    def post(text):
+        posts.append(text)
+        return Handle()
+
+    cards.update("empty", "", post)
+    for key in range(257):
+        cards.update(key, str(key), post)
+    assert len(cards._cards) == 256 and 0 not in cards._cards
+    cards.update(0, "new card", post)
+    assert len(posts) == 258 and cards.drain(1)
+
+
+def test_progress_card_config_schema():
+    from pathlib import Path
+    schema = yaml.safe_load((Path(__file__).parents[1] / "plugin.yaml").read_text())["config_schema"]["progress_card"]
+    assert schema["type"] == "bool" and schema["default"] is True
+    assert schema["label"] == "Progress card"

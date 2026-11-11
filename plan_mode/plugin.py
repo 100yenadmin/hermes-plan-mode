@@ -29,10 +29,11 @@ from .approval import (
     DecisionLedger, approval_text, clarify_answer, edit_review_text, gate_bypassed,
     is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
 )
+from .progress_card import ProgressCards
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
     BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
-    block_receipt, finish_receipt, no_commits, plan_file_stamp, plan_text, planning_note, response_footer, todo_progress,
+    block_receipt, finish_receipt, no_commits, plan_file_stamp, plan_text, planning_note, progress_card, response_footer, todo_progress,
 )
 
 READ_ONLY_TOOLS = frozenset(
@@ -111,6 +112,12 @@ _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
 _RECEIPT_SKIP_PLATFORMS = frozenset({"api_server", "webhook", "cron"})  # cron output can be delivered to a chat
 _RECEIPT_SESSIONS = 64
+# Progress card: only surfaces that replace a plugin message in place (Hermes 0.23: the Desktop/Ink TUI keyed notice,
+# and messaging adapters with edit_message). Elsewhere each update would arrive as a new message or a turn-end line.
+_PROGRESS_CARD_SURFACES = frozenset({
+    "tui", "desktop", "telegram", "discord", "slack", "matrix", "mattermost", "whatsapp", "feishu", "dingtalk",
+    "google_chat",
+})
 _FOOTER_ALLOWANCE = 80  # room left for a footer or pointer after the receipt on chat platforms
 _RECEIPT_CALLS = 3
 _RECEIPT_TURNS = 8  # per session: delegated children share their parent's key but run their own turns
@@ -657,6 +664,7 @@ class PlanModePlugin:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
         self._lock = threading.RLock()
+        self._progress_cards = ProgressCards()
         self._ledger = DecisionLedger()
         self._active_keys: set[str] = set()
         # (session_id, tool_call_id) -> (state key, targets, activation id, fresh candidates).
@@ -2517,6 +2525,7 @@ class PlanModePlugin:
 
     def post_tool_call(self, tool_name: str = "", args: Any = None, **kwargs: Any) -> None:
         """Make a pending plan write approvable only after Hermes reports ``ok``."""
+        card_update = None
         if kwargs.get("status") == "blocked":
             self._record_block(tool_name, args, kwargs)
         elif kwargs.get("status") == "ok" and tool_name in PLAN_WRITERS:
@@ -2618,6 +2627,9 @@ class PlanModePlugin:
                     if state.get("phase") == "executing" or ("approval_card" in self._levers() and state.get("edit_review")):
                         progress = todo_progress(kwargs.get("result"))
                         if progress is not None:
+                            # Capture before classic completion clears the approved identity.
+                            card_key = (_state_storage_key(state_key), state.get("approved_path"), state.get("approved_revision"))
+                            card_text = progress_card(state.get("approved_revision"), kwargs.get("result"))
                             state["progress"] = progress
                             if progress["total"] > 0 and progress["completed"] + progress["cancelled"] == progress["total"]:
                                 if {"todo_batch", "todo_inline"} & self._levers():
@@ -2634,6 +2646,7 @@ class PlanModePlugin:
                             assert state_key is not None
                             self._save_state(state_key, state)
                             self._sync_execution_family(_state_storage_key(state_key), state)
+                            card_update = (card_key, card_text, identity.surface)
                     return
                 call_args = args if isinstance(args, dict) else {}
                 if tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit":
@@ -2694,6 +2707,31 @@ class PlanModePlugin:
                     self._remember_plan_targets(state_key, state, targets)
         except Exception:
             return  # An observer failure leaves the write unapprovable (fail-closed).
+        finally:
+            # Returns above leave the with-block first: no network IO under the state lock.
+            if card_update is not None:
+                self._update_progress_card(*card_update)
+
+    def _update_progress_card(self, card_key, text, surface):
+        try:
+            if self._config("progress_card", True) is False:
+                return
+            post = getattr(self.ctx, "post_message", None)
+            if not callable(post):
+                return
+            session_surface = getattr(self.ctx, "session_surface", None)
+            if callable(session_surface):
+                try:
+                    reported = session_surface()
+                except Exception:
+                    reported = None
+                if isinstance(reported, str) and reported.strip():
+                    surface = reported
+            if str(surface or "").strip().lower() not in _PROGRESS_CARD_SURFACES:
+                return
+            self._progress_cards.update(card_key, text, post)
+        except Exception:
+            pass  # Display-only: a host capability or setting failure cannot affect the hook.
 
     def pre_llm_call(self, **kwargs: Any) -> dict[str, str] | None:
         try:
