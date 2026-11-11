@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class _Card:
     last_text: str
+    last_seq: int
     handle: Any = None
     pending: str | None = None
     posting: bool = True
@@ -29,13 +30,16 @@ class ProgressCards:
         self._worker = None
         self._editing = 0
 
-    def update(self, card_key, text, post):
+    def update(self, card_key, text, post, seq):
         try:
             if not text:
                 return
             with self._condition:
                 card = self._cards.get(card_key)
                 if card is not None:
+                    if seq <= card.last_seq:
+                        return
+                    card.last_seq = seq
                     if card.failed or card.last_text == text:
                         return
                     card.last_text = card.pending = text
@@ -43,7 +47,7 @@ class ProgressCards:
                         self._start_worker()
                     self._condition.notify_all()
                     return
-                card = _Card(text)
+                card = _Card(text, seq)
                 self._cards[card_key] = card
                 while len(self._cards) > 256:
                     self._cards.popitem(last=False)

@@ -665,6 +665,7 @@ class PlanModePlugin:
         self.ctx = ctx
         self._lock = threading.RLock()
         self._progress_cards = ProgressCards()
+        self._progress_card_seq = 0
         self._ledger = DecisionLedger()
         self._active_keys: set[str] = set()
         # (session_id, tool_call_id) -> (state key, targets, activation id, fresh candidates).
@@ -2628,7 +2629,8 @@ class PlanModePlugin:
                         progress = todo_progress(kwargs.get("result"))
                         if progress is not None:
                             # Capture before classic completion clears the approved identity.
-                            card_key = (_state_storage_key(state_key), state.get("approved_path"), state.get("approved_revision"))
+                            card_key = ((identity.key, _state_storage_key(state_key), state.get("approved_path"),
+                                         state.get("approved_revision")) if state.get("approved_path") else None)
                             card_text = progress_card(state.get("approved_revision"), kwargs.get("result"))
                             state["progress"] = progress
                             if progress["total"] > 0 and progress["completed"] + progress["cancelled"] == progress["total"]:
@@ -2646,7 +2648,10 @@ class PlanModePlugin:
                             assert state_key is not None
                             self._save_state(state_key, state)
                             self._sync_execution_family(_state_storage_key(state_key), state)
-                            card_update = (card_key, card_text, identity.surface)
+                            if (card_key is not None and not _delegated_child()
+                                    and str(kwargs.get("platform") or "").strip().lower() not in _NO_TURN_NOTE_PLATFORMS):
+                                self._progress_card_seq += 1
+                                card_update = (card_key, card_text, identity.surface, self._progress_card_seq)
                     return
                 call_args = args if isinstance(args, dict) else {}
                 if tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit":
@@ -2712,8 +2717,11 @@ class PlanModePlugin:
             if card_update is not None:
                 self._update_progress_card(*card_update)
 
-    def _update_progress_card(self, card_key, text, surface):
+    def _update_progress_card(self, card_key, text, surface, seq):
         try:
+            is_owned = getattr(self._lock, "_is_owned", None)
+            if (callable(is_owned) and is_owned()) or _delegated_child():
+                return
             if self._config("progress_card", True) is False:
                 return
             post = getattr(self.ctx, "post_message", None)
@@ -2729,7 +2737,7 @@ class PlanModePlugin:
                     surface = reported
             if str(surface or "").strip().lower() not in _PROGRESS_CARD_SURFACES:
                 return
-            self._progress_cards.update(card_key, text, post)
+            self._progress_cards.update(card_key, text, post, seq)
         except Exception:
             pass  # Display-only: a host capability or setting failure cannot affect the hook.
 

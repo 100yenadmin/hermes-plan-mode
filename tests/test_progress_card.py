@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from plan_mode import render
+from plan_mode import plugin as pm
 from plan_mode.progress_card import ProgressCards
 from test_approval_card import APPROVE, answer_card, card, state  # noqa: F401 (fixtures)
 from test_finish_receipt import building  # noqa: F401 (fixture)
@@ -227,6 +228,86 @@ def test_classic_completion_keeps_final_card(chat):
     assert "phase" not in state(plugin)
 
 
+@pytest.mark.parametrize("child,platform", [(True, "telegram"), (False, "SuBaGeNt"), (False, "CuRaToR")])
+def test_delegated_todos_preserve_state_without_card_delivery(chat, monkeypatch, child, platform):
+    plugin, _, messages = chat
+    plugin.ctx.session_surface = lambda: "telegram"  # Child inherits the parent's host binding.
+    write_todos(plugin, todos("pending"))
+    before = copy.deepcopy(state(plugin))
+    items = todos("completed")
+    plugin.ctx.settings["progress_card"] = False
+    assert write_todos(plugin, items, platform=platform) is None
+    expected = copy.deepcopy(state(plugin))
+    plugin._save_state("sk:unit-session", before)
+    plugin.ctx.settings["progress_card"] = True
+    monkeypatch.setattr(pm, "_delegated_child", lambda: child)
+    assert write_todos(plugin, items, platform=platform) is None
+    assert state(plugin) == expected
+    assert expected["progress"]["completed"] == 1
+    assert plugin._progress_cards.drain(2)
+    assert len(messages.posts) == 1 and not messages.handles[0].edits
+
+
+def test_out_of_order_hook_delivery_keeps_completion(chat, monkeypatch):
+    plugin, _, messages = chat
+    captured = []
+    deliver = plugin._update_progress_card
+    monkeypatch.setattr(plugin, "_update_progress_card", lambda *update: captured.append(update))
+    write_todos(plugin, todos("pending"))
+    write_todos(plugin, todos("completed"))
+    assert len(captured) == 2 and captured[0][-1] < captured[1][-1]
+    deliver(*captured[1])
+    deliver(*captured[0])
+    assert plugin._progress_cards.drain(2)
+    assert messages.posts == ["✅ Plan rev 1 done: 1 of 1 steps\n✓ Step 0"]
+    assert not messages.handles[0].edits
+
+
+def test_reentrant_hook_preserves_state_without_posting(chat):
+    plugin, _, messages = chat
+    before = copy.deepcopy(state(plugin))
+    plugin.ctx.settings["progress_card"] = False
+    write_todos(plugin, todos("completed"))
+    expected = copy.deepcopy(state(plugin))
+    plugin._save_state("sk:unit-session", before)
+    plugin.ctx.settings["progress_card"] = True
+    attempted = []
+    plugin.ctx.post_message = lambda text: attempted.append(text)
+    with plugin._lock:
+        assert write_todos(plugin, todos("completed")) is None
+    assert state(plugin) == expected
+    assert not attempted and not messages.posts
+
+
+def test_edit_review_without_approved_plan_preserves_state_without_posting(chat):
+    plugin, _, messages = chat
+    current = state(plugin)
+    current.pop("phase", None)
+    current.pop("approved_path", None)
+    current["edit_review"] = {"key": "plan-mode-edit:test"}
+    plugin._save_state("sk:unit-session", current)
+    assert write_todos(plugin, todos("pending")) is None
+    after = state(plugin)
+    assert after["progress"]["total"] == 1
+    assert after["edit_review"] == current["edit_review"]
+    assert not messages.posts
+
+
+def test_sessions_sharing_state_get_separate_cards(chat, monkeypatch):
+    plugin, _, messages = chat
+    shared = state(plugin)
+    monkeypatch.setattr(plugin, "_state_for_hook", lambda identity: ("sk:unit-session", shared))
+    monkeypatch.setattr(pm, "derive_session_identity", lambda platform: pm.SessionIdentity("sk:first", surface="telegram"))
+    write_todos(plugin, todos("pending", "pending"))
+    monkeypatch.setattr(pm, "derive_session_identity", lambda platform: pm.SessionIdentity("sk:second", surface="telegram"))
+    write_todos(plugin, todos("completed", "pending"))
+    assert plugin._progress_cards.drain(2)
+    assert len(messages.posts) == 2
+    assert messages.posts[0].startswith("Plan rev 1: 0 of 2 done")
+    assert messages.posts[1].startswith("Plan rev 1: 1 of 2 done")
+    assert not any(handle.edits for handle in messages.handles)
+
+
 def test_render_limit_and_content():
     items = todos(*(["pending"] * 10))
     items[0]["content"] = "  multi\nline\t content  "
@@ -267,13 +348,13 @@ def test_delivery_coalesces_and_uses_one_daemon():
         return {"ok": True}
 
     handle.edit = edit
-    cards.update("key", "first", lambda text: handle)
-    cards.update("key", "second", None)
+    cards.update("key", "first", lambda text: handle, 1)
+    cards.update("key", "second", None, 2)
     try:
         assert entered.wait(1)
-        cards.update("key", "third", None)
-        cards.update("key", "latest", None)
-        cards.update("key", "latest", None)
+        cards.update("key", "third", None, 3)
+        cards.update("key", "latest", None, 4)
+        cards.update("key", "latest", None, 5)
     finally:
         release.set()
     assert cards.drain(2)
@@ -294,9 +375,9 @@ def test_edit_failure_keeps_handle(raises):
         return {"ok": False}
 
     handle.edit = edit
-    cards.update("key", "first", lambda text: handle)
-    for text in ("second", "third"):
-        cards.update("key", text, None)
+    cards.update("key", "first", lambda text: handle, 1)
+    for seq, text in enumerate(("second", "third"), 2):
+        cards.update("key", text, None, seq)
         assert cards.drain(2)
     assert handle.edits == ["second", "third"]
 
@@ -309,12 +390,60 @@ def test_delivery_is_bounded_and_empty_updates_do_nothing():
         posts.append(text)
         return Handle()
 
-    cards.update("empty", "", post)
+    cards.update("empty", "", post, 1)
     for key in range(257):
-        cards.update(key, str(key), post)
+        cards.update(key, str(key), post, key + 2)
     assert len(cards._cards) == 256 and 0 not in cards._cards
-    cards.update(0, "new card", post)
+    cards.update(0, "new card", post, 259)
     assert len(posts) == 258 and cards.drain(1)
+
+
+def test_stale_update_during_first_post_is_ignored():
+    cards = ProgressCards()
+    entered, release = threading.Event(), threading.Event()
+    handle = Handle()
+    posts = []
+
+    def post(text):
+        posts.append(text)
+        entered.set()
+        assert release.wait(2)
+        return handle
+
+    thread = threading.Thread(target=cards.update, args=("key", "done", post, 2))
+    thread.start()
+    try:
+        assert entered.wait(1)
+        cards.update("key", "older", None, 1)
+        cards.update("key", "same sequence", None, 2)
+    finally:
+        release.set()
+        thread.join(2)
+    assert not thread.is_alive() and cards.drain(2)
+    assert posts == ["done"] and not handle.edits
+
+
+def test_newer_update_during_first_post_is_kept():
+    cards = ProgressCards()
+    handle = Handle()
+
+    def post(text):
+        cards.update("key", "done", None, 3)
+        cards.update("key", "older", None, 2)
+        return handle
+
+    cards.update("key", "first", post, 1)
+    assert cards.drain(2) and handle.edits == ["done"]
+
+
+def test_identical_text_still_advances_sequence():
+    cards = ProgressCards()
+    handle = Handle()
+    cards.update("key", "done", lambda text: handle, 1)
+    cards.update("key", "done", None, 3)
+    cards.update("key", "older", None, 2)
+    cards.update("key", "same sequence", None, 3)
+    assert cards.drain(2) and not handle.edits
 
 
 def test_progress_card_config_schema():
