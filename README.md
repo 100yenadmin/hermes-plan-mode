@@ -54,6 +54,9 @@ It works on every interactive Hermes surface (CLI, TUI, Desktop and the messagin
 - **It builds in the same turn** and tracks progress in a todo list. With Allow commits off (the default), terminal
   `git commit` and `git push` stay blocked while the plan runs, unless you ask for a commit. When the plan is done,
   the reply says so in one line.
+- **A live progress card** on Telegram, Discord, Slack, Desktop and the TUI: one message lists the plan's steps and
+  updates as each one finishes (✓ done, ▶ now, ○ next), ending with "✅ Plan rev N done". The classic CLI keeps Hermes'
+  own todo list.
 - **Wherever you use Hermes:** the same card on the CLI, TUI and Desktop, and as buttons on Telegram, Slack and
   Discord.
 
@@ -285,6 +288,7 @@ plan-mode row under **Capabilities ▸ Plugins**.
 |---|---|---|
 | Enforce core /plan (`enforce_builtin_plan`) | on | Core `/plan` turns on enforced plan mode for the session |
 | Agent hint (`agent_hint`) | on | The ≤200-char system-prompt hint naming `plan_mode`. It applies when Hermes next loads plugins: a new CLI process, or a restart of the gateway or app |
+| Progress card (`progress_card`) | on | While an approved plan is being built, one message lists its steps and updates as they finish. Shown on Desktop, the TUI and chat platforms that edit messages in place (Telegram, Discord, Slack, Matrix, Mattermost, WhatsApp, Feishu, DingTalk, Google Chat); needs Hermes 0.22.7 or newer. The classic CLI shows Hermes' own todo list instead |
 | Chat footer (`footer`) | `auto` | `auto` or `off`: the one-line plan/progress footer on chat platforms. Off also turns off the approval pointer and the blocked-calls line on every surface |
 | Extra read-only tools (`extra_allowed_tools`) | none | Exact tool names you vouch for as read-only; plan mode lets them run |
 | Plan profile (`plan_profile`) | `lean` | `lean`: faster, leaner compact plans (see below). `classic`: the 0.3.5 behaviour. Lean applies with Plan style `compact` and no Plan skill |
@@ -504,18 +508,18 @@ plugins:
 
 ## Compared with other plan modes
 
-| | Claude Code | Codex | Hermes `/plan` | plan-mode 1.4 |
+| | Claude Code | Codex | Hermes `/plan` | plan-mode 1.5 |
 |---|---|---|---|---|
 | Writes blocked except the plan | yes | prompt only | no | yes, for tools that pass `pre_tool_call` |
 | Approval prompt after the plan | dialog | "Implement this plan?" | no | a `clarify` card (lean default) or Hermes' approval prompt, every interactive surface |
 | Clarifying questions | AskUserQuestion | request_user_input | not prompted | `clarify`, prompted; an opt-in interview (Questions: `thorough`) |
 | Deny with feedback, revise | yes | yes | no | yes; Other on the card, gateway `/deny <reason>`, otherwise the agent asks |
 | Implement after approval | same turn | one click, as a new turn | no | same turn via the prompt; typed approve may need a message |
-| Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list`, a footer on chat platforms and a finish line |
+| Progress | Tasks / TodoWrite | update_plan | `todo_list` | `todo_list`, a live progress card (chat, Desktop, TUI), a footer on chat platforms and a finish line |
 | Agent may enter | yes | no | no | yes |
 | Autonomy choice / clear context at approval | yes | partial | no | auto-accept or review each edit; no clear context |
 
-The plan-mode column is version 1.4 (November 2026). The Claude Code and Codex columns describe those products as
+The plan-mode column is version 1.5 (November 2026). The Claude Code and Codex columns describe those products as
 documented and as run in our October 2026 benchmarks (below); either may have changed since.
 
 ### Measured against Codex plan mode
@@ -753,7 +757,7 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
   linked tab has plan mode on; retry from the owning tab after one turn there.
-- **Resuming an approved plan.** Durable resume is not supported yet, as of 1.4 (planned:
+- **Resuming an approved plan.** Durable resume is not supported yet, as of 1.5 (planned:
   [#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
   - **Hermes restart:** classic CLI execution state belongs to its process ID and is cleared on normal exit; a new
     CLI process does not recover its execution pointer. Other surfaces can read retained state only when their
@@ -792,9 +796,11 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Approval choices cover file tools:** the lean card offers auto-accept or review each `write_file` / `patch`
   when Hermes approvals are on (see The lean profile). It does not offer **clear-context-and-implement**
   (not reachable from a plugin).
-- **No live mid-turn plan or progress card.** Progress shows as a footer at the end of each reply. Hermes 0.22.3 and
-  newer let a plugin post a message and edit it in place, which a live progress message could use; plan mode does not
-  use it yet. An interactive plan card and plan-shaped approval wording are proposed upstream in
+- **Progress card limits.** The card follows the build's `todo_list`, so a plan built without todos has no card (the
+  finish line still ends it). It is not shown on the classic CLI (Hermes would print each update as a separate line at
+  the end of the turn), on chat platforms that cannot edit a message, or for API, webhook and cron sessions. It starts
+  with the first todo update after approval, not at approval itself. An interactive plan card and plan-shaped approval
+  wording are proposed upstream in
   [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306).
 - **Footer limits.** Chat platforms only: never CLI, TUI, Desktop (also not for a chat session resumed in Desktop),
   API server, webhook, cron or delegate subagents. Only on replies of 1800 chars or fewer, because adding a footer to
