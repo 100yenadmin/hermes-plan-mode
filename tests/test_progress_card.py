@@ -5,7 +5,6 @@ import threading
 import time
 
 import pytest
-import yaml
 
 from plan_mode import render
 from plan_mode import plugin as pm
@@ -228,6 +227,35 @@ def test_classic_completion_keeps_final_card(chat):
     assert "phase" not in state(plugin)
 
 
+def test_classic_reapproval_posts_separate_cards(chat):
+    plugin, path, messages = chat
+    plugin.ctx.settings["levers"] = "approval_card"
+    executing = state(plugin)
+    executing["approved_revision"] = None
+    executing["approved_at"] = "2026-11-11T00:00:00Z"
+    plugin._save_state("sk:unit-session", executing)
+    write_todos(plugin, todos("in_progress", "pending"))
+    write_todos(plugin, todos("completed", "completed"))
+    assert plugin._progress_cards.drain(2)
+    assert "phase" not in state(plugin)
+    first_edits = list(messages.handles[0].edits)
+    assert first_edits[-1] == "✅ Plan done: 2 of 2 steps\n✓ Step 0\n✓ Step 1"
+
+    executing["approved_at"] = "2026-11-11T00:00:01Z"
+    plugin._save_state("sk:unit-session", executing)
+    assert state(plugin)["approved_path"] == str(path)
+    assert state(plugin)["approved_revision"] is None
+    write_todos(plugin, todos("in_progress", "pending"))
+    write_todos(plugin, todos("completed", "in_progress"))
+    assert plugin._progress_cards.drain(2)
+    write_todos(plugin, todos("completed", "completed"))
+    assert plugin._progress_cards.drain(2)
+    assert "phase" not in state(plugin)
+    assert messages.posts == ["Plan: 0 of 2 done\n▶ Step 0\n○ Step 1"] * 2
+    assert messages.handles[0].edits == first_edits
+    assert messages.handles[1].edits[-1] == "✅ Plan done: 2 of 2 steps\n✓ Step 0\n✓ Step 1"
+
+
 @pytest.mark.parametrize("child,platform", [(True, "telegram"), (False, "SuBaGeNt"), (False, "CuRaToR")])
 def test_delegated_todos_preserve_state_without_card_delivery(chat, monkeypatch, child, platform):
     plugin, _, messages = chat
@@ -324,6 +352,36 @@ def test_render_cancelled_and_no_revision():
     assert render.progress_card(None, result) == "Plan: 1 of 3 done, 1 cancelled\n✓ Step 0\n✗ Step 1\n○ Step 2"
     result = json.dumps({"todos": todos("completed", "cancelled")})
     assert render.progress_card(2, result) == "✅ Plan rev 2 done: 1 of 2 steps (1 cancelled)\n✓ Step 0\n✗ Step 1"
+
+
+def test_render_window_contains_late_running_step():
+    items = todos(*(["completed"] * 9), "in_progress", "pending", "pending")
+    assert render.progress_card(1, json.dumps({"todos": items})).splitlines() == [
+        "Plan rev 1: 9 of 12 done",
+        "… 4 earlier",
+        "✓ Step 4",
+        "✓ Step 5",
+        "✓ Step 6",
+        "✓ Step 7",
+        "✓ Step 8",
+        "▶ Step 9",
+        "○ Step 10",
+        "○ Step 11",
+    ]
+
+
+def test_render_window_keeps_early_running_step():
+    items = todos("completed", "in_progress", *(["pending"] * 10))
+    lines = render.progress_card(1, json.dumps({"todos": items})).splitlines()
+    assert lines == ["Plan rev 1: 1 of 12 done", "✓ Step 0", "▶ Step 1",
+                     *[f"○ Step {i}" for i in range(2, 8)], "… and 4 more"]
+
+
+def test_render_window_all_completed_starts_at_zero():
+    items = todos(*(["completed"] * 12))
+    lines = render.progress_card(1, json.dumps({"todos": items})).splitlines()
+    assert lines == ["✅ Plan rev 1 done: 12 of 12 steps",
+                     *[f"✓ Step {i}" for i in range(8)], "… and 4 more"]
 
 
 @pytest.mark.parametrize("result", [None, "bad", "null", "[]", "{}", '{"todos": []}',
@@ -447,6 +505,7 @@ def test_identical_text_still_advances_sequence():
 
 
 def test_progress_card_config_schema():
+    yaml = pytest.importorskip("yaml")
     from pathlib import Path
     schema = yaml.safe_load((Path(__file__).parents[1] / "plugin.yaml").read_text())["config_schema"]["progress_card"]
     assert schema["type"] == "bool" and schema["default"] is True

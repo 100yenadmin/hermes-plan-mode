@@ -799,7 +799,8 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 - **Progress card limits.** The card follows the build's `todo_list`, so a plan built without todos has no card (the
   finish line still ends it). It is not shown on the classic CLI (Hermes would print each update as a separate line at
   the end of the turn), on chat platforms that cannot edit a message, or for API, webhook and cron sessions. It starts
-  with the first todo update after approval, not at approval itself. An interactive plan card and plan-shaped approval
+  with the first todo update after approval, not at approval itself. On plans with more than eight steps it shows the
+  eight around the current one. An interactive plan card and plan-shaped approval
   wording are proposed upstream in
   [NousResearch/hermes-agent#133306](https://github.com/NousResearch/hermes-agent/issues/133306).
 - **Footer limits.** Chat platforms only: never CLI, TUI, Desktop (also not for a chat session resumed in Desktop),

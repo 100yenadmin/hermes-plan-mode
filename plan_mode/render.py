@@ -341,13 +341,19 @@ def progress_card(revision, result) -> str:
     else:
         head += f": {completed} of {total} done" + (f", {cancelled} cancelled" if cancelled else "")
     lines = [head]
-    for todo in todos[:8]:
+    focus = next((i for i, todo in enumerate(todos) if todo["status"] == "in_progress"), None)
+    if focus is None:
+        focus = next((i for i, todo in enumerate(todos) if todo["status"] == "pending"), 0)
+    start = max(0, min(focus - 3, total - 8))
+    if start > 0:
+        lines.append(f"… {start} earlier")
+    for todo in todos[start:start + 8]:
         content = " ".join(todo["content"].split())
         if len(content) > 60:
             content = content[:59] + "…"
         lines.append(f"{markers[todo['status']]} {content}")
-    if total > 8:
-        lines.append(f"… and {total - 8} more")
+    if start + 8 < total:
+        lines.append(f"… and {total - start - 8} more")
     return "\n".join(lines)
 
 

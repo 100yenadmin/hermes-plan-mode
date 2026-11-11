@@ -2630,7 +2630,7 @@ class PlanModePlugin:
                         if progress is not None:
                             # Capture before classic completion clears the approved identity.
                             card_key = ((identity.key, _state_storage_key(state_key), state.get("approved_path"),
-                                         state.get("approved_revision")) if state.get("approved_path") else None)
+                                         state.get("approved_revision"), state.get("approved_at")) if state.get("approved_path") else None)
                             card_text = progress_card(state.get("approved_revision"), kwargs.get("result"))
                             state["progress"] = progress
                             if progress["total"] > 0 and progress["completed"] + progress["cancelled"] == progress["total"]:
