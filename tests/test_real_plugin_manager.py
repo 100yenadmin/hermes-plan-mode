@@ -1152,6 +1152,9 @@ def test_u2_real_hint_section_accepted(real_u2_host):
         section = next((section for section in sections if section.id == "plan-mode.hint"), None)
         assert section is not None
         assert "plan_mode" in section.content and len(section.content) <= 200
+        # #92: a delegate_task child (platform "subagent") is not nudged to enter its parent's plan mode.
+        child = accessor({"session_id": "u2-child", "platform": "subagent"})
+        assert all(section.id != "plan-mode.hint" for section in child)
     else:
         assert host.manager._plugins["plan-mode"].enabled
 
