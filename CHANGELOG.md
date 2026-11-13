@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.1 - 2026-11-13
+
+- **A helper can no longer lock its parent session.** A `delegate_task` helper shares its parent's session, so when
+  one turned plan mode on, the parent and the other helpers were blocked mid-turn, and the parent saw plan mode as
+  both on and off (#92). In a helper, `plan_mode` `on`, `off` and `submit` are now refused and change nothing;
+  `status`, `inspect` and `list` still answer. The plan-mode hint is no longer added to helpers' prompts.
+
 ## 1.5.0 - 2026-11-11
 
 - **A live progress card.** While an approved plan is being built, one message lists its steps and updates as each
