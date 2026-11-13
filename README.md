@@ -257,9 +257,14 @@ does not, which happens when a tool selection was saved there without it. Add `p
 The tool cannot approve or reject a plan. Approval is your act, recorded by Hermes' approval hooks or the
 plugin-issued `clarify` question's answer when Hermes approves automatically.
 
+A helper started with `delegate_task` shares its parent's session, so in a helper `on`, `off` and `submit` are
+refused and change nothing: plan mode stays with your session, and a helper cannot lock you or other helpers out of
+tools. `status`, `inspect` and `list` still answer. While your session is in plan mode, its helpers are held to the
+same lock.
+
 On hosts with Tool Search on (the default from v2026.9.24), plugin tools sit behind `tool_search`, which plan mode
-allows. The plugin adds a short system-prompt hint (≤200 chars) naming `plan_mode` for multi-step or risky changes,
-and the planning turn note tells the model to search for `plan_mode` if it is not loaded. `/plan` and
+allows. The plugin adds a short system-prompt hint (≤200 chars) naming `plan_mode` for multi-step or risky changes
+(not to `delegate_task` helpers or the curator), and the planning turn note tells the model to search for `plan_mode` if it is not loaded. `/plan` and
 `/planmode on` stay the reliable way in.
 
 ## What is allowed in plan mode

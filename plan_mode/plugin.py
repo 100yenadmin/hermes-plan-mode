@@ -121,6 +121,11 @@ _PROGRESS_CARD_SURFACES = frozenset({
 _FOOTER_ALLOWANCE = 80  # room left for a footer or pointer after the receipt on chat platforms
 _RECEIPT_CALLS = 3
 _RECEIPT_TURNS = 8  # per session: delegated children share their parent's key but run their own turns
+_CHILD_REFUSAL = (
+    "plan_mode refused: you are a delegated helper (delegate_task), and plan mode belongs to the user's session, "
+    "so a helper cannot turn it on or off or submit a plan. Nothing changed. Put your plan in your result instead; "
+    "status, inspect and list still work."
+)
 
 
 def _block_detail(args: Any) -> str:
@@ -727,7 +732,13 @@ class PlanModePlugin:
             register_section = getattr(self.ctx, "register_system_prompt_section", None)
             if self._config("agent_hint", True) is not False and callable(register_section):
                 hint = AGENT_HINT_BRIDGE if "bridge_calls" in self._levers() else AGENT_HINT
-                register_section("plan-mode.hint", hint, position="after_memory", max_chars=200)
+
+                def _hint_section(info: Any = None) -> str:
+                    # Delegated children and the curator get no nudge: plan mode is the user's session's (#92).
+                    platform = str((info.get("platform") if hasattr(info, "get") else "") or "").strip().lower()
+                    return "" if platform in _NO_TURN_NOTE_PLATFORMS or _delegated_child() else hint
+
+                register_section("plan-mode.hint", _hint_section, position="after_memory", max_chars=200)
         except Exception:
             pass  # A cosmetic discovery hint must not prevent enforcement registration.
         try:
@@ -1218,7 +1229,11 @@ class PlanModePlugin:
         """Agent-callable plan mode, including completion of a human-approved submission."""
         call_args = args if isinstance(args, dict) else {}
         action = str(call_args.get("action") or "").strip().lower()
-        if action in {"on", "status", "off", "submit", "inspect", "list"}:
+        if action in {"on", "off", "submit"} and _delegated_child():
+            # A delegate_task child shares its parent's session key: its on/off/submit would lock, unlock or submit
+            # for the parent and its sibling children (#92). Read-only actions still answer.
+            message = _CHILD_REFUSAL
+        elif action in {"on", "status", "off", "submit", "inspect", "list"}:
             reason = str(call_args.get("reason") or "").strip()
             message = self._run_command(action, reason, entered_by="agent")
         else:
@@ -2350,6 +2365,10 @@ class PlanModePlugin:
         try:
             call_args = args if isinstance(args, dict) else {}
             is_submit = tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit"
+            if (tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() in {"on", "off", "submit"}
+                    and _delegated_child()):
+                # Before any bookkeeping: a child's submit would otherwise replace the parent's submission here (#92).
+                return {"action": "block", "message": _CHILD_REFUSAL}
             with self._lock:
                 self._prune_dead_cli_states()
             identity = derive_session_identity(str(kwargs.get("platform") or ""))

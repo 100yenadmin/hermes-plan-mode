@@ -657,7 +657,7 @@ def test_043_todo_inline(make_plugin, inline, batch):
 def test_043_agent_bridge(make_plugin, profile, levers, bridge):
     plugin = make_plugin(levers, plan_profile=profile)
     assert len(render.AGENT_HINT_BRIDGE) <= 200
-    assert plugin.ctx.sections["plan-mode.hint"]["content"] == (render.AGENT_HINT_BRIDGE if bridge else render.AGENT_HINT)
+    assert plugin.ctx.sections["plan-mode.hint"]["content"]({"platform": "cli"}) == (render.AGENT_HINT_BRIDGE if bridge else render.AGENT_HINT)
     expected, absent = (pm._AGENT_NOTE_BRIDGE, pm._AGENT_NOTE) if bridge else (pm._AGENT_NOTE, pm._AGENT_NOTE_BRIDGE)
     result = json.loads(plugin.tool({"action": "on"}))["message"]
     assert expected in result and absent not in result
