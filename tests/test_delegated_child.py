@@ -5,7 +5,7 @@ import pytest
 
 from plan_mode import plugin as pm
 from plan_mode import render
-from test_levers import make_plugin, write_plan
+from test_levers import IDS, approve_gate, make_plugin, write_plan
 from test_plan_mode import session_env
 
 
@@ -23,6 +23,18 @@ def _state(plugin):
 
 def _tool(plugin, **args):
     return json.loads(plugin.tool(args))["message"]
+
+
+def _call(plugin, **args):
+    """What Hermes does: pre_tool_call first, then the handler only if the hook did not block."""
+    gate = plugin.pre_tool_call("plan_mode", args, **IDS)
+    if gate is not None:
+        return gate
+    return {"action": "ran", "message": _tool(plugin, **args)}
+
+
+def _bookkeeping(plugin):
+    return (_state(plugin), dict(plugin._ledger._entries), set(plugin._open_asks), dict(plugin._card_baselines))
 
 
 @pytest.mark.parametrize("profile", ["classic", "lean"])
@@ -98,3 +110,45 @@ def test_hint_tolerates_missing_session_info(make_plugin, child):
     section = make_plugin(plan_profile="classic").ctx.sections["plan-mode.hint"]
     assert section["content"](None) == render.AGENT_HINT
     assert section["content"]({}) == render.AGENT_HINT
+
+
+@pytest.mark.parametrize("profile", ["classic", "lean"])
+def test_child_submit_through_the_hook_leaves_the_parents_submission_alone(make_plugin, child, profile):
+    # Hermes runs pre_tool_call before the handler; the hook prepares a submission, so the refusal must come first.
+    plugin = make_plugin(plan_profile=profile)
+    path = write_plan(plugin)
+    _call(plugin, action="submit", path=str(path))  # the parent's own submit: a gate (classic) or a card (lean)
+    assert plugin._load_state("sk:unit-session").get("submission")
+    before = _bookkeeping(plugin)
+    child["on"] = True
+    gate = _call(plugin, action="submit", path=str(path))
+    assert gate == {"action": "block", "message": pm._CHILD_REFUSAL}
+    assert _bookkeeping(plugin) == before
+    child["on"] = False
+    assert plugin.pre_tool_call("terminal", {"command": "ls"})["action"] == "block"
+
+
+@pytest.mark.parametrize("action", ["on", "off"])
+@pytest.mark.parametrize("parent", ["off", "agent", "user"])
+def test_child_on_off_through_the_hook_change_nothing(make_plugin, child, action, parent):
+    plugin = make_plugin()
+    if parent == "agent":
+        _tool(plugin, action="on", reason="parser")
+    elif parent == "user":
+        plugin.command("on parser")
+    locked = parent != "off"
+    before = _bookkeeping(plugin)
+    child["on"] = True
+    assert _call(plugin, action=action) == {"action": "block", "message": pm._CHILD_REFUSAL}
+    assert _bookkeeping(plugin) == before
+    child["on"] = False
+    gate = plugin.pre_tool_call("terminal", {"command": "ls"})
+    assert (gate is not None and gate["action"] == "block") is locked
+
+
+def test_parent_submit_and_approval_still_work(make_plugin, child):
+    plugin = make_plugin(plan_profile="classic")
+    path = write_plan(plugin)
+    result = approve_gate(plugin, path)
+    assert "approved" in json.dumps(result).lower()
+    assert plugin.pre_tool_call("terminal", {"command": "ls"}) is None

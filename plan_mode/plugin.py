@@ -2365,6 +2365,10 @@ class PlanModePlugin:
         try:
             call_args = args if isinstance(args, dict) else {}
             is_submit = tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() == "submit"
+            if (tool_name == PLAN_MODE_TOOL and str(call_args.get("action") or "").strip().lower() in {"on", "off", "submit"}
+                    and _delegated_child()):
+                # Before any bookkeeping: a child's submit would otherwise replace the parent's submission here (#92).
+                return {"action": "block", "message": _CHILD_REFUSAL}
             with self._lock:
                 self._prune_dead_cli_states()
             identity = derive_session_identity(str(kwargs.get("platform") or ""))
