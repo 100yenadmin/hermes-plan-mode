@@ -31,7 +31,7 @@ from .approval import (
 )
 from .progress_card import ProgressCards
 from .render import (
-    AGENT_HINT, AGENT_HINT_BRIDGE, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
+    AGENT_HINT, AGENT_HINT_BRIDGE, KANBAN_HINT, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
     BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
     block_receipt, finish_receipt, no_commits, plan_file_stamp, plan_text, planning_note, progress_card, response_footer, todo_progress,
 )
@@ -125,6 +125,11 @@ _CHILD_REFUSAL = (
     "plan_mode refused: you are a delegated helper (delegate_task), and plan mode belongs to the user's session, "
     "so a helper cannot turn it on or off or submit a plan. Nothing changed. Put your plan in your result instead; "
     "status, inspect and list still work."
+)
+_KANBAN_REFUSAL = (
+    "Plan mode is unavailable: this is a Kanban worker, with no user session to hold a plan or approve one, so nothing "
+    "changed. The task card is the plan you were assigned: follow its body, and put any open question in your result or a "
+    "card comment."
 )
 
 
@@ -322,6 +327,15 @@ def _session_reader() -> Callable[[str, str], str] | None:
     except Exception:
         return None
     return get_session_env
+
+
+def _kanban_worker(identity: SessionIdentity) -> bool:
+    if identity.unsupported or not (identity.non_cli_without_key or not identity.key):
+        return False
+    if identity.surface.lower() == "kanban":
+        return True
+    reader = _session_reader()
+    return bool(reader and str(reader("HERMES_SESSION_SOURCE", "") or "").strip().lower() == "kanban")
 
 
 def _session_context_is_engaged() -> bool:
@@ -736,7 +750,14 @@ class PlanModePlugin:
                 def _hint_section(info: Any = None) -> str:
                     # Delegated children and the curator get no nudge: plan mode is the user's session's (#92).
                     platform = str((info.get("platform") if hasattr(info, "get") else "") or "").strip().lower()
-                    return "" if platform in _NO_TURN_NOTE_PLATFORMS or _delegated_child() else hint
+                    if platform in _NO_TURN_NOTE_PLATFORMS or _delegated_child():
+                        return ""
+                    try:
+                        if _kanban_worker(derive_session_identity(platform)):
+                            return KANBAN_HINT
+                    except Exception:
+                        pass  # The cosmetic hint must fall back when session identity is unavailable.
+                    return hint
 
                 register_section("plan-mode.hint", _hint_section, position="after_memory", max_chars=200)
         except Exception:
@@ -1073,6 +1094,8 @@ class PlanModePlugin:
                 "required session identity seam (gateway.session_context.get_session_env)."
             )
         if identity.non_cli_without_key or not identity.key:
+            if _kanban_worker(identity):
+                return identity, _KANBAN_REFUSAL
             return identity, (
                 "Plan mode activation was refused: this server surface lacks the required "
                 "session binding. Upgrade Hermes to a version containing the TUI/gateway "
@@ -2376,6 +2399,8 @@ class PlanModePlugin:
                 return _block_message(PLAN_MODE_TOOL, "Cannot submit: session identity is unavailable on this host.") if is_submit else None
             if identity.non_cli_without_key or not identity.key:
                 if is_submit:
+                    if _kanban_worker(identity):
+                        return {"action": "block", "message": _KANBAN_REFUSAL}
                     return _block_message(PLAN_MODE_TOOL, "Cannot submit: the session key could not be derived.")
                 if _cron_session_is_active():
                     return None

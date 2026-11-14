@@ -262,9 +262,14 @@ refused and change nothing: plan mode stays with your session, and a helper cann
 tools. `status`, `inspect` and `list` still answer. While your session is in plan mode, its helpers are held to the
 same lock.
 
+In a Kanban worker without a session key (every Kanban worker on Hermes 0.23.1) plan mode is unavailable, because
+there is no user session to hold or approve a plan: `plan_mode` says so and changes nothing, and the hint tells the
+worker that the task card is its plan.
+
 On hosts with Tool Search on (the default from v2026.9.24), plugin tools sit behind `tool_search`, which plan mode
 allows. The plugin adds a short system-prompt hint (≤200 chars) naming `plan_mode` for multi-step or risky changes
-(not to `delegate_task` helpers or the curator), and the planning turn note tells the model to search for `plan_mode` if it is not loaded. `/plan` and
+(not to `delegate_task` helpers or the curator; keyless Kanban workers get the card-is-the-plan sentence instead),
+and the planning turn note tells the model to search for `plan_mode` if it is not loaded. `/plan` and
 `/planmode on` stay the reliable way in.
 
 ## What is allowed in plan mode
