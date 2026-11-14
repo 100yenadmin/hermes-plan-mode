@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.2 - 2026-11-14
+
+- **Kanban workers are told the card is the plan.** A Kanban worker has no user session to hold or approve a plan, so
+  plan mode was already refused there, but the refusal said to upgrade Hermes, and the plugin's prompt hint pushed
+  workers to try it (#96). The refusal and the hint now say that plan mode is unavailable in a Kanban worker and that
+  the task card is its plan: follow its body and put any open question in the result or a card comment. When plan
+  mode refuses or blocks is unchanged on every surface.
+
 ## 1.5.1 - 2026-11-13
 
 - **A helper can no longer lock its parent session.** A `delegate_task` helper shares its parent's session, so when

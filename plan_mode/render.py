@@ -14,6 +14,10 @@ AGENT_HINT_BRIDGE = (
     'For multi-step or risky changes, enter enforced plan mode first: plan_mode(action="on"), or if it is not in '
     'your tool list tool_call(calls=[{"name": "plan_mode", "arguments": {"action": "on"}}]).'
 )
+KANBAN_HINT = (
+    "In a Kanban worker plan mode is unavailable: the task card is the plan you were assigned. Follow its body and put "
+    "any open question in your result or a card comment."
+)
 TEST_COMMANDS = (
     "Write test-plan commands the way this repo runs its tests (README, Makefile, pyproject or CI config). For a "
     "Python repo that documents none, use python3 -m pytest, not python, which many hosts do not have."
