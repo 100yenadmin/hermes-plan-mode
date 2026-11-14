@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.3 - 2026-11-15
+## 1.5.3 - 2026-11-14
 
 - **Installs no longer ask for confirmation on newer Hermes.** The install scanner in Hermes' upcoming release rated
   plan-mode "caution" because one code comment named a privilege command, so `hermes plugins install` stopped to ask
