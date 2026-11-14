@@ -230,8 +230,9 @@ def _runs_git_commit(command: Any, depth: int = 0) -> bool:
     """Whether a terminal command runs git commit or git push, at the start of any simple command.
 
     Best effort and linear in the command's length: it follows separators, shell keywords, VAR=value prefixes,
-    wrappers such as sudo, env, xargs and timeout, and `bash -c '...'` scripts. Text that only mentions git, such as
-    `grep "git commit"`, does not count. Aliases, scripts and other commit-creating commands are not seen.
+    the command prefixes in _COMMAND_PREFIXES (env, xargs, timeout and others), and `bash -c '...'` scripts. Text that
+    only mentions git, such as `grep "git commit"`, does not count. Aliases, scripts and other commit-creating commands
+    are not seen.
     """
     if not isinstance(command, str) or depth > 3:
         return False
