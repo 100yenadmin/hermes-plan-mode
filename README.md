@@ -939,6 +939,12 @@ For log excerpts, try `hermes logs -n 300 | grep -iE 'plan[-_]mode'`, and `herme
 Remove secrets, private message text and private paths before sharing diagnostics or logs.
 Report approval bypasses or writes outside the plans directory through a [private advisory](https://github.com/100yenadmin/hermes-plan-mode/security/advisories/new).
 
+## Roadmap
+
+The roadmap is the pinned issue [#33](https://github.com/100yenadmin/hermes-plan-mode/issues/33): what ships next, and the
+parked items with the trigger that reopens each one. [VISION.md](VISION.md) says what plan mode is for, who it serves and what
+it will not do.
+
 ## License
 
 MIT ([LICENSE](LICENSE)). Maintained by [100yenadmin](https://github.com/100yenadmin).
