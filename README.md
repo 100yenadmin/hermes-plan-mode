@@ -171,11 +171,13 @@ hermes gateway restart        # only if you run the messaging gateway
 ```
 
 This installs the repository's main branch. To pin a release, add `--ref` with that release's exact 40-character
-commit SHA (see its release notes); `--ref` does not take a tag. Use the `100yenadmin/hermes-plan-mode` form: on a
-fresh Hermes 0.23.0, installing by catalog name (`plan-mode`) gives version 1.0.0 until
-[NousResearch/hermes-agent#151856](https://github.com/NousResearch/hermes-agent/issues/151856) is fixed. Without
-`--enable`, run `hermes plugins enable plan-mode`. Restart running CLI, TUI and Desktop sessions so they load the
-plugin.
+commit SHA (see its release notes); `--ref` does not take a tag. On Hermes 0.23.1 or newer you can also install by
+catalog name, `hermes plugins install plan-mode --enable`, which installs the version the Hermes catalog pins. Hermes
+0.23.0 cannot read the current catalog and falls back to its built-in copy, which gives version 1.0.0, so use the
+`100yenadmin/hermes-plan-mode` form there
+([NousResearch/hermes-agent#151856](https://github.com/NousResearch/hermes-agent/issues/151856), fixed in 0.23.1).
+Without `--enable`, run `hermes plugins enable plan-mode`. Restart running CLI, TUI and Desktop sessions so they load
+the plugin.
 
 ## Commands
 
