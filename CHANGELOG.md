@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.4 - 2026-11-18
+
+- **A helper's calls no longer overwrite the parent session's id in plan mode's state.** While a session is in plan mode,
+  a `delegate_task` helper that is still running shares that session's plan-mode state but calls tools with its own
+  session id, and plan mode stored that id in the parent's state (#94). A gateway reset that finds plan mode by session
+  id could then miss the parent's plan. Helpers no longer write it. What a helper may or may not do is unchanged.
+
 ## 1.5.3 - 2026-11-14
 
 - **Installs no longer ask for confirmation on newer Hermes.** The install scanner in Hermes' upcoming release rated
