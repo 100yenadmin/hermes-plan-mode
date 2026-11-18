@@ -777,7 +777,8 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   and the todo list for finished steps, and continue with the next one without re-asking settled questions.
   - **What it restores:** the approved plan, its revision and snapshot, review-each-edit if you chose it, and the last
     recorded progress (counts and the current item, not a full checkpoint). The todo list itself comes back only when
-    Hermes restores the conversation (`--resume`); in a new chat the agent rebuilds it from the plan.
+    Hermes restores the conversation (`--resume`); in a new chat the agent rebuilds it from the plan. Permission to
+    commit or start processes that the original task gave is not carried over: say so again if the agent should commit.
   - **What it refuses:** while plan mode is on or a plan waits for approval (approve or `/planmode off` first), while a
     plan is already building in this session, for a finished plan, and for a plan changed after approval or approved
     before 1.6 (start plan mode and submit it again).
