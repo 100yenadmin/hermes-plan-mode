@@ -455,3 +455,31 @@ def test_resume_name_may_contain_two_dots(plugin):
     plugin.command("off")
     assert plugin.command("resume release..notes.md").startswith("Resuming release..notes.md rev 1")
     assert current(plugin)["approved_path"] == str(path)
+
+
+def test_inherited_identity_refuses_resume_without_touching_state(plugin, session_env, monkeypatch):
+    """A stale tab id after a Desktop backend restart falls back to this process's key: refuse, read nothing (review of #103)."""
+    path = approve(plugin)
+    plugin.command("off")
+    monkeypatch.setenv("HERMES_UI_SESSION_ID", "stale-tab")
+    session_env.pop("HERMES_SESSION_KEY", None)
+    session_env.update(HERMES_UI_SESSION_ID="stale-tab", HERMES_SESSION_PLATFORM="desktop")
+    assert pm.derive_session_identity().inherited_env
+    calls = []
+    monkeypatch.setattr(plugin, "_command_state", lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(OSError("store")))
+    assert plugin.command("resume") == pm._RESUME_UI_REFUSAL
+    assert calls == []
+    assert record(plugin, path)["status"] == "approved"
+
+
+def test_bare_resume_skips_a_newest_record_without_approval_id(plugin, session_env):
+    approve(plugin, "older.md")
+    plugin.command("off")
+    session_env["HERMES_SESSION_KEY"] = "second"
+    newer = approve(plugin, "newer.md")
+    plugin.command("off")
+    records = dict(plugin.ctx.state.get(RECORDS, {}))
+    stale = dict(records[str(newer)]); stale.pop("approval_id")
+    records[str(newer)] = stale
+    plugin.ctx.state.set(RECORDS, records)
+    assert plugin.command("resume").startswith("Resuming older.md rev")

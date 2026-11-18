@@ -89,7 +89,8 @@ def find(store, plans_dir, name, is_inside):
         paths = [path for path, record in reversed(records.items())
                  if isinstance(record, dict) and record.get("plans_dir") == plans_dir
                  and _safe_path(path, plans_dir, is_inside)
-                 and (name or (record.get("status") == "approved" and os.path.isfile(path)))]
+                 and (name or (record.get("status") == "approved" and os.path.isfile(path)
+                               and _valid_record(record, path)))]
         matches = _matches(paths, name)
         if len(matches) > 1:
             return None, "Plan name is ambiguous: " + ", ".join(os.path.basename(path) for path in matches[:5])

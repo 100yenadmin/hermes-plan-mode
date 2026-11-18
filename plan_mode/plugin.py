@@ -1470,6 +1470,8 @@ class PlanModePlugin:
             return error
         assert identity.key is not None
 
+        if action == "resume" and self._resume_unbindable(identity):
+            return _RESUME_UI_REFUSAL  # before any state is read or written
         if action == "on" and identity.inherited_env and _gateway_process_is_admitted():
             return (
                 "Plan mode activation was refused: this gateway/slash-worker process "
@@ -1509,8 +1511,6 @@ class PlanModePlugin:
             command_storage_key, state, unresolved_ui_command = self._command_state(
                 identity.key, identity.surface
             )
-            if action == "resume" and self._ui_command_without_tab(identity):
-                return _RESUME_UI_REFUSAL
             if action == "resume":
                 # Across sessions in this home, executing permits no more than plan mode off.
                 # Refusing to leave active planning is what keeps that boundary intact.
@@ -1613,7 +1613,7 @@ class PlanModePlugin:
                 status = self._status_text(state, self._plan_files(state))
                 if (entered_by == "user" and not state.get("active") and state.get("phase") != "executing"
                         and not isinstance(state.get("edit_review"), dict)
-                        and not self._ui_command_without_tab(identity)):
+                        and not self._resume_unbindable(identity)):
                     reader = _session_reader()
                     profile = str(reader("HERMES_SESSION_PROFILE", "") if reader else "").strip()
                     if not profile or profile == self._registration_profile:
@@ -1857,10 +1857,15 @@ class PlanModePlugin:
         return "Usage: /planmode on [task] | status | list | show [file] | edit [file] | approve [file] | reject [feedback] | resume [name] | done | off"
 
     @staticmethod
-    def _ui_command_without_tab(identity: SessionIdentity) -> bool:
-        """A TUI/Desktop slash command that carries only the session key: its state would never reach the tab (#6)."""
-        return bool(identity.key and identity.key.startswith("sk:")
-                    and str(identity.surface or "").strip().lower() in {"tui", "desktop", "dashboard"})
+    def _resume_unbindable(identity: SessionIdentity) -> bool:
+        """Resume only where the command's key is the key the session's turns use (#6).
+
+        TUI/Desktop slash commands carry only the session key, never the tab's id, and an inherited identity (a stale
+        tab id after a backend restart, a gateway worker) falls back to this process's own key. Either way a resumed
+        plan would never reach the session that runs it, so resume refuses instead of reporting a no-op."""
+        surface = str(identity.surface or "").strip().lower()
+        return bool(identity.inherited_env
+                    or (identity.key and identity.key.startswith("sk:") and surface in {"tui", "desktop", "dashboard"}))
 
     def _find_resume(self, state: dict, name: str) -> tuple[dict | None, str]:
         plans_dir = self._listed_plans_dir(state)
