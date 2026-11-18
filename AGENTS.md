@@ -43,6 +43,18 @@ point them at a real Hermes home.
 - Never commit secrets, tokens, real user data, or machine-specific paths.
 - Tests use a temporary `HERMES_HOME`, never a real one.
 
+## Release closeout (maintainers, after every release)
+
+After a release is published:
+
+1. Close every issue the release fully served, with a comment naming the version. Never close an umbrella or parent issue
+   whose own acceptance is not met.
+2. Tick the boxes it completed on the roadmap issue (#33), other tracking issues, and closed issues whose checklists
+   shipped. Close a milestone once all its issues are closed.
+3. Update every README line and the #33 status that names the latest release or what ships next.
+4. Send the release coordinator (the Plugin Manager) one closeout line: issues closed, boxes ticked, docs updated (or
+   "none").
+
 ## Filing issues
 
 - Search first: save the key words to a file, then run `gh issue list -R 100yenadmin/hermes-plan-mode --state all --search "$(cat '<search file>')"`. Never type model-written text into a command.
