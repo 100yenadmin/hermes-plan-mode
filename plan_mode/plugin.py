@@ -25,6 +25,7 @@ import threading
 from typing import Any, Callable
 import uuid
 
+from . import resume
 from .approval import (
     DecisionLedger, approval_text, clarify_answer, edit_review_text, gate_bypassed,
     is_human_approval, make_rule_key, plan_digest, _title, _unfenced,
@@ -99,7 +100,7 @@ _AGENT_NOTE_BRIDGE = (
 _ACTIVE_INDEX_KEY = "active-index"
 _EXECUTING_INDEX_KEY = "executing-index"
 _SESSION_INDEX_KEY = "session-index"
-_PLAN_HISTORY_KEY = "plan-history"  # realpath -> {status, rev, at}: what /planmode list shows for plans of ended sessions
+_PLAN_HISTORY_KEY = resume.PLAN_HISTORY_KEY  # what /planmode list shows for plans of ended sessions
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
                      "user_asked_process", "user_asked_commits", "finish_pending", "changed_files")
@@ -720,7 +721,7 @@ class PlanModePlugin:
         self.ctx.register_command(
             "planmode",
             self.command,
-            "Enforce plan-only tool access for this session",
+            "Enforce plan-only tool access for this session. Use /planmode resume [name] to continue an approved plan.",
             args_hint="[on|status|list|show|edit|approve|reject|done|off] [task]",
         )
         self.ctx.register_tool(
@@ -1325,6 +1326,7 @@ class PlanModePlugin:
             state.pop(field, None)
         state.update(phase="executing", approved_path=submission["path"],
                      approved_revision=submission["revision"], approved_at=_utc_now(), pending_note="")
+        resume.remember(self.ctx.state, state, state["approved_at"], digest=submission["digest"])
         self._note_history(submission["path"], "approved", submission["revision"])
         submission["status"] = "approved"
         if via:
@@ -1469,7 +1471,7 @@ class PlanModePlugin:
                 "only exposed inherited session identity, so activation cannot be "
                 "bound safely to one session."
             )
-        if action in {"on", "off", "approve", "reject", "submit", "done", "show", "edit", "list"}:
+        if action in {"on", "off", "approve", "reject", "submit", "done", "show", "edit", "list", "resume"}:
             # Every state-mutating command, and show and list (they print plan contents or names), must run in the plugin
             # instance of the session's own profile; status stays read-only and is not gated.
             refused = (
@@ -1502,6 +1504,18 @@ class PlanModePlugin:
             command_storage_key, state, unresolved_ui_command = self._command_state(
                 identity.key, identity.surface
             )
+            if action == "resume":
+                # Across sessions in this home, executing permits no more than plan mode off.
+                # Refusing to leave active planning is what keeps that boundary intact.
+                if (state.get("active") or state.get("phase") in {"planning", "awaiting_approval"}
+                        or (state.get("submission") or {}).get("status") in {"pending", "awaiting"}):
+                    return "Plan mode is on. Approve or turn it off (/planmode off) before resuming an approved plan."
+                review = state.get("edit_review")
+                if state.get("phase") == "executing" or isinstance(review, dict):
+                    review = review if isinstance(review, dict) else {}
+                    title = resume.plan_title(state.get("approved_path") or review.get("path"),
+                                              state.get("approved_revision", review.get("rev")))
+                    return f"Already building {title}. Use /planmode done first."
             if action == "status" and unresolved_ui_command:
                 return (
                     "Plan mode: unresolved\nA TUI/Desktop plan-mode state is active, but "
@@ -1516,6 +1530,8 @@ class PlanModePlugin:
                     "owns plan mode. Retry from that tab after Hermes exposes its stable UI "
                     "identity; the plugin will not guess across tabs."
                 )
+            if action == "resume":
+                return self._resume_plan(identity, command_storage_key, state, remainder)
             if action == "on":
                 if entered_by == "agent" and state.get("active"):
                     return self._status_text(state, self._plan_files(state))
@@ -1587,7 +1603,19 @@ class PlanModePlugin:
                 return message
 
             if action == "status":
-                return self._status_text(state, self._plan_files(state))
+                status = self._status_text(state, self._plan_files(state))
+                if (entered_by == "user" and not state.get("active") and state.get("phase") != "executing"
+                        and not isinstance(state.get("edit_review"), dict)):
+                    reader = _session_reader()
+                    profile = str(reader("HERMES_SESSION_PROFILE", "") if reader else "").strip()
+                    if not profile or profile == self._registration_profile:
+                        record, _ = self._find_resume(state, "")
+                        if record:
+                            title = resume.plan_title(record["path"], record["revision"])
+                            progress = record["progress"]
+                            status += (f"\nUnfinished approved plan: {title} ({progress.get('done', 0)} of "
+                                       f"{progress.get('total', 0)}). /planmode resume continues it.")
+                return status
 
             if action == "inspect":
                 return self._inspect(state)
@@ -1642,6 +1670,7 @@ class PlanModePlugin:
                     return "There is no executing plan to finish."
                 if state.get("phase") == "executing":
                     self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
+                resume.remember(self.ctx.state, state, _utc_now(), status="finished")
                 state.pop("edit_review", None)
                 self._clear_execution(state)
                 # Neither a still-open approval card nor a queued note may say "implement it now" after done.
@@ -1755,6 +1784,8 @@ class PlanModePlugin:
                 self._forget_submission(state)
                 state["pending_note"] += self._approved_excerpt({"path": approved_path, "revision": state.get("approved_revision", 0)})
                 self._note_history(approved_path, "approved", state.get("approved_revision"))
+                resume.remember(self.ctx.state, state, state["approved_at"],
+                                digest=submission["digest"] if unchanged else digest)
                 self._save_command_state(identity.key, command_storage_key, state)
                 if card_open and "approved_while_open" in state:
                     # Approving the open prompt resumes this turn; a deny or timeout starts the work from post_tool_call.
@@ -1815,7 +1846,54 @@ class PlanModePlugin:
                     self._clear_delivered_note(command_storage_key, state, old_note)
                 return "Plan mode is off for this session. No approval note will be injected."
 
-        return "Usage: /planmode on [task] | status | list | show [file] | edit [file] | approve [file] | reject [feedback] | done | off"
+        return "Usage: /planmode on [task] | status | list | show [file] | edit [file] | approve [file] | reject [feedback] | resume [name] | done | off"
+
+    def _find_resume(self, state: dict, name: str) -> tuple[dict | None, str]:
+        plans_dir = self._listed_plans_dir(state)
+        if not _plans_dir_is_still_safe(plans_dir):
+            return None, f"No approved plan to resume in {plans_dir}. /planmode list shows the plans here."
+        return resume.find(self.ctx.state, plans_dir, name, _path_is_inside)
+
+    def _resume_plan(self, identity: SessionIdentity, storage_key: str, state: dict, name: str) -> str:
+        record, refusal = self._find_resume(state, name)
+        if record is None:
+            return refusal
+        path, revision, approved_at = record["path"], record["revision"], record["approved_at"]
+        snapshot, progress = record["snapshot"], record["progress"]
+        done, total, label = progress.get("done", 0), progress.get("total", 0), progress.get("label") or "none"
+        title = resume.plan_title(path, revision)
+        rev = revision if revision is not None else "?"
+        self._clear_execution(state)
+        for field in ("submission", "review", "approved_while_open"):
+            state.pop(field, None)
+        restored_progress = (dict(completed=done, cancelled=0, total=total, current=progress["label"])
+                             if progress else {})
+        state.update(active=False, phase="executing", plans_dir=record["plans_dir"], plan_files=[path],
+                     approved_path=path, approved_revision=revision, approved_at=approved_at,
+                     executing_turns=0, progress=restored_progress,
+                     revision=max(state.get("revision") or 0, revision or 0))
+        if snapshot:
+            state["approved_snapshot"] = snapshot
+        if record["edit_review"]:
+            state["edit_review"] = {"key": "plan-mode-edit:" + secrets.token_hex(8),
+                                    "path": path, "rev": revision, "approved_at": approved_at}
+        if identity.key.startswith("cli:"):
+            state["cli_pid"] = os.getpid()
+        state["pending_note"] = (
+            f"Resuming the approved plan {path} (rev {rev}, approved {approved_at}). Read it again"
+            + (f": the approved text is {snapshot}" if snapshot else "")
+            + f". Last recorded progress: {done} of {total} done (last: {label}). "
+            "Check the working tree and the todo list to see which steps are already done and do not redo them. "
+            "Continue with the next unfinished step. Do not re-ask questions the plan already settles."
+            + " " + self._execute_hint()
+        )
+        self._save_command_state(identity.key, storage_key, state)
+        reader = _session_reader()
+        self._remember_session_id(identity.key, state, reader("HERMES_SESSION_ID", "") if reader else "")
+        if identity.key.startswith("ui:"):
+            self._link_executing_alias(identity.key, state, identity.fallback_key)
+        return (f'Resuming {title} (approved {approved_at[:10]}), {done} of {total} steps done last time. '
+                'Send any message (for example "continue") to start.')
 
     @staticmethod
     def _clear_execution(state: dict[str, Any]) -> None:
@@ -2264,6 +2342,7 @@ class PlanModePlugin:
     def _finish_plan(self, key: str, state: dict[str, Any]) -> None:
         """Every todo finished earlier in the turn: end the execution and its edit review now."""
         self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
+        resume.remember(self.ctx.state, state, _utc_now(), status="finished")
         state.pop("edit_review", None)
         self._clear_execution(state)
         self._save_state(key, state)
@@ -2283,6 +2362,8 @@ class PlanModePlugin:
                     self._finish_plan(key, state)
                 elif key and self._execution_ends_with_turn(state):
                     self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
+                    # The record follows /planmode list: a plan listed as done is not offered for resume.
+                    resume.remember(self.ctx.state, state, _utc_now(), status="finished")
                     self._clear_execution(state)
                     self._save_state(key, state)
                     self._sync_execution_family(_state_storage_key(key), state)
@@ -2636,7 +2717,9 @@ class PlanModePlugin:
                             self._approve_submission(state, submission, via="card" if card else "clarify", storage_key=_state_storage_key(state_key))
                             if review_choice is not None and answer_label == review_choice:
                                 state["edit_review"] = {"key": "plan-mode-edit:" + secrets.token_hex(8),
-                                                        "path": submission["path"], "rev": submission["revision"]}
+                                                        "path": submission["path"], "rev": submission["revision"],
+                                                        "approved_at": state["approved_at"]}
+                                resume.remember(self.ctx.state, state, _utc_now(), edit_review=True)
                             if (card or "approved_text" in self._levers() or "lean_craft" in self._note_levers()
                                     or {"bridge_calls", "skill_policy", "edit_batch", "brief_final"} & self._note_levers()
                                     or self._saved_plan_note(submission)):
@@ -2679,6 +2762,9 @@ class PlanModePlugin:
                                          state.get("approved_revision"), state.get("approved_at")) if state.get("approved_path") else None)
                             card_text = progress_card(state.get("approved_revision"), kwargs.get("result"))
                             state["progress"] = progress
+                            resume.remember(self.ctx.state, state, _utc_now(), progress={
+                                "done": progress["completed"] + progress["cancelled"],
+                                "total": progress["total"], "label": progress["current"]})
                             if progress["total"] > 0 and progress["completed"] + progress["cancelled"] == progress["total"]:
                                 if {"todo_batch", "todo_inline"} & self._levers():
                                     # The lean hint closes the last todos alongside the final test run; ending here
@@ -2687,6 +2773,7 @@ class PlanModePlugin:
                                 else:
                                     self._stash_finish(state_key, state, str(kwargs.get("turn_id") or ""))
                                     self._note_history(state.get("approved_path"), "done", state.get("approved_revision"))
+                                    resume.remember(self.ctx.state, state, _utc_now(), status="finished")
                                     state.pop("edit_review", None)
                                     self._clear_execution(state)
                             elif progress["total"] > 0:
@@ -3129,11 +3216,15 @@ class PlanModePlugin:
             entries.append({"name": os.path.basename(path), "path": path, "status": status, "modified": modified})
         return entries
 
-    def _plan_list(self, state: dict[str, Any], *, as_data: bool = False) -> str | dict:
+    def _listed_plans_dir(self, state: dict[str, Any]) -> str:
         plans_dir = state.get("plans_dir")
         if not isinstance(plans_dir, str) or not plans_dir:
             # Not _fixed_plans_dir: listing must not create the directory.
             plans_dir = os.path.join(os.path.realpath(self._session_cwd()), ".hermes", "plans")
+        return plans_dir
+
+    def _plan_list(self, state: dict[str, Any], *, as_data: bool = False) -> str | dict:
+        plans_dir = self._listed_plans_dir(state)
         if os.path.lexists(plans_dir) and not _plans_dir_is_still_safe(plans_dir):
             return ({"plans_dir": plans_dir, "plans": [], "error": "the .hermes plan path contains a symlink"} if as_data
                     else f"Plan listing was refused: `{plans_dir}` contains a symlink.")

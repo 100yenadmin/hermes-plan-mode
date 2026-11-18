@@ -1354,3 +1354,56 @@ def test_real_default_lean_submit_asks_the_card(real_submit_host):
     result = json.loads(host.submit())
     assert not result.get("approved") and "Approve, auto-accept edits" in json.dumps(result)
     assert "awaiting" in host.command("status")
+
+
+def test_real_plugin_manager_resumes_persisted_approval(tmp_path, monkeypatch):
+    pytest.importorskip("hermes_cli.plugins")
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_cli import plugins
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from model_tools import handle_function_call
+
+    home, workspace, bundled = tmp_path / "home", tmp_path / "workspace", tmp_path / "bundled"
+    workspace.mkdir()
+    bundled.mkdir()
+    _copy_plugin(home / "plugins" / "plan-mode")
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - plan-mode\n  load_timeout_seconds: 0\n", encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
+    monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+
+    home_token = set_hermes_home_override(str(home))
+    try:
+        plugins._reset_plugin_managers_for_tests()
+        first = plugins.get_plugin_manager()
+        first.discover_and_load()
+        tokens = set_session_vars(platform="telegram", source="telegram", session_key="first-key",
+                                  session_id="first-id", cwd=str(workspace))
+        try:
+            handler = plugins.get_plugin_command_handler("planmode")
+            assert "Plan mode is on" in handler("on persistence")
+            path = workspace / ".hermes" / "plans" / "persistent.md"
+            handle_function_call("write_file", {"path": str(path), "content": "# Plan"},
+                                 tool_call_id="write", session_id="first-id")
+            assert "Plan approved" in handler("approve")
+        finally:
+            clear_session_vars(tokens)
+
+        plugins._reset_plugin_managers_for_tests()
+        second = plugins.get_plugin_manager()
+        assert second is not first
+        second.discover_and_load()
+        tokens = set_session_vars(platform="telegram", source="telegram", session_key="second-key",
+                                  session_id="second-id", cwd=str(workspace))
+        try:
+            handler = plugins.get_plugin_command_handler("planmode")
+            assert handler("resume").startswith("Resuming persistent.md")
+            status = handler("status")
+            assert "Phase: executing" in status and str(path) in status
+        finally:
+            clear_session_vars(tokens)
+    finally:
+        plugins._reset_plugin_managers_for_tests()
+        reset_hermes_home_override(home_token)
