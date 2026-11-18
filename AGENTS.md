@@ -52,7 +52,7 @@ After a release is published:
 2. Tick the boxes it completed on the roadmap issue (#33), other tracking issues, and closed issues whose checklists
    shipped. Close a milestone once all its issues are closed.
 3. Update every README line and the #33 status that names the latest release or what ships next.
-4. Send the release coordinator (the Plugin Manager) one closeout line: issues closed, boxes ticked, docs updated (or
+4. Post one closeout line as a comment on the release pull request: issues closed, boxes ticked, docs updated (or
    "none").
 
 ## Filing issues
