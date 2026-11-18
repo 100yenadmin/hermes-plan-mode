@@ -2,6 +2,7 @@
 
 import logging
 import os
+import secrets
 
 from .approval import plan_digest
 
@@ -21,16 +22,19 @@ def remember(store, state, now, *, digest=None, **changes):
         key = os.path.realpath(path)
         value = store.get(APPROVED_PLANS_KEY, {})
         records = dict(value) if isinstance(value, dict) else {}
+        approval_id = ""
         if digest:
+            # Each approval gets its own id: path, revision and a one-second timestamp can repeat across sessions.
+            approval_id = secrets.token_hex(8)
             record = dict(plans_dir=os.path.realpath(state["plans_dir"]), path=key,
                           revision=state.get("approved_revision"), digest=digest,
                           snapshot=state.get("approved_snapshot") or "", approved_at=state["approved_at"],
-                          edit_review=False, status="approved", progress={})
+                          approval_id=approval_id, edit_review=False, status="approved", progress={})
         else:
             old = records.get(key)
+            mine = state.get("approval_id") or review.get("approval_id")
             if (not isinstance(old, dict) or old.get("status") != "approved"
-                    or old.get("revision") != state.get("approved_revision", review.get("rev"))
-                    or old.get("approved_at") != state.get("approved_at", review.get("approved_at"))):
+                    or not mine or old.get("approval_id") != mine):
                 return
             record = {**old, **changes}
         records.pop(key, None)
@@ -39,6 +43,8 @@ def remember(store, state, now, *, digest=None, **changes):
             records.pop(next(iter(records)))
         # No CAS: a concurrent finish or progress write may be lost. The host locks each call itself.
         store.set(APPROVED_PLANS_KEY, records)
+        if approval_id:
+            state["approval_id"] = approval_id
     except Exception:
         _LOG.debug("Could not store the durable plan approval", exc_info=True)
 
@@ -63,7 +69,7 @@ def _valid_record(record, path):
             and (revision is None or type(revision) is int and revision >= 0)
             and isinstance(record.get("edit_review"), bool)
             and record.get("status") in ("approved", "finished")
-            and isinstance(record.get("snapshot"), str)
+            and isinstance(record.get("snapshot"), str) and isinstance(record.get("approval_id", ""), str)
             and isinstance(record.get("approved_at"), str) and record["approved_at"]
             and isinstance(record.get("updated_at"), str)
             and (progress == {} or isinstance(progress, dict)

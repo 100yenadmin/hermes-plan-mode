@@ -399,3 +399,23 @@ def test_correlated_directive_approval_is_resumable(plugin, session_env):
     assert record(plugin, path)["revision"] == 1
     session_env["HERMES_SESSION_KEY"] = "new-session"
     assert plugin.command("resume").startswith("Resuming launch.md rev 1")
+
+
+def test_older_session_finish_never_marks_a_newer_same_second_approval(plugin, session_env, monkeypatch):
+    """Two sessions approve different text at one path as rev 1 within one second (review of #103)."""
+    monkeypatch.setattr(pm, "_utc_now", lambda: "2026-11-18T09:00:00+00:00")
+    plugin.ctx.settings["levers"] = "todo_batch"
+    path = approve(plugin)
+    first = current(plugin)
+    session_env["HERMES_SESSION_KEY"] = "second-session"
+    second_path = approve(plugin)
+    assert second_path == path
+    newer = dict(record(plugin, path))
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    plugin.post_llm_call()  # the older session's lean turn ends without todos
+    assert record(plugin, path)["status"] == "approved"
+    assert newer.get("approval_id") and newer["approval_id"] != first.get("approval_id")
+    assert record(plugin, path)["approval_id"] == newer["approval_id"]
+    session_env["HERMES_SESSION_KEY"] = "second-session"
+    plugin.post_llm_call()  # the newer session's own turn end finishes its own approval
+    assert record(plugin, path)["status"] == "finished"

@@ -103,7 +103,7 @@ _SESSION_INDEX_KEY = "session-index"
 _PLAN_HISTORY_KEY = resume.PLAN_HISTORY_KEY  # what /planmode list shows for plans of ended sessions
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
-                     "user_asked_process", "user_asked_commits", "finish_pending", "changed_files")
+                     "user_asked_process", "user_asked_commits", "finish_pending", "changed_files", "approval_id")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
@@ -1871,12 +1871,14 @@ class PlanModePlugin:
         state.update(active=False, phase="executing", plans_dir=record["plans_dir"], plan_files=[path],
                      approved_path=path, approved_revision=revision, approved_at=approved_at,
                      executing_turns=0, progress=restored_progress,
-                     revision=max(state.get("revision") or 0, revision or 0))
+                     revision=max(state.get("revision") or 0, revision or 0),
+                     approval_id=record.get("approval_id", ""))
         if snapshot:
             state["approved_snapshot"] = snapshot
         if record["edit_review"]:
             state["edit_review"] = {"key": "plan-mode-edit:" + secrets.token_hex(8),
-                                    "path": path, "rev": revision, "approved_at": approved_at}
+                                    "path": path, "rev": revision, "approved_at": approved_at,
+                                    "approval_id": record.get("approval_id", "")}
         if identity.key.startswith("cli:"):
             state["cli_pid"] = os.getpid()
         state["pending_note"] = (
@@ -2718,7 +2720,8 @@ class PlanModePlugin:
                             if review_choice is not None and answer_label == review_choice:
                                 state["edit_review"] = {"key": "plan-mode-edit:" + secrets.token_hex(8),
                                                         "path": submission["path"], "rev": submission["revision"],
-                                                        "approved_at": state["approved_at"]}
+                                                        "approved_at": state["approved_at"],
+                                                        "approval_id": state.get("approval_id", "")}
                                 resume.remember(self.ctx.state, state, _utc_now(), edit_review=True)
                             if (card or "approved_text" in self._levers() or "lean_craft" in self._note_levers()
                                     or {"bridge_calls", "skill_policy", "edit_batch", "brief_final"} & self._note_levers()
