@@ -32,8 +32,8 @@ running Hermes session (and `hermes gateway restart` if you use the messaging ga
 3. Approve it. The agent builds the plan in the same turn, tracks the steps in a todo list and ends with a line such as
    `✅ Plan rev 1 done: 4 of 4 steps, 2 files changed (importer.py, test_importer.py)`.
 
-`/planmode status` shows where you are, `/planmode list` shows your plans, and `/planmode off` leaves plan mode without
-approving anything.
+`/planmode status` shows where you are, `/planmode list` shows your plans, `/planmode resume` continues an approved plan
+in a new session, and `/planmode off` leaves plan mode without approving anything.
 
 ## Why it exists
 
@@ -192,6 +192,7 @@ the plugin.
 | `/planmode approve [file]` | Approves an unchanged submitted revision, or a changed/named new file after a matching complete local `show`. A reviewed replacement becomes rev N+1 once. |
 | `/planmode reject [feedback]` | Keeps plan mode on and gives the feedback to the agent on its next turn. |
 | `/planmode done` | Ends the executing phase (stops the progress pointer and footer). No approval effect. |
+| `/planmode resume [file]` | Continues an approved, unfinished plan from this plans directory in the current session: after a restart, `--resume`, `/new` or a new chat. Without a file it picks the newest one. Refused while plan mode is on or a plan is already building here, and when the plan changed after approval (approve it again). Your next message starts the work. Classic CLI and chat platforms; not yet in the TUI or Desktop ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)). |
 | `/planmode off` | Turns plan mode off without approving anything. |
 
 Plan files use `<cwd>/.hermes/plans/YYYY-MM-DD_HHMMSS-<slug>.md`; the planning note hands the model the current
@@ -769,25 +770,27 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   turn is unsupported. On the gateway, `/planmode on` then `/new` before any agent turn keeps plan mode on in the new
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
   linked tab has plan mode on; retry from the owning tab after one turn there.
-- **Resuming an approved plan.** Durable resume is not supported yet, as of 1.5 (planned:
-  [#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)).
-  - **Hermes restart:** classic CLI execution state belongs to its process ID and is cleared on normal exit; a new
-    CLI process does not recover its execution pointer. Other surfaces can read retained state only when their
-    session/tab key still resolves it; there is no automatic unfinished-step recovery.
-  - **Context compaction:** while execution state is still found, a reminder asks the agent to re-read the approved
-    plan (its snapshot when present). Progress stores counts and a short current-item label, not a full checkpoint.
-    Lean clears the reminder at turn end without a nonempty todo list; a surviving reminder also expires after 100 executing turns.
-  - **TUI/Desktop key rotation or reopening:** after a key rotation (rotating compression), the tab links its new key
-    at its next turn or tool call, so `/planmode status` and `/planmode done` find the executing plan again; a command
-    sent before that may still miss it. The new key is not linked when it already holds another tab's plan or a state
-    of its own; commands sent with that key then show and act on that state, not this tab's plan (`/planmode done`
-    there would end the other tab's plan), so run `/planmode status` first. A reopened tab with a new tab id does not pick up an approved plan, and a command may be
-    refused while another tab of the profile has plan mode on.
-  - **Workaround:** run `/planmode status`. To clear a stale reminder, try `/planmode done` in the session/tab where
-    status still identifies it. Open the saved file under `.hermes/plans` if `/planmode show` cannot find it, then tell the agent:
-    "Read this approved plan: <file> (use its approved snapshot if available). Check what is already complete and
-    continue only the unfinished work; ask me before changing the plan." If status says planning is on, have the
-    agent submit the remaining plan and approve it again before edits. This is manual continuation, not restored progress.
+- **Resuming an approved plan.** Since 1.6, `/planmode resume [file]` continues an approved plan that did not finish:
+  after a Hermes restart (the classic CLI clears its own execution state on exit), `hermes --resume`, `/new` or a new
+  chat. It works in the classic CLI and on chat platforms, in any session of the same Hermes home and plans directory,
+  and only from the slash command (the agent cannot resume a plan). It is not available in the TUI or Desktop yet:
+  Hermes sends slash commands there without the tab's id, so the plan could not reach the tab. There, tell the agent
+  "Read the approved plan <file> under .hermes/plans and continue the unfinished steps" ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)). The next turn tells the agent to re-read the approved text, check the working tree
+  and the todo list for finished steps, and continue with the next one without re-asking settled questions.
+  - **What it restores:** the approved plan, its revision and snapshot, review-each-edit if you chose it, and the last
+    recorded progress (counts and the current item, not a full checkpoint). The todo list itself comes back only when
+    Hermes restores the conversation (`--resume`); in a new chat the agent rebuilds it from the plan. Permission to
+    commit or start processes that the original task gave is not carried over: say so again if the agent should commit.
+  - **What it refuses:** while plan mode is on or a plan waits for approval (approve or `/planmode off` first), while a
+    plan is already building in this session, for a finished plan, and for a plan changed after approval or approved
+    before 1.6 (start plan mode and submit it again).
+  - **Context compaction** needs no resume: while execution state is found, a reminder asks the agent to re-read the
+    approved plan. A surviving reminder expires after 100 executing turns; `/planmode resume` brings it back.
+  - **When a plan counts as finished:** `/planmode done`, all todos completed, or (with the lean profile) a turn that ends
+    without a todo list, the same as `/planmode list` shows. `/planmode off` and a crash or restart leave it resumable.
+  - **TUI/Desktop key rotation:** after a rotating compression the tab links its new key at its next turn or tool call;
+    a command sent before that may miss the tab's state, so run `/planmode status` first. Shared-key cases are tracked
+    in [#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6).
 - **The no-commit block is best-effort.** With `allow_commits` off, terminal-tool `git commit` and `git push` are blocked
   while an approved plan executes unless the user asks for commits or a push. A plan left executing (classic profile,
   or a stale pointer) keeps blocking until the user asks or runs `/planmode done`. The check reads the command the way a

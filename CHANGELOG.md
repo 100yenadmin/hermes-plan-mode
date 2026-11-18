@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0 - 2026-11-18
+
+- **`/planmode resume` continues an approved plan in a new session** (#6). Until now, an approved plan that had not
+  finished was lost when Hermes restarted, when you used `hermes --resume` or `/new`, or when you opened a new chat: the
+  agent no longer knew about it. Plan mode now keeps a small record of each approval. `/planmode resume [file]` puts
+  the current session back on that plan, and on your next message the agent re-reads the approved text, checks what is
+  already done and continues with the next step, without re-asking settled questions. It refuses while plan mode is on or
+  a plan is building in the session, for a finished plan, and for a plan that changed after approval, which must be
+  approved again. Only you can resume a plan; the agent cannot. `/planmode status` mentions an unfinished approved plan.
+  It works in the classic CLI and on chat platforms. It is not available in the TUI or Desktop yet, where Hermes sends
+  slash commands without the tab's id, and it says so there.
+
 ## 1.5.4 - 2026-11-18
 
 - **A helper's calls no longer overwrite the parent session's id in plan mode's state.** While a session is in plan mode,
