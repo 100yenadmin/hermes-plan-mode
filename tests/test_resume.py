@@ -327,8 +327,8 @@ def test_resume_unresolved_tab_reuses_done_refusal(plugin, session_env, surface)
     before = deepcopy(plugin.ctx.state.values)
     session_env.pop("HERMES_UI_SESSION_ID")
     session_env["HERMES_SESSION_KEY"] = "unresolved-key"
-    assert plugin.command("resume") == plugin.command("done")
-    assert "did not bind the stable UI session ID" in plugin.command("resume")
+    assert plugin.command("resume") == pm._RESUME_UI_REFUSAL  # refused before any state is read or written
+    assert "did not bind the stable UI session ID" in plugin.command("done")
     assert plugin.ctx.state.values == before
     session_env.update(HERMES_SESSION_KEY="tab-key", HERMES_UI_SESSION_ID="owning-tab")
     assert plugin.pre_tool_call("terminal", {"command": "pwd"})["action"] == "block"
@@ -402,7 +402,7 @@ def test_correlated_directive_approval_is_resumable(plugin, session_env):
 
 
 def test_older_session_finish_never_marks_a_newer_same_second_approval(plugin, session_env, monkeypatch):
-    """Two sessions approve different text at one path as rev 1 within one second (review of #103)."""
+    """Two sessions approve the same path as rev 1 within one second; each approval keeps its own record identity."""
     monkeypatch.setattr(pm, "_utc_now", lambda: "2026-11-18T09:00:00+00:00")
     plugin.ctx.settings["levers"] = "todo_batch"
     path = approve(plugin)
@@ -419,3 +419,39 @@ def test_older_session_finish_never_marks_a_newer_same_second_approval(plugin, s
     session_env["HERMES_SESSION_KEY"] = "second-session"
     plugin.post_llm_call()  # the newer session's own turn end finishes its own approval
     assert record(plugin, path)["status"] == "finished"
+
+
+def test_record_without_approval_id_is_not_resumable(plugin, session_env):
+    """A record written before approval ids existed could never be finished, so it is not offered."""
+    path = approve(plugin)
+    plugin.command("off")
+    records = dict(plugin.ctx.state.get(RECORDS, {}))
+    stale = dict(records[str(path)])
+    stale.pop("approval_id")
+    records[str(path)] = stale
+    plugin.ctx.state.set(RECORDS, records)
+    session_env["HERMES_SESSION_KEY"] = "new-session"
+    assert plugin.command("resume").startswith("No approved plan to resume in ")
+    assert current(plugin).get("phase") != "executing"
+
+
+@pytest.mark.parametrize("surface", ["tui", "desktop", "dashboard"])
+def test_ui_command_without_tab_id_refuses_resume(plugin, session_env, surface):
+    """TUI/Desktop slash commands carry only the session key, so a resumed plan would never reach the tab (review of #103)."""
+    path = approve(plugin)
+    plugin.command("off")
+    session_env["HERMES_SESSION_KEY"] = "desktop-session"
+    session_env["HERMES_SESSION_PLATFORM"] = surface
+    session_env.pop("HERMES_UI_SESSION_ID", None)
+    reply = plugin.command("resume")
+    assert reply.startswith("/planmode resume is not available in the TUI or Desktop yet")
+    assert current(plugin).get("phase") != "executing"
+    assert "Unfinished approved plan" not in plugin.command("status")
+    assert record(plugin, path)["status"] == "approved"
+
+
+def test_resume_name_may_contain_two_dots(plugin):
+    path = approve(plugin, "release..notes.md")
+    plugin.command("off")
+    assert plugin.command("resume release..notes.md").startswith("Resuming release..notes.md rev 1")
+    assert current(plugin)["approved_path"] == str(path)

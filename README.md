@@ -192,7 +192,7 @@ the plugin.
 | `/planmode approve [file]` | Approves an unchanged submitted revision, or a changed/named new file after a matching complete local `show`. A reviewed replacement becomes rev N+1 once. |
 | `/planmode reject [feedback]` | Keeps plan mode on and gives the feedback to the agent on its next turn. |
 | `/planmode done` | Ends the executing phase (stops the progress pointer and footer). No approval effect. |
-| `/planmode resume [file]` | Continues an approved, unfinished plan from this plans directory in the current session: after a restart, `--resume`, `/new` or a new chat. Without a file it picks the newest one. Refused while plan mode is on or a plan is already building here, and when the plan changed after approval (approve it again). Your next message starts the work. |
+| `/planmode resume [file]` | Continues an approved, unfinished plan from this plans directory in the current session: after a restart, `--resume`, `/new` or a new chat. Without a file it picks the newest one. Refused while plan mode is on or a plan is already building here, and when the plan changed after approval (approve it again). Your next message starts the work. Classic CLI and chat platforms; not yet in the TUI or Desktop ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)). |
 | `/planmode off` | Turns plan mode off without approving anything. |
 
 Plan files use `<cwd>/.hermes/plans/YYYY-MM-DD_HHMMSS-<slug>.md`; the planning note hands the model the current
@@ -771,9 +771,11 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   chat; run `/planmode off`. In a second TUI/Desktop tab of the same profile, `/planmode on` may be refused while a
   linked tab has plan mode on; retry from the owning tab after one turn there.
 - **Resuming an approved plan.** Since 1.6, `/planmode resume [file]` continues an approved plan that did not finish:
-  after a Hermes restart (the classic CLI clears its own execution state on exit), `hermes --resume`, `/new`, a new chat
-  or a reopened tab. It works in any session of the same Hermes home and plans directory, and only from the slash command
-  (the agent cannot resume a plan). The next turn tells the agent to re-read the approved text, check the working tree
+  after a Hermes restart (the classic CLI clears its own execution state on exit), `hermes --resume`, `/new` or a new
+  chat. It works in the classic CLI and on chat platforms, in any session of the same Hermes home and plans directory,
+  and only from the slash command (the agent cannot resume a plan). It is not available in the TUI or Desktop yet:
+  Hermes sends slash commands there without the tab's id, so the plan could not reach the tab. There, tell the agent
+  "Read the approved plan <file> under .hermes/plans and continue the unfinished steps" ([#6](https://github.com/100yenadmin/hermes-plan-mode/issues/6)). The next turn tells the agent to re-read the approved text, check the working tree
   and the todo list for finished steps, and continue with the next one without re-asking settled questions.
   - **What it restores:** the approved plan, its revision and snapshot, review-each-edit if you chose it, and the last
     recorded progress (counts and the current item, not a full checkpoint). The todo list itself comes back only when

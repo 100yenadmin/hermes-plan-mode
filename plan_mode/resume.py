@@ -69,7 +69,7 @@ def _valid_record(record, path):
             and (revision is None or type(revision) is int and revision >= 0)
             and isinstance(record.get("edit_review"), bool)
             and record.get("status") in ("approved", "finished")
-            and isinstance(record.get("snapshot"), str) and isinstance(record.get("approval_id", ""), str)
+            and isinstance(record.get("snapshot"), str) and isinstance(record.get("approval_id"), str) and record["approval_id"]
             and isinstance(record.get("approved_at"), str) and record["approved_at"]
             and isinstance(record.get("updated_at"), str)
             and (progress == {} or isinstance(progress, dict)
@@ -80,7 +80,7 @@ def _valid_record(record, path):
 def find(store, plans_dir, name, is_inside):
     """Return a verified unfinished approval or a user-facing refusal."""
     missing = f"No approved plan to resume in {plans_dir}. /planmode list shows the plans here."
-    if os.path.isabs(name) or any(part in name for part in ("/", "\\", "..")):
+    if os.path.isabs(name) or any(part in name for part in ("/", "\\")) or name in (".", ".."):
         return None, missing
     try:
         records = store.get(APPROVED_PLANS_KEY, {})

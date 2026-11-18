@@ -106,6 +106,11 @@ _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_sn
                      "user_asked_process", "user_asked_commits", "finish_pending", "changed_files", "approval_id")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
+_RESUME_UI_REFUSAL = (
+    "/planmode resume is not available in the TUI or Desktop yet: Hermes sends slash commands there without the tab's "
+    "id, so the resumed plan could not reach this tab (#6). Tell the agent instead: \"Read the approved plan <file> "
+    "under .hermes/plans and continue the unfinished steps.\" /planmode list shows the plans."
+)
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
@@ -1504,6 +1509,8 @@ class PlanModePlugin:
             command_storage_key, state, unresolved_ui_command = self._command_state(
                 identity.key, identity.surface
             )
+            if action == "resume" and self._ui_command_without_tab(identity):
+                return _RESUME_UI_REFUSAL
             if action == "resume":
                 # Across sessions in this home, executing permits no more than plan mode off.
                 # Refusing to leave active planning is what keeps that boundary intact.
@@ -1605,7 +1612,8 @@ class PlanModePlugin:
             if action == "status":
                 status = self._status_text(state, self._plan_files(state))
                 if (entered_by == "user" and not state.get("active") and state.get("phase") != "executing"
-                        and not isinstance(state.get("edit_review"), dict)):
+                        and not isinstance(state.get("edit_review"), dict)
+                        and not self._ui_command_without_tab(identity)):
                     reader = _session_reader()
                     profile = str(reader("HERMES_SESSION_PROFILE", "") if reader else "").strip()
                     if not profile or profile == self._registration_profile:
@@ -1847,6 +1855,12 @@ class PlanModePlugin:
                 return "Plan mode is off for this session. No approval note will be injected."
 
         return "Usage: /planmode on [task] | status | list | show [file] | edit [file] | approve [file] | reject [feedback] | resume [name] | done | off"
+
+    @staticmethod
+    def _ui_command_without_tab(identity: SessionIdentity) -> bool:
+        """A TUI/Desktop slash command that carries only the session key: its state would never reach the tab (#6)."""
+        return bool(identity.key and identity.key.startswith("sk:")
+                    and str(identity.surface or "").strip().lower() in {"tui", "desktop", "dashboard"})
 
     def _find_resume(self, state: dict, name: str) -> tuple[dict | None, str]:
         plans_dir = self._listed_plans_dir(state)
