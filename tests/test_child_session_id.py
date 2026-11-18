@@ -45,6 +45,10 @@ def test_tool_call_session_hash(planning_parent, child, tool, args, delegated):
 @pytest.mark.parametrize("phase", ["planning", "executing"])
 @pytest.mark.parametrize("delegated", [True, False], ids=["child", "parent"])
 def test_llm_call_session_hash(planning_parent, child, monkeypatch, phase, delegated):
+    # The note names the plan file with a seconds stamp; freeze it so both calls build the same text.
+    from plan_mode import plugin as plugin_mod, render as render_mod
+    for module in (plugin_mod, render_mod):
+        monkeypatch.setattr(module, "plan_file_stamp", lambda now=None: "2026-11-18_120000")
     plugin = planning_parent
     if phase == "executing":
         assert approve_gate(plugin, write_plan(plugin))["approved"]
