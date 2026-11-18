@@ -2460,7 +2460,8 @@ class PlanModePlugin:
                     return _block_message(PLAN_MODE_TOOL, "Cannot submit: plan mode is not active for this session.") if is_submit else None
                 assert state_key is not None
                 self._active_keys.add(state_key)
-                self._remember_session_id(state_key, state, kwargs.get("session_id"))
+                if not _delegated_child():
+                    self._remember_session_id(state_key, state, kwargs.get("session_id"))
                 if is_submit:
                     submission = state.get("submission") or {}
                     if ("approval_card" in self._levers() and submission.get("card")
@@ -2870,7 +2871,8 @@ class PlanModePlugin:
                 if state.get("active"):
                     assert state_key is not None
                     self._active_keys.add(state_key)
-                    self._remember_session_id(state_key, state, kwargs.get("session_id"))
+                    if not _delegated_child():
+                        self._remember_session_id(state_key, state, kwargs.get("session_id"))
                     short = "light_notes" in self._levers() and state.get("light_note_seen")
                     note = (light_note(state.get("plans_dir"), levers=self._note_levers()) if short
                             else self._planning_note(state, identity.surface, _state_storage_key(state_key)))
@@ -2900,10 +2902,11 @@ class PlanModePlugin:
                     else:
                         parts.append(executing_pointer(state, commits=self._allow_commits(), levers=self._note_levers()))
                     assert state_key is not None
-                    digest = self._session_id_hash(kwargs.get("session_id"))
-                    if digest:
-                        state["session_id_hash"] = digest  # lets an unbound gateway reset find this state
-                        self._mark_session(_state_storage_key(state_key), True)
+                    if not _delegated_child():
+                        digest = self._session_id_hash(kwargs.get("session_id"))
+                        if digest:
+                            state["session_id_hash"] = digest  # lets an unbound gateway reset find this state
+                            self._mark_session(_state_storage_key(state_key), True)
                     self._save_state(state_key, state)
                     self._sync_execution_family(_state_storage_key(state_key), state)
                 review = state.get("edit_review")
