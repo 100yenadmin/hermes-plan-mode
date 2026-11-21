@@ -52,8 +52,22 @@ def _gateway_binds_plugin_commands() -> bool:
     return "_session_env_scope" in _plugin_command_dispatch_source()
 
 
+def _tui_runner_definition_module() -> ModuleType:
+    """The module that defines the TUI runner, found without importing ``tui_gateway.server``.
+
+    Importing the server loads the HERMES_HOME it sees at that moment (its ``.env`` included), so the feature gates,
+    which run before a test sets its temporary home, must not trigger that import."""
+    from tui_gateway import methods_tools
+
+    if hasattr(methods_tools, "_run_plugin_command"):
+        return methods_tools
+    return importlib.import_module("tui_gateway.methods_tools_plugin_commands")
+
+
 def _tui_plugin_command_module() -> ModuleType:
-    """Find the TUI runner's namespace before and after the Hermes 0.23.3 split."""
+    """Find the TUI runner's namespace before and after the Hermes 0.23.3 split.
+
+    On 0.23.3 this imports ``tui_gateway.server``: call it only after the test has set its temporary HERMES_HOME."""
     from tui_gateway import methods_tools
 
     if hasattr(methods_tools, "_run_plugin_command"):
@@ -67,14 +81,14 @@ def _tui_plugin_command_module() -> ModuleType:
 
 def _tui_binds_plugin_commands() -> bool:
     """Feature gate for NousResearch/hermes-agent 35fdb4608a (after v2026.9.21)."""
-    runner = _tui_plugin_command_module()._run_plugin_command
+    runner = _tui_runner_definition_module()._run_plugin_command
     return "session" in inspect.signature(runner).parameters
 
 
 def _tui_dispatches_in_session_profile() -> bool:
     """Feature gate for NousResearch/hermes-agent 5d3115dcfc (#133244, in v0.23.3): the TUI runs a plugin
     command in the plugin instance of the session's own profile."""
-    return hasattr(_tui_plugin_command_module(), "_dispatch_plugin_in_profile_scope")
+    return hasattr(_tui_runner_definition_module(), "_dispatch_plugin_in_profile_scope")
 
 
 def _launch_profile_command(plugins, arg: str, session: dict) -> str:
