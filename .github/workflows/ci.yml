@@ -53,6 +53,10 @@ jobs:
             ref: v0.23.0
             python: "3.14"
             installer: uv
+          - name: v0.23.3
+            ref: v0.23.3
+            python: "3.14"
+            installer: uv
           - name: main-9ffa7dff23
             ref: 9ffa7dff23726d8daa8b3e167b20a5fabc2e04ef
             python: "3.14"
