@@ -849,8 +849,32 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   are missing, submit asks through `clarify`, with typed `/planmode approve` as the fallback if clarify is unavailable. The system-prompt hint is skipped where the host
   has no prompt-section API, and typed approval skips `inject_message` where the host has none.
 - Tested in CI against Hermes `v2026.9.14`, `v2026.9.21`, `v2026.9.24` (Python 3.11), `v0.21.6`, `v0.22.7`,
-  `v0.23.0` and a pinned `main` (Python 3.14, the version for which 0.21.6 and newer declare their runtime
+  `v0.23.0`, `v0.23.3` and a pinned `main` (Python 3.14, the version for which 0.21.6 and newer declare their runtime
   dependencies). From 0.22, CI installs Hermes with `uv sync --locked`, as Hermes' own CI does.
+
+## Works with other plugins
+
+Checked on Hermes 0.23.3 (classic CLI) with plan-mode 1.6.0 and the catalog versions of these plugins.
+
+- **Promise Keeper** keeps rules that last beyond one plan ("never touch prod"). Plan mode's lock lasts for one plan.
+  The two work side by side: each names its own blocks, and plan mode's block receipts list only plan mode's blocks.
+  - When you type `/plan`, Promise Keeper may offer to turn lines of Hermes' own planning instructions into rules. One
+    example is "Do not edit project files except the plan markdown file itself." These lines come from Hermes' `/plan`
+    prompt, not from you. Don't confirm them: such a rule would keep blocking changes to your project after you approve
+    the plan.
+  - A protected path blocks the whole tool call. If the agent edits several files in one `patch` and one of them is
+    protected, none of them change. The agent reports it; split the edit or change the rule.
+- **Hermes Canvas** draws the plan as boxes bound to checks. While planning, plan mode blocks tools it doesn't know,
+  Canvas's included, so the agent draws the canvas after you approve. To let it draw while planning, allow Canvas's
+  tools. They change only Canvas's own data, never project files:
+
+  ```yaml
+  plugins:
+    entries:
+      plan-mode:
+        settings:
+          extra_allowed_tools: [canvas_draw, canvas_update, canvas_get, canvas_next]
+  ```
 
 ## How to test
 
