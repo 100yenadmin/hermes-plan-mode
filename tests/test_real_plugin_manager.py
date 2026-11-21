@@ -52,11 +52,50 @@ def _gateway_binds_plugin_commands() -> bool:
     return "_session_env_scope" in _plugin_command_dispatch_source()
 
 
-def _tui_binds_plugin_commands() -> bool:
-    """Feature gate for NousResearch/hermes-agent 35fdb4608a (after v2026.9.21)."""
+def _tui_plugin_command_module() -> ModuleType:
+    """Find the TUI runner's namespace before and after the Hermes 0.23.3 split."""
     from tui_gateway import methods_tools
 
-    return "session" in inspect.signature(methods_tools._run_plugin_command).parameters
+    if hasattr(methods_tools, "_run_plugin_command"):
+        return methods_tools
+
+    # Importing server registers the split plugin-command functions in its globals.
+    server = importlib.import_module("tui_gateway.server")
+    assert hasattr(server, "_run_plugin_command"), "TUI plugin-command runner was not registered"
+    return server
+
+
+def _tui_binds_plugin_commands() -> bool:
+    """Feature gate for NousResearch/hermes-agent 35fdb4608a (after v2026.9.21)."""
+    runner = _tui_plugin_command_module()._run_plugin_command
+    return "session" in inspect.signature(runner).parameters
+
+
+def _tui_dispatches_in_session_profile() -> bool:
+    """Feature gate for NousResearch/hermes-agent 5d3115dcfc (#133244, in v0.23.3): the TUI runs a plugin
+    command in the plugin instance of the session's own profile."""
+    return hasattr(_tui_plugin_command_module(), "_dispatch_plugin_in_profile_scope")
+
+
+def _launch_profile_command(plugins, arg: str, session: dict) -> str:
+    """Run the launch profile's /planmode handler for *session* through the TUI runner itself."""
+    handler = plugins.get_plugin_command_handler("planmode")
+    assert handler is not None
+    return _tui_plugin_command_module()._run_plugin_command(handler, arg, session)
+
+
+def _blocks_terminal(plugins, home: Path, session_key: str, workspace: Path) -> bool:
+    """True when the plan-mode instance of *home* blocks a terminal call in *session_key*."""
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home_token = set_hermes_home_override(str(home))
+    tokens = set_session_vars(source="tui", session_key=session_key, session_id=session_key, cwd=str(workspace))
+    try:
+        return bool(plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id=session_key))
+    finally:
+        clear_session_vars(tokens)
+        reset_hermes_home_override(home_token)
 
 
 def test_pinned_upstream_session_seam_is_importable_and_bound_around_commands():
@@ -323,12 +362,13 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
     monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
     monkeypatch.delenv("HERMES_SESSION_KEY", raising=False)
     monkeypatch.delenv("HERMES_SESSION_SOURCE", raising=False)
-    monkeypatch.setitem(sys.modules, "tui_gateway.server", ModuleType("tui_gateway.server"))
+    command_module = _tui_plugin_command_module()
+    if command_module.__name__ != "tui_gateway.server":
+        monkeypatch.setitem(sys.modules, "tui_gateway.server", ModuleType("tui_gateway.server"))
 
     from gateway.session_context import clear_session_vars, set_session_vars
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from hermes_cli import plugins
-    from tui_gateway import methods_tools
 
     home_token = set_hermes_home_override(str(home))
     turn_tokens = None
@@ -339,27 +379,27 @@ def test_real_tui_plugin_command_cannot_fail_open_across_turn_binding(tmp_path, 
         handler = plugins.get_plugin_command_handler("planmode")
         assert handler is not None
 
-        monkeypatch.setattr(methods_tools, "_tools_mod", importlib.import_module, raising=False)
-        params = inspect.signature(methods_tools._run_plugin_command).parameters
+        monkeypatch.setattr(command_module, "_tools_mod", importlib.import_module, raising=False)
+        run_plugin_command = command_module._run_plugin_command
+        params = inspect.signature(run_plugin_command).parameters
         if "session" in params:
             monkeypatch.setattr(
-                methods_tools,
+                command_module,
                 "_set_session_context",
                 lambda key, cwd=None: set_session_vars(
                     source="tui", session_key=key, session_id=key, cwd=cwd or ""
                 ),
                 raising=False,
             )
-            monkeypatch.setattr(methods_tools, "_clear_session_context", clear_session_vars, raising=False)
-            # From Hermes 0.22 this helper is bound in from tui_gateway.server, which this test stubs out.
-            monkeypatch.setattr(methods_tools, "_session_source", lambda session: "tui", raising=False)
-            response = methods_tools._run_plugin_command(
+            monkeypatch.setattr(command_module, "_clear_session_context", clear_session_vars, raising=False)
+            monkeypatch.setattr(command_module, "_session_source", lambda session: "tui", raising=False)
+            response = run_plugin_command(
                 handler,
                 "on regression proof",
                 {"session_key": "tui-session-key", "cwd": str(workspace)},
             )
         else:
-            response = methods_tools._run_plugin_command(handler, "on regression proof")
+            response = run_plugin_command(handler, "on regression proof")
 
         if "session" not in params:
             assert "refused" in response.lower()
@@ -572,6 +612,13 @@ def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypa
         )
         output = result["result"]["output"]
 
+        if _tui_dispatches_in_session_profile():
+            # The command ran in profile B's own instance: profile B's session is in plan mode, profile A's is not.
+            assert "Plan mode is on" in output
+            assert _blocks_terminal(plugins, homes[1], "shared-session-key", workspace)
+            assert not _blocks_terminal(plugins, homes[0], "shared-session-key", workspace)
+            # The plugin's guard still refuses profile B's session in profile A's instance.
+            output = _launch_profile_command(plugins, "on profile B", server._sessions[runtime_id])
         assert "refused" in output.lower()
         if session_bound:
             assert "profile" in output.lower()
@@ -816,6 +863,10 @@ def test_real_tui_slash_exec_refuses_cross_profile_off(tmp_path, monkeypatch):
             "round6-off", {"session_id": runtime_b, "command": "/planmode off"}
         )
         output = off["result"]["output"].lower()
+        if _tui_dispatches_in_session_profile():
+            # The off ran in profile B's own instance, which holds no plan mode for this key.
+            assert "plan mode is off" in output
+            output = _launch_profile_command(plugins, "off", server._sessions[runtime_b]).lower()
         assert "refused" in output
         assert "profile" in output
 
