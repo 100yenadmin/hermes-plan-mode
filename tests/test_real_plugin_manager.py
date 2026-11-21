@@ -623,7 +623,8 @@ def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypa
             output = _launch_profile_command(plugins, "on profile B", server._sessions[runtime_id])
         assert "refused" in output.lower()
         if session_bound:
-            assert "profile" in output.lower()
+            # The guard names both profiles (not the "registration profile is unknown" refusal).
+            assert "profile 'profile-a'" in output and "profile 'profile-b'" in output
         else:
             # Released builds without 35fdb4608a refuse on the missing binding.
             assert "session binding" in output.lower()
@@ -893,7 +894,7 @@ def test_real_tui_slash_exec_refuses_cross_profile_off(tmp_path, monkeypatch):
             assert not _blocks_terminal(plugins, homes[1], "colliding-session-key", workspace)
             output = _launch_profile_command(plugins, "off", server._sessions[runtime_b]).lower()
         assert "refused" in output
-        assert "profile" in output
+        assert "profile 'profile-a'" in output and "profile 'profile-b'" in output
 
         turn_tokens = set_session_vars(
             source="tui",
