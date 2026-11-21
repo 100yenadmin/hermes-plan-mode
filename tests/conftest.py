@@ -1,7 +1,19 @@
-"""Isolate the process-wide plan_once display policy between tests."""
-import pytest
+"""Test isolation: a throwaway HOME and HERMES_HOME for the whole run, and the plan_once display policy per test."""
+import atexit
+import os
+import shutil
+import tempfile
 
-from plan_mode import plugin as pm
+# Before any test module imports Hermes: importing it loads the home it sees (its .env included) and creates
+# missing folders there. On a developer machine the real ~/.hermes is a live agent's home (#107).
+_TEST_HOME = tempfile.mkdtemp(prefix="plan-mode-tests-home-")
+os.environ["HOME"] = _TEST_HOME
+os.environ["HERMES_HOME"] = os.path.join(_TEST_HOME, ".hermes")
+atexit.register(shutil.rmtree, _TEST_HOME, True)
+
+import pytest  # noqa: E402
+
+from plan_mode import plugin as pm  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
