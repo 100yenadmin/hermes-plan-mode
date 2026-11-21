@@ -854,7 +854,7 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
 
 ## Works with other plugins
 
-Checked on Hermes 0.23.3 (classic CLI) with plan-mode 1.6.0 and the catalog versions of these plugins.
+Checked on Hermes 0.23.3 (classic CLI) with plan-mode 1.6.0, Promise Keeper 0.1.0 and Hermes Canvas 0.1.0.
 
 - **Promise Keeper** keeps rules that last beyond one plan ("never touch prod"). Plan mode's lock lasts for one plan.
   The two work side by side: each names its own blocks, and plan mode's block receipts list only plan mode's blocks.
