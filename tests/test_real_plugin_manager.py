@@ -598,6 +598,7 @@ def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypa
     plugins._reset_plugin_managers_for_tests()
     home_token = set_hermes_home_override(str(homes[0]))
     runtime_id = "round2-profile-b-runtime"
+    runtime_a = "round2-profile-a-runtime"
     try:
         manager = plugins.get_plugin_manager()
         manager.discover_and_load()
@@ -612,7 +613,8 @@ def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypa
         )
         output = result["result"]["output"]
 
-        if _tui_dispatches_in_session_profile():
+        dispatches_in_profile = _tui_dispatches_in_session_profile()
+        if dispatches_in_profile:
             # The command ran in profile B's own instance: profile B's session is in plan mode, profile A's is not.
             assert "Plan mode is on" in output
             assert _blocks_terminal(plugins, homes[1], "shared-session-key", workspace)
@@ -625,8 +627,22 @@ def test_real_tui_slash_exec_refuses_cross_profile_activation(tmp_path, monkeypa
         else:
             # Released builds without 35fdb4608a refuse on the missing binding.
             assert "session binding" in output.lower()
+        if dispatches_in_profile:
+            # Positive control: profile A's own session does reach profile A's lock.
+            server._sessions.pop(runtime_id, None)
+            server._sessions[runtime_a] = {
+                "session_key": "shared-session-key",
+                "cwd": str(workspace),
+                "profile_home": str(homes[0]),
+            }
+            on_a = server._methods["slash.exec"](
+                "round3-f5-a", {"session_id": runtime_a, "command": "/planmode on profile A"}
+            )
+            assert "Plan mode is on" in on_a["result"]["output"]
+            assert _blocks_terminal(plugins, homes[0], "shared-session-key", workspace)
     finally:
         server._sessions.pop(runtime_id, None)
+        server._sessions.pop(runtime_a, None)
         plugins._reset_plugin_managers_for_tests()
         reset_hermes_home_override(home_token)
 
@@ -859,13 +875,22 @@ def test_real_tui_slash_exec_refuses_cross_profile_off(tmp_path, monkeypatch):
             "cwd": str(workspace),
             "profile_home": str(homes[1]),
         }
+        dispatches_in_profile = _tui_dispatches_in_session_profile()
+        if dispatches_in_profile:
+            # Profile B's own session goes into plan mode in profile B's instance.
+            on_b = server._methods["slash.exec"](
+                "round6-on-b", {"session_id": runtime_b, "command": "/planmode on profile B"}
+            )
+            assert "Plan mode is on" in on_b["result"]["output"]
+            assert _blocks_terminal(plugins, homes[1], "colliding-session-key", workspace)
         off = server._methods["slash.exec"](
             "round6-off", {"session_id": runtime_b, "command": "/planmode off"}
         )
         output = off["result"]["output"].lower()
-        if _tui_dispatches_in_session_profile():
-            # The off ran in profile B's own instance, which holds no plan mode for this key.
+        if dispatches_in_profile:
+            # The off ran in profile B's own instance and cleared only profile B's lock for this key.
             assert "plan mode is off" in output
+            assert not _blocks_terminal(plugins, homes[1], "colliding-session-key", workspace)
             output = _launch_profile_command(plugins, "off", server._sessions[runtime_b]).lower()
         assert "refused" in output
         assert "profile" in output
