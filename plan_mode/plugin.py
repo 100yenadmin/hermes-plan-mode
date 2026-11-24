@@ -103,7 +103,7 @@ _SESSION_INDEX_KEY = "session-index"
 _PLAN_HISTORY_KEY = resume.PLAN_HISTORY_KEY  # what /planmode list shows for plans of ended sessions
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
-                     "user_asked_process", "user_asked_commits", "finish_pending", "changed_files", "approval_id")
+                     "next_pending_todo", "user_asked_process", "user_asked_commits", "finish_pending", "changed_files", "approval_id")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _RESUME_UI_REFUSAL = (
@@ -739,6 +739,7 @@ class PlanModePlugin:
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
+        self.ctx.register_hook("pre_verify", self.pre_verify)
         self.ctx.register_hook("transform_llm_output", self.transform_llm_output)
         # Always registered: settings are read per call, so a profile switch needs no restart; each hook no-ops
         # unless its lever is on.
@@ -2779,6 +2780,7 @@ class PlanModePlugin:
                     if state.get("phase") == "executing" or ("approval_card" in self._levers() and state.get("edit_review")):
                         progress = todo_progress(kwargs.get("result"))
                         if progress is not None:
+                            state["next_pending_todo"] = progress.pop("next_pending")
                             # Capture before classic completion clears the approved identity.
                             card_key = ((identity.key, _state_storage_key(state_key), state.get("approved_path"),
                                          state.get("approved_revision"), state.get("approved_at")) if state.get("approved_path") else None)
@@ -3292,6 +3294,41 @@ class PlanModePlugin:
             "approved_snapshot": state.get("approved_snapshot"),
             "next": next_steps,
         }
+
+    def pre_verify(self, **kwargs: Any) -> dict[str, str] | None:
+        """Nudge at most once when Hermes is about to end an edited turn with open plan todos."""
+        try:
+            if kwargs.get("attempt") != 0 or not kwargs.get("changed_paths") or is_silent_reply(kwargs.get("final_response")):
+                return None
+            setting = self._config("finish_hold", "on")
+            if setting is False or str(setting).strip().lower() == "off":  # YAML 1.1 reads bare off as False.
+                return None
+            platform = str(kwargs.get("platform") or "").strip().lower()
+            if platform in _NO_TURN_NOTE_PLATFORMS or _delegated_child():
+                return None
+            identity = derive_session_identity(platform)
+            if (identity.unsupported or identity.non_cli_without_key or not identity.key
+                    or identity.surface.lower() in _NO_TURN_NOTE_PLATFORMS):
+                return None
+            with self._lock:
+                key, state = self._state_for_hook(identity)
+                if not key or state.get("phase") != "executing" or state.get("finish_pending"):
+                    return None
+                progress = state.get("progress") or {}
+                total = progress.get("total", 0)
+                done = progress.get("completed", 0) + progress.get("cancelled", 0)
+                if total <= 0 or done >= total:
+                    return None
+                revision = state.get("approved_revision")
+                plan = f"Plan rev {revision}" if revision is not None else "Plan"
+                step = progress.get("current") or state.get("next_pending_todo") or "the first pending step"
+                return {"action": "continue", "message": (
+                    f"{plan} is not finished: {done} of {total} steps done, next: {step}. Continue with it.\n"
+                    "If it is blocked, needs the user's decision, or is waiting on a running process or a reply, "
+                    "say so in one line and stop; if a step is no longer needed, mark it cancelled in todo_list and say why."
+                )}
+        except Exception:
+            return None  # An advisory finish hold must not stop the turn from ending on error.
 
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:

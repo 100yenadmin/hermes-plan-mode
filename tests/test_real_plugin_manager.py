@@ -1079,6 +1079,30 @@ def test_u1_real_cli_approval_same_call(real_submit_host):
     assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="submit-session") is None
 
 
+def test_finish_hold_through_the_real_plugin_manager(real_submit_host):
+    host = real_submit_host
+    get_continue = getattr(host.plugins, "get_pre_verify_continue_message", None)
+    if not callable(get_continue):
+        pytest.skip("Hermes lacks the pre_verify continue-message seam")
+    host.callback(lambda *a, **kw: "once")
+    assert json.loads(host.submit())["approved"]
+
+    def observe(status):
+        todos = [{"status": status, "content": "Verify the change"}]
+        host.plugins.invoke_hook("post_tool_call", tool_name="todo_list", args={"todos": todos},
+                                 result=json.dumps({"todos": todos}), status="ok", platform="cli",
+                                 session_id="submit-session")
+
+    args = dict(session_id="submit-session", platform="cli", model="test", coding=True,
+                final_response="The change is in place.", changed_paths=["app.py"])
+    observe("pending")
+    assert get_continue(attempt=0, **args).startswith(
+        "Plan rev 1 is not finished: 0 of 1 steps done, next: Verify the change. Continue with it.")
+    assert get_continue(attempt=1, **args) is None
+    observe("completed")
+    assert get_continue(attempt=0, **args) is None
+
+
 @pytest.mark.parametrize("plan_profile", ["classic"])  # classic shows a footer with no todo progress yet
 def test_161_real_transform_seam_keeps_a_silent_reply_silent(real_submit_host):
     """Hermes' own output-transform seam, then its own silence rule: [SILENT] must leave plan mode unchanged."""

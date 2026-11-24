@@ -92,6 +92,7 @@ def test_registers_exact_surface(plugin, plan_profile):
         "pre_tool_call",
         "post_tool_call",
         "pre_llm_call",
+        "pre_verify",
         "transform_llm_output",
         "pre_approval_request",
         "post_approval_response",
@@ -2247,7 +2248,8 @@ def test_v033_config_schema_declares_the_flat_settings():
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "plugin.yaml").read_text())
     schema = manifest["config_schema"]
     assert set(schema) == {"enforce_builtin_plan", "agent_hint", "footer", "extra_allowed_tools",
-                           "plan_style", "allow_commits", "plan_skill", "plan_profile", "approval_card", "questions", "progress_card"}
+                           "plan_style", "allow_commits", "plan_skill", "plan_profile", "approval_card", "questions",
+                           "progress_card", "finish_hold"}
     assert schema["questions"]["choices"] == list(plugin_mod._QUESTIONS)
     assert schema["questions"]["default"] == plugin_mod._DEFAULT_QUESTIONS == "normal"
     assert schema["questions"]["label"] == "Questions"
@@ -2264,6 +2266,8 @@ def test_v033_config_schema_declares_the_flat_settings():
     assert all("." not in key for key in schema)  # the form saves dotted keys nested but reads them back flat
     # Quoted in the manifest: a bare off would load as False under YAML 1.1 and break the dropdown.
     assert schema["footer"]["choices"] == ["auto", "off"] and schema["footer"]["default"] == "auto"
+    assert schema["finish_hold"]["type"] == "str"
+    assert schema["finish_hold"]["choices"] == ["on", "off"] and schema["finish_hold"]["default"] == "on"
     assert schema["enforce_builtin_plan"]["default"] is True and schema["agent_hint"]["default"] is True
     assert schema["extra_allowed_tools"] == {**schema["extra_allowed_tools"], "type": "list", "default": []}
     assert all(spec.get("label") and spec.get("description") for spec in schema.values())
