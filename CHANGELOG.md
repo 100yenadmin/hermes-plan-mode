@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6.1 - 2026-11-24
 
 - **Silent replies stay silent** (field report, 2026-11-24). While a plan was building, a reply that was only Hermes'
   silence marker, such as `[SILENT]` on a turn started by another agent or a background wake, got the progress footer
@@ -9,6 +9,18 @@
   uses Hermes' own silence rule when Hermes has loaded it, and the same markers otherwise. The blocked-calls and finish
   lines are skipped on such a turn. Workaround on 1.6.0: `footer: off`.
 - **The footer cuts the step name at a word**, with an ellipsis, instead of mid-word at 60 characters.
+- **Voice replies work while planning** (#115). A voice-first agent could only send text until the user approved the
+  plan, because `text_to_speech` was blocked like any unknown tool. It is now allowed while plan mode is on when it
+  writes to Hermes' own audio cache, that is, without an `output_path`; any `output_path` stays blocked, so nothing
+  lands in the project before approval. A voice reply still runs your configured TTS provider.
+- **No re-asking on turns the user did not write** (#116). While a plan awaits approval, the turn note now tells the
+  agent not to ask again on a background notice, a wake or another agent's message, and to wait for the user. Hermes
+  gives plugins no signal for who started a turn, so this is an instruction, not a check.
+- **The test suite runs on Windows** (#110, #114), with a new Windows CI job. No plugin code changed.
+
+Known issue: a reply that ends with a silence marker after real text (for example an answer followed by `NO_REPLY` on
+its own line) is delivered by Hermes without the marker, but plan mode adds nothing to it, so that turn shows no footer,
+approval pointer, blocked-calls line or finish line. The plan's state is unaffected.
 
 ## 1.6.0 - 2026-11-18
 
