@@ -1103,6 +1103,25 @@ def test_finish_hold_through_the_real_plugin_manager(real_submit_host):
     assert get_continue(attempt=0, **args) is None
 
 
+def test_finish_hold_skips_injected_history_through_the_real_plugin_manager(real_submit_host):
+    host = real_submit_host
+    get_continue = getattr(host.plugins, "get_pre_verify_continue_message", None)
+    if not callable(get_continue):
+        pytest.skip("Hermes lacks the pre_verify continue-message seam")
+    host.callback(lambda *a, **kw: "once")
+    assert json.loads(host.submit())["approved"]
+    session = dict(session_id="submit-session", platform="cli")
+    args = dict(model="test", coding=True, attempt=0, final_response="The change is in place.", changed_paths=["app.py"])
+    todos = [{"status": "pending", "content": "Verify the change"}]
+    host.plugins.invoke_hook("post_tool_call", tool_name="todo_list", args={"todos": todos},
+                             result=json.dumps({"todos": todos}), status="ok", **session)
+    assert get_continue(**session, **args)  # the open todo would hold a user turn
+    host.plugins.invoke_hook("pre_llm_call", user_message="A process finished.",
+                             conversation_history=[{"role": "user", "display_kind": "internal_notification",
+                                                    "content": "A process finished."}], **session)
+    assert get_continue(**session, **args) is None
+
+
 @pytest.mark.parametrize("plan_profile", ["classic"])  # classic shows a footer with no todo progress yet
 def test_161_real_transform_seam_keeps_a_silent_reply_silent(real_submit_host):
     """Hermes' own output-transform seam, then its own silence rule: [SILENT] must leave plan mode unchanged."""

@@ -114,6 +114,7 @@ _RESUME_UI_REFUSAL = (
 )
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
+_MACHINERY_DISPLAY_KINDS = frozenset({"internal_notification", "process_complete", "async_delegation_complete"})
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
 # names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
@@ -675,6 +676,25 @@ def _delegated_child() -> bool:
         return False
 
 
+def _is_machinery_turn(history: Any) -> bool:
+    if not isinstance(history, (list, tuple)) or not history:
+        return False
+    row = history[-1]
+    if not isinstance(row, dict) or row.get("role") != "user":
+        return False
+    kind = row.get("display_kind")
+    if not isinstance(kind, str):
+        return False
+    # Use the host's classification when loaded, without importing gateway from a hook.
+    check = getattr(sys.modules.get("gateway.response_filters"), "is_machinery_display_kind", None)
+    if callable(check):
+        try:
+            return bool(check(kind))
+        except Exception:
+            pass
+    return kind in _MACHINERY_DISPLAY_KINDS
+
+
 def _edit_review_available() -> bool:
     """Missing/raising host probes never offer a review the host cannot prompt for."""
     try:
@@ -700,6 +720,7 @@ class PlanModePlugin:
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
         self._turn_blocks: dict[str, list[dict[str, Any]]] = {}  # session key -> per-turn blocks not yet named
         self._turn_finishes: dict[str, dict[str, Any]] = {}  # session key -> a plan that ended mid-turn (classic)
+        self._machinery_turn_keys: set[str] = set()  # current turn by session identity; absence means user
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
         self._hook_platforms: OrderedDict[str, str] = OrderedDict()
@@ -2935,6 +2956,12 @@ class PlanModePlugin:
                 return None
 
             with self._lock:
+                # Track the turn's own identity, which can differ from an adopted plan's state key.
+                if identity.surface.lower() not in _NO_TURN_NOTE_PLATFORMS and not _delegated_child():
+                    if _is_machinery_turn(kwargs.get("conversation_history")):
+                        self._machinery_turn_keys.add(identity.key)
+                    else:
+                        self._machinery_turn_keys.discard(identity.key)
                 state_key, state = self._state_for_hook(identity)
                 if state_key and state.get("finish_pending"):
                     self._finish_plan(state_key, state)  # the previous turn ended without post_llm_call
@@ -3008,9 +3035,11 @@ class PlanModePlugin:
                     if submission.get("status") == "awaiting" and clarify:
                         awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
                                     f"question={clarify['question']}, choices={clarify['choices']}, "
-                                    "or the user can run /planmode approve. On a turn the user did not write (a notice, a "
-                                    "wake or another agent's message), do not ask again: wait for the user.")
-                        awaiting = awaiting if "approval_card" in self._levers() and submission.get("card") else awaiting[:399]
+                                    "or the user can run /planmode approve.")
+                        if "approval_card" not in self._levers() or not submission.get("card"):
+                            awaiting = awaiting[:399]
+                        awaiting += (" On a turn the user did not write (a notice, a wake or another agent's message), "
+                                     "do not ask again: wait for the user.")
                         if short:
                             parts.append(awaiting)
                         else:
@@ -3306,7 +3335,7 @@ class PlanModePlugin:
         }
 
     def pre_verify(self, **kwargs: Any) -> dict[str, str] | None:
-        """Nudge at most once when Hermes is about to end an edited turn with open plan todos."""
+        """Nudge at most once when Hermes is about to end an edited user turn with open plan todos."""
         try:
             if kwargs.get("attempt") != 0 or not kwargs.get("changed_paths") or is_silent_reply(kwargs.get("final_response")):
                 return None
@@ -3321,11 +3350,13 @@ class PlanModePlugin:
                     or identity.surface.lower() in _NO_TURN_NOTE_PLATFORMS):
                 return None
             with self._lock:
+                if identity.key in self._machinery_turn_keys:
+                    return None
                 key, state = self._state_for_hook(identity)
                 if not key or state.get("phase") != "executing" or state.get("finish_pending"):
                     return None
                 review = state.get("edit_review")
-                if isinstance(review, dict) and review.get("denied"):
+                if isinstance(review, dict) and review.get("denied") and "approval_card" in self._levers():
                     return None  # the user just denied an edit: the agent asks what to change, it does not push on
                 progress = state.get("progress") or {}
                 total = progress.get("total", 0)

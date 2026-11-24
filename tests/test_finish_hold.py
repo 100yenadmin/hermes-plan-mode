@@ -1,5 +1,8 @@
 """The stop gate can ask for one more pass on an unfinished approved plan."""
+import copy
 import json
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +39,71 @@ def test_finish_hold_names_the_current_step_and_offers_an_out_once(unfinished):
         ),
     }
     assert finish(unfinished, attempt=1) is None
+
+
+@pytest.mark.parametrize("kind", ["internal_notification", "process_complete", "async_delegation_complete"])
+def test_finish_hold_leaves_machinery_turns_alone(unfinished, kind):
+    unfinished.pre_llm_call(platform="cli", conversation_history=[{"role": "user", "display_kind": kind}])
+    before = copy.deepcopy(unfinished.ctx.state.values)
+    assert finish(unfinished) is None
+    assert unfinished.ctx.state.values == before
+
+
+@pytest.mark.parametrize("last_row", [
+    {"role": "user", "display_kind": "text"},
+    {"role": "user"},
+    {"role": "assistant", "display_kind": "internal_notification"},
+])
+def test_finish_hold_uses_only_the_latest_row_and_resets_the_origin(unfinished, last_row):
+    notice = {"role": "user", "display_kind": "internal_notification"}
+    unfinished.pre_llm_call(platform="cli", conversation_history=[notice])
+    assert finish(unfinished) is None
+    unfinished.pre_llm_call(platform="cli", conversation_history=[notice, last_row])
+    assert finish(unfinished)["action"] == "continue"
+    assert finish(unfinished, attempt=1) is None
+
+
+def test_finish_hold_tracks_turn_origin_per_session(unfinished, session_env, executing_plan):
+    notice = {"role": "user", "display_kind": "internal_notification"}
+    unfinished.pre_llm_call(platform="cli", conversation_history=[notice])
+
+    session_env["HERMES_SESSION_KEY"] = "other-session"
+    assert "Plan mode is on" in unfinished.command("on another plan")
+    path = executing_plan.with_name("other.md")
+    args = {"path": str(path), "content": "# Other plan\n\nRun the checks.\n"}
+    assert unfinished.pre_tool_call("write_file", args, tool_call_id="other-plan") is None
+    path.write_text(args["content"], encoding="utf-8")
+    unfinished.post_tool_call("write_file", args, status="ok", tool_call_id="other-plan")
+    assert "Plan approved" in unfinished.command("approve")
+    observe_todos(unfinished, ("pending", "Test"))
+    assert finish(unfinished)["action"] == "continue"  # no origin recorded for this session yet
+    unfinished.pre_llm_call(platform="cli", conversation_history=[{"role": "user"}])
+    assert finish(unfinished)["action"] == "continue"
+
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    assert finish(unfinished) is None
+
+
+@pytest.mark.parametrize("helper_available", [False, True])
+def test_finish_hold_falls_back_to_local_kinds(unfinished, monkeypatch, helper_available):
+    def broken_helper(_kind):
+        raise RuntimeError("host filter unavailable")
+
+    if helper_available:
+        monkeypatch.setitem(sys.modules, "gateway.response_filters",
+                            SimpleNamespace(is_machinery_display_kind=broken_helper))
+    else:
+        monkeypatch.delitem(sys.modules, "gateway.response_filters", raising=False)
+    notice = {"role": "user", "display_kind": "process_complete"}
+    unfinished.pre_llm_call(platform="cli", conversation_history=[notice])
+    assert finish(unfinished) is None
+
+
+def test_finish_hold_prefers_the_loaded_host_kind_check(unfinished, monkeypatch):
+    monkeypatch.setitem(sys.modules, "gateway.response_filters", SimpleNamespace(
+        is_machinery_display_kind=lambda kind: kind == "host_notice"))
+    unfinished.pre_llm_call(platform="cli", conversation_history=[{"role": "user", "display_kind": "host_notice"}])
+    assert finish(unfinished) is None
 
 
 def test_finish_hold_names_the_first_pending_step_without_a_current_step(unfinished):
@@ -111,6 +179,7 @@ def test_finish_hold_fails_open_when_the_state_loader_raises(unfinished, monkeyp
 
 def test_finish_hold_noops_right_after_the_user_denied_an_edit(unfinished):
     # The denial note reaches the model only on the next turn; holding now would contradict the user's "no".
+    unfinished.ctx.settings["levers"] = "approval_card"
     state = unfinished._load_state("sk:unit-session")
     state["edit_review"] = {"denied": True}
     unfinished._save_state("sk:unit-session", state)
@@ -118,6 +187,14 @@ def test_finish_hold_noops_right_after_the_user_denied_an_edit(unfinished):
     state["edit_review"] = {"denied": False}
     unfinished._save_state("sk:unit-session", state)
     assert finish(unfinished) is not None  # the same state without a denial still holds
+
+
+def test_finish_hold_ignores_stale_denial_when_approval_card_is_off(unfinished):
+    unfinished.ctx.settings.update(levers="approval_card", approval_card=False)
+    state = unfinished._load_state("sk:unit-session")
+    state["edit_review"] = {"denied": True}
+    unfinished._save_state("sk:unit-session", state)
+    assert finish(unfinished)["action"] == "continue"
 
 
 def test_finish_hold_puts_a_multi_line_step_on_one_line(unfinished):
