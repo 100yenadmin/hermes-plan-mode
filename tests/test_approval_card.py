@@ -151,7 +151,7 @@ def test_061_bare_approve_refuses_changed_submission(make_plugin, status):
     result = submit(plugin, path)
     if status == "rejected":
         answer_card(plugin, result, KEEP)
-    path.write_text("# Plan\n\n## Steps\n1. Implement\n2. Verify\n")
+    path.write_bytes(b"# Plan\n\n## Steps\n1. Implement\n2. Verify\n")
     if status == "stale":
         answer_card(plugin, result)
     before = copy.deepcopy(state(plugin))
@@ -282,7 +282,7 @@ def test_restart_accepts_dead_ask(card, action):
 def test_revision_diff(card):
     plugin, path, first = card
     assert "Changed since" not in first["clarify"]["question"]
-    path.write_text("# Parser plan\n\n## Steps\n1. Change parser.py\n## Tests\nRun focused tests.\n")
+    path.write_bytes(b"# Parser plan\n\n## Steps\n1. Change parser.py\n## Tests\nRun focused tests.\n")
     second = submit(plugin, path)
     submission = state(plugin)["submission"]
     assert "Changed since rev 1: +" in second["clarify"]["question"]
@@ -349,7 +349,7 @@ def test_baseline_never_saved_or_copied_to_linked_state(card):
     alias = pm._state_storage_key("sk:linked-session")
     current["command_session_storage_keys"] = [alias]
     plugin._save_state("sk:unit-session", current)
-    path.write_text("# Revised\n")
+    path.write_bytes(b"# Revised\n")
     submit(plugin, path)
     assert all("card_baseline" not in saved for saved in plugin.ctx.state.values.values()
                if isinstance(saved, dict))
@@ -405,7 +405,7 @@ def test_long_plan_skips_diff_but_updates_baseline(make_plugin, large_first):
     path = write_plan(plugin, "a\n" * 3000 if large_first else "# Small\n")
     submit(plugin, path)
     text = "# Small\n" if large_first else "b\n" * 3000
-    path.write_text(text)
+    path.write_bytes(text.encode("utf-8"))
     second = submit(plugin, path)
     assert "Changed since" not in second["clarify"]["question"]
     assert not state(plugin)["submission"].get("diff_excerpt")

@@ -408,24 +408,21 @@ def test_write_file_requires_absolute_contained_path(plugin, session_env, tmp_pa
     assert plugin.pre_tool_call("write_file", {"path": str(inside_traversal), "content": "x"})["action"] == "block"
 
 
-def test_symlink_escape_is_blocked(plugin, session_env, tmp_path):
+def test_symlink_escape_is_blocked(plugin, session_env, tmp_path, symlink_or_skip):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
     plans = tmp_path / ".hermes" / "plans"
     outside = tmp_path / "outside"
     outside.mkdir()
     link = plans / "link"
-    try:
-        link.symlink_to(outside, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks unavailable")
+    symlink_or_skip(link, outside, target_is_directory=True)
     escaped = link / "plan.md"
     assert not _path_is_inside(str(escaped), str(plans))
     assert plugin.pre_tool_call("write_file", {"path": str(escaped), "content": "x"})["action"] == "block"
 
 
 def test_plan_root_symlink_swap_after_activation_is_blocked(
-    plugin, session_env, tmp_path
+    plugin, session_env, tmp_path, symlink_or_skip
 ):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     plugin.command("on")
@@ -434,10 +431,7 @@ def test_plan_root_symlink_swap_after_activation_is_blocked(
     outside = tmp_path / "outside-after-activation"
     outside.mkdir()
     plans.rename(original)
-    try:
-        plans.symlink_to(outside, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks unavailable")
+    symlink_or_skip(plans, outside, target_is_directory=True)
 
     escaped = plans / "plan.md"
     blocked = plugin.pre_tool_call(
@@ -450,17 +444,14 @@ def test_plan_root_symlink_swap_after_activation_is_blocked(
 
 @pytest.mark.parametrize("symlink_component", [".hermes", ".hermes/plans"])
 def test_activation_refuses_symlinked_plan_root_component(
-    plugin, session_env, tmp_path, symlink_component
+    plugin, session_env, tmp_path, symlink_or_skip, symlink_component
 ):
     session_env["TERMINAL_CWD"] = str(tmp_path)
     outside = tmp_path / "outside-root"
     outside.mkdir()
     link = tmp_path / symlink_component
     link.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        link.symlink_to(outside, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks unavailable")
+    symlink_or_skip(link, outside, target_is_directory=True)
 
     response = plugin.command("on")
 
@@ -1375,6 +1366,7 @@ def test_session_finalize_never_clears_matching_gateway_session(
     assert plugin.pre_tool_call("terminal", {})["action"] == "block"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="dead CLI PID pruning uses POSIX process probes")
 def test_dead_cli_pid_state_is_pruned(plugin, session_env):
     dead_pid = 99_999_999
     dead_key = f"cli:{dead_pid}"
@@ -1662,7 +1654,7 @@ def submitted_plan(plugin, session_env, tmp_path):
     args = {"path": str(path), "content": "# Approval plan\n\n## Inspect\n## Implement\n## Verify\n"}
     ids = {"session_id": "s1", "tool_call_id": "write-plan"}
     assert plugin.pre_tool_call("write_file", args, **ids) is None
-    path.write_text(args["content"], encoding="utf-8")
+    path.write_bytes(args["content"].encode("utf-8"))
     plugin.post_tool_call("write_file", args, status="ok", **ids)
     return path
 
