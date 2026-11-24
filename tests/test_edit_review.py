@@ -417,12 +417,12 @@ def test_terminal_platform_is_one_line(reviewed, session_env):
     assert "\n" not in text and text.endswith(" — +a ⏎ +b")
 
 
-def test_symlink_inside_cwd_shows_the_real_outside_path(reviewed, session_env, tmp_path):
+def test_symlink_inside_cwd_shows_the_real_outside_path(reviewed, session_env, tmp_path, symlink_or_skip):
     plugin, _ = reviewed
     cwd, outside = tmp_path / "workspace", tmp_path / "outside"
     cwd.mkdir()
     outside.mkdir()
-    (cwd / "link").symlink_to(outside)
+    symlink_or_skip(cwd / "link", outside, target_is_directory=True)
     session_env["TERMINAL_CWD"] = str(cwd)
     text = plugin.pre_tool_call("write_file", {"path": str(cwd / "link" / "x.py"), "content": "a"})["message"]
     assert f"write_file {(outside / 'x.py').resolve()} (1 line, 1 path outside the working directory)" in text
@@ -444,13 +444,13 @@ def test_unresolvable_target_still_prompts(reviewed, session_env, monkeypatch):
     ("write_file", {"content": "a"}),
     ("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Delete File: {path}\n*** End Patch"}),
 ])
-def test_symlink_entry_shows_the_link_and_its_target(reviewed, session_env, tmp_path, tool, args):
+def test_symlink_entry_shows_the_link_and_its_target(reviewed, session_env, tmp_path, symlink_or_skip, tool, args):
     plugin, _ = reviewed
     cwd, outside = tmp_path / "workspace", tmp_path / "outside"
     cwd.mkdir()
     outside.mkdir()
     (outside / "victim.py").write_text("x\n")
-    (cwd / "alias.py").symlink_to(outside / "victim.py")
+    symlink_or_skip(cwd / "alias.py", outside / "victim.py")
     session_env["TERMINAL_CWD"] = str(cwd)
     path = str(cwd / "alias.py")
     args = {k: v.replace("{path}", path) for k, v in args.items()}
@@ -484,12 +484,12 @@ def test_long_removal_leaves_room_for_the_replacement(reviewed, session_env):
     assert "(+2/−10 lines)" in text and text.endswith("-old 5 ⏎ +new 1 ⏎ +new 2 ⏎ … 4 more lines") and "-old 6" not in text
 
 
-def test_relative_target_through_a_symlink_shows_the_outside_path(reviewed, session_env, tmp_path):
+def test_relative_target_through_a_symlink_shows_the_outside_path(reviewed, session_env, tmp_path, symlink_or_skip):
     plugin, _ = reviewed
     cwd, outside = tmp_path / "workspace", tmp_path / "outside"
     cwd.mkdir()
     outside.mkdir()
-    (cwd / "link").symlink_to(outside)
+    symlink_or_skip(cwd / "link", outside, target_is_directory=True)
     session_env["TERMINAL_CWD"] = str(cwd)
     text = plugin.pre_tool_call("write_file", {"path": "link/x.py", "content": "a"})["message"]
     assert f"write_file {(outside / 'x.py').resolve()} (1 line, 1 path outside the working directory)" in text

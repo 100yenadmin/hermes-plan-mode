@@ -327,14 +327,14 @@ def test_once_plain_provider_does_not_require_commentary(once):
     assert submit(plugin)["action"] == "approve"
 
 
-def test_once_refuses_symlinked_root(once, tmp_path):
+def test_once_refuses_symlinked_root(once, tmp_path, symlink_or_skip):
     plugin, _ = once
     capture(plugin)
     plans = tmp_path / ".hermes/plans"
     plans.rmdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    plans.symlink_to(outside, target_is_directory=True)
+    symlink_or_skip(plans, outside, target_is_directory=True)
     assert submit(plugin)["action"] == "block"
     assert not list(outside.iterdir())
 

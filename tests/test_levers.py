@@ -49,7 +49,7 @@ def write_plan(plugin, text=TEXT):
     plans = Path(plugin.pre_llm_call()["context"].split("files may be written only under ")[1].split(".\n")[0])
     path = plans / "parser.md"
     assert plugin.pre_tool_call("write_file", {"path": str(path)}) is None
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     return path
 
 
@@ -62,7 +62,7 @@ def approve_gate(plugin, path):
 
 
 def test_default_off_golden(make_plugin, monkeypatch):
-    golden = json.loads((Path(__file__).parent / "fixtures/default_off_035.json").read_text())
+    golden = json.loads((Path(__file__).parent / "fixtures/default_off_035.json").read_text(encoding="utf-8"))
     assert golden["approved"]["approved"] is True
     assert "clarify" in golden["bypass"]
     plugin = make_plugin(plan_profile="classic")
@@ -136,14 +136,14 @@ def test_plan_once_fallback_file_digest(make_plugin, session_env, profile):
 
 
 @pytest.mark.parametrize("profile", ["classic", "lean"])
-def test_plan_once_fallback_symlink_refusal(make_plugin, tmp_path, profile):
+def test_plan_once_fallback_symlink_refusal(make_plugin, tmp_path, symlink_or_skip, profile):
     plugin = make_plugin("plan_once", plan_profile=profile)
     plugin.command("on")
     plans = tmp_path / ".hermes/plans"
     plans.rmdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    plans.symlink_to(outside, target_is_directory=True)
+    symlink_or_skip(plans, outside, target_is_directory=True)
     result = plugin.pre_tool_call("write_file", {"path": str(plans / "plan.md"), "content": TEXT})
     assert result["action"] == "block"
     assert not list(outside.iterdir())

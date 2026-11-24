@@ -1129,7 +1129,7 @@ def test_062_real_show_then_approve_changed_snapshot(real_submit_host):
 
     def edit_then_deny(*args, **kwargs):
         path = Path(plugin._load_state("sk:submit-session")["submission"]["path"])
-        path.write_text("# Revised\n" + "x" * 12000 + "\nPreserve the approved change.\n")
+        path.write_bytes(b"# Revised\n" + b"x" * 12000 + b"\nPreserve the approved change.\n")
         return "deny"
 
     host.callback(edit_then_deny)

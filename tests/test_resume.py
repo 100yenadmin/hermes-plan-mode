@@ -188,7 +188,7 @@ def test_resume_after_interrupt(plugin, stop):
 
 
 @pytest.mark.parametrize("damage", ["working-file", "snapshot", "snapshot-symlink", "approved-dir-symlink"])
-def test_resume_uses_reviewed_replacement_snapshot(plugin, session_env, tmp_path, damage):
+def test_resume_uses_reviewed_replacement_snapshot(plugin, session_env, tmp_path, symlink_or_skip, damage):
     path = approve(plugin)
     plugin.command("done")
     write_plan(plugin)
@@ -201,10 +201,10 @@ def test_resume_uses_reviewed_replacement_snapshot(plugin, session_env, tmp_path
         snapshot.write_text("# Changed snapshot", encoding="utf-8")
     elif damage == "snapshot-symlink":
         backup = snapshot.rename(tmp_path / "saved.md")
-        snapshot.symlink_to(backup)
+        symlink_or_skip(snapshot, backup)
     elif damage == "approved-dir-symlink":
         backup = snapshot.parent.rename(tmp_path / "saved")
-        snapshot.parent.symlink_to(backup, target_is_directory=True)
+        symlink_or_skip(snapshot.parent, backup, target_is_directory=True)
     session_env["HERMES_SESSION_KEY"] = "new-session"
     if damage == "working-file":
         assert plugin.command("resume").startswith("Resuming launch.md rev 2")
@@ -225,14 +225,14 @@ def test_resume_uses_reviewed_replacement_snapshot(plugin, session_env, tmp_path
     ("absolute", "No approved plan to resume"),
     ("symlink", "No approved plan to resume"),
 ])
-def test_resume_matches_names_inside_plans_dir(plugin, session_env, tmp_path, name, expected):
+def test_resume_matches_names_inside_plans_dir(plugin, session_env, tmp_path, symlink_or_skip, name, expected):
     alpha = approve(plugin, "launch-alpha.md")
     beta = approve(plugin, "launch-beta.md")
     if name == "absolute":
         name = str(alpha)
     if name == "symlink":
         outside = beta.rename(tmp_path / "outside.md")
-        beta.symlink_to(outside)
+        symlink_or_skip(beta, outside)
         name = beta.name
     session_env["HERMES_SESSION_KEY"] = "new-session"
     response = plugin.command(f"resume {name}")
@@ -254,12 +254,12 @@ def test_resume_default_uses_newest_existing_unfinished_plan(plugin, session_env
 
 
 @pytest.mark.parametrize("symlink_dir", [False, True])
-def test_resume_never_crosses_plans_directories(plugin, session_env, tmp_path, symlink_dir):
+def test_resume_never_crosses_plans_directories(plugin, session_env, tmp_path, symlink_or_skip, symlink_dir):
     path = approve(plugin)
     other = tmp_path / "other"
     other.mkdir()
     if symlink_dir:
-        (other / ".hermes").symlink_to(path.parent.parent, target_is_directory=True)
+        symlink_or_skip(other / ".hermes", path.parent.parent, target_is_directory=True)
     session_env.update(TERMINAL_CWD=str(other), HERMES_SESSION_KEY="new-session")
     assert "No approved plan to resume" in plugin.command("resume")
     assert not current(plugin)

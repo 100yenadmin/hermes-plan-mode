@@ -8,12 +8,24 @@ import tempfile
 # missing folders there. On a developer machine the real ~/.hermes is a live agent's home (#107).
 _TEST_HOME = tempfile.mkdtemp(prefix="plan-mode-tests-home-")
 os.environ["HOME"] = _TEST_HOME
+os.environ["USERPROFILE"] = _TEST_HOME
 os.environ["HERMES_HOME"] = os.path.join(_TEST_HOME, ".hermes")
 atexit.register(shutil.rmtree, _TEST_HOME, True)
 
 import pytest  # noqa: E402
 
 from plan_mode import plugin as pm  # noqa: E402
+
+
+@pytest.fixture
+def symlink_or_skip():
+    def create(link, target, *, target_is_directory=False):
+        try:
+            link.symlink_to(target, target_is_directory=target_is_directory)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks need a privilege on this platform")
+
+    return create
 
 
 @pytest.fixture(autouse=True)

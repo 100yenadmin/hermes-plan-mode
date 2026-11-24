@@ -1,5 +1,6 @@
 """1.4.0: a finish line when an approved plan ends, /planmode list, and the agent's inspect and list actions."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -174,11 +175,11 @@ def test_ui_tabs_never_show_another_tabs_finish(make_plugin, session_env):
         "✅ Plan rev 7 done: 1 of 1 steps, 1 file changed (other-tab.py).")
 
 
-def test_list_refuses_a_symlinked_plans_directory(make_plugin, session_env, tmp_path):
+def test_list_refuses_a_symlinked_plans_directory(make_plugin, session_env, tmp_path, symlink_or_skip):
     elsewhere = tmp_path / "elsewhere" / "plans"
     elsewhere.mkdir(parents=True)
     (elsewhere / "outside.md").write_text("# x", encoding="utf-8")
-    (tmp_path / ".hermes").symlink_to(tmp_path / "elsewhere")
+    symlink_or_skip(tmp_path / ".hermes", tmp_path / "elsewhere", target_is_directory=True)
     plugin = make_plugin("approval_card")
     listing = plugin.command("list")
     assert listing.startswith("Plan listing was refused") and "outside.md" not in listing
@@ -189,7 +190,7 @@ def test_relative_and_absolute_spellings_count_once(building, session_env):
     plugin, _ = building
     wrote(plugin, "parser.py")
     wrote(plugin, session_env["TERMINAL_CWD"] + "/parser.py")
-    assert state(plugin)["changed_files"] == [session_env["TERMINAL_CWD"] + "/parser.py"]
+    assert state(plugin)["changed_files"] == [str(Path(session_env["TERMINAL_CWD"]) / "parser.py")]
 
 
 def test_reentry_keeps_a_finished_plans_status(building):
@@ -213,10 +214,10 @@ def test_done_command_records_done_in_the_list(building):
     assert f"`{path.name}`: done (rev 1, " in plugin.command("list")
 
 
-def test_symlinked_spelling_counts_once(building, session_env, tmp_path):
+def test_symlinked_spelling_counts_once(building, session_env, tmp_path, symlink_or_skip):
     plugin, _ = building
     link = tmp_path / "cwd-link"
-    link.symlink_to(session_env["TERMINAL_CWD"])
+    symlink_or_skip(link, session_env["TERMINAL_CWD"], target_is_directory=True)
     wrote(plugin, "parser.py")
     wrote(plugin, str(link / "parser.py"))
     assert len(state(plugin)["changed_files"]) == 1

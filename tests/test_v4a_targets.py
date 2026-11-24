@@ -69,6 +69,7 @@ def test_legacy_newline_and_arrow_targets_are_preserved(patch):
 @pytest.mark.parametrize("kind", FORMS)
 @pytest.mark.parametrize("character", [" ", "\n", "*", "#", "\t", "\r"])
 @pytest.mark.parametrize("position", ["after_header", "after_stars", "after_kind", "after_arrow"])
+@pytest.mark.skipif(not hasattr(signal, "SIGALRM"), reason="the 250 ms deadline requires SIGALRM and setitimer")
 def test_one_mb_adversarial_under_250_ms(kind, character, position):
     run = character * 1_000_000
     prefix = f"*** {kind} File:"
