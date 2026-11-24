@@ -11,8 +11,8 @@
 - **The footer cuts the step name at a word**, with an ellipsis, instead of mid-word at 60 characters.
 - **Voice replies work while planning** (#115). A voice-first agent could only send text until the user approved the
   plan, because `text_to_speech` was blocked like any unknown tool. It is now allowed while plan mode is on when it
-  writes to Hermes' own audio cache, that is, without an `output_path`; any `output_path` stays blocked, so nothing
-  lands in the project before approval. A voice reply still runs your configured TTS provider.
+  writes to Hermes' own audio cache, that is, without an `output_path`; any `output_path` stays blocked (unless you list
+  `text_to_speech` in `extra_allowed_tools`), so nothing lands in the project before approval. A voice reply still runs your configured TTS provider.
 - **No re-asking on turns the user did not write** (#116). While a plan awaits approval, the turn note now tells the
   agent not to ask again on a background notice, a wake or another agent's message, and to wait for the user. Hermes
   gives plugins no signal for who started a turn, so this is an instruction, not a check.
