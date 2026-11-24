@@ -453,3 +453,16 @@ def test_finish_hold_knows_an_old_steer_after_hermes_edits_the_text_around_it(un
     unfinished.pre_llm_call(conversation_history=[{**MARKED, "content": edited}, NOTICE], **turn)
     assert unfinished.pre_api_request(conversation_history=[MARKED, NOTICE, {"role": "tool"}], **turn) is None
     assert finish(unfinished) is None
+
+
+def test_finish_hold_ignores_an_old_steer_quoted_or_reflowed_by_compaction(unfinished):
+    # Fallback compaction flattens whitespace and can quote an old steer in a summary merged into another old steer row.
+    old = {"role": "user", "display_kind": "steer",
+           "content": "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nBuild\nthen test\n[/OUT-OF-BAND USER MESSAGE]"}
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=[old, MARKED, NOTICE], **turn)
+    merged = {**MARKED, "_compressed_summary": True, "content": MARKED["content"] + "\n\nSummary: the user said "
+              "[OUT-OF-BAND USER MESSAGE — a direct message from the user] Build then test [/OUT-OF-BAND USER MESSAGE]"}
+    reflowed = {**old, "content": old["content"].replace("\n", " ")}
+    assert unfinished.pre_api_request(conversation_history=[merged, reflowed, NOTICE, {"role": "tool"}], **turn) is None
+    assert finish(unfinished) is None

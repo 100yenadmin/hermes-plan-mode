@@ -119,6 +119,7 @@ _STEER_DISPLAY_KIND = "steer"  # agent.prompt_builder.steer_user_row: the user w
 _HIDDEN_DISPLAY_KIND = "hidden"  # tools.process_registry_notifications.HEARTBEAT_DISPLAY_KIND
 _STEER_OPEN = "[OUT-OF-BAND USER MESSAGE"  # agent.prompt_builder.STEER_MARKER_OPEN starts with this
 _STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"  # agent.prompt_builder.STEER_MARKER_CLOSE
+_COMPRESSED_SUMMARY_KEY = "_compressed_summary"  # agent.context_compressor.COMPRESSED_SUMMARY_METADATA_KEY
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
 # names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
@@ -712,7 +713,7 @@ def _steer_payloads(text: str) -> list[str]:
         end = text.find(_STEER_CLOSE, body + 1) if body >= 0 else -1
         if end < 0:
             break
-        payloads.append(text[body + 1:end].strip())
+        payloads.append(" ".join(text[body + 1:end].split()))  # compaction can reflow whitespace
         pos = end + len(_STEER_CLOSE)
     return payloads
 
@@ -723,12 +724,14 @@ def _steer_marks(history: Any) -> set[str]:
     marks: set[str] = set()
     for row in history if isinstance(history, (list, tuple)) else ():
         if isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == _STEER_DISPLAY_KIND:
+            if row.get(_COMPRESSED_SUMMARY_KEY):
+                continue  # a row compaction rewrote (summary merged in) is never a fresh steer
             text = _row_text(row.get("content"))
             payloads = _steer_payloads(text)
             if payloads:
                 marks.update(f"p:{payload}" for payload in payloads)
             else:
-                marks.add(f"c:{text}")
+                marks.add(f"c:{' '.join(text.split())}")
     return marks
 
 
