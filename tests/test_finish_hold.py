@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from plan_mode import plugin as pm
+from test_plan_mode import FakeContext
 from test_plan_mode import executing_plan, plan_profile, plugin, session_env, submitted_plan  # noqa: F401 (fixtures)
 
 pytestmark = pytest.mark.usefixtures("directive_lean")
@@ -82,6 +83,112 @@ def test_finish_hold_tracks_turn_origin_per_session(unfinished, session_env, exe
 
     session_env["HERMES_SESSION_KEY"] = "unit-session"
     assert finish(unfinished) is None
+
+
+@pytest.mark.parametrize("owner_row", [{"role": "user", "display_kind": "steer", "content": "[OUT-OF-BAND USER MESSAGE ..."}])
+def test_finish_hold_promotes_machinery_turn_once_after_an_owner_message(unfinished, owner_row):
+    history = [{"role": "user", "display_kind": "internal_notification"}]
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=history, **turn)
+    assert finish(unfinished) is None
+    assert unfinished.pre_api_request(conversation_history=[*history, {"role": "tool"}, owner_row], **turn) is None
+    assert finish(unfinished)["action"] == "continue"
+    assert finish(unfinished, attempt=1) is None
+
+    assert unfinished.pre_api_request(conversation_history=history, **turn) is None
+    assert finish(unfinished)["action"] == "continue"  # later calls cannot undo the promotion
+
+
+@pytest.mark.parametrize("hook", ["pre_llm_call", "pre_api_request"])
+def test_finish_hold_matches_by_session_when_one_hook_has_no_turn_id(unfinished, hook):
+    history = [{"role": "user", "display_kind": "internal_notification"}]
+    start_id = {} if hook == "pre_llm_call" else {"turn_id": "turn-1"}
+    request_id = {} if hook == "pre_api_request" else {"turn_id": "turn-1"}
+    unfinished.pre_llm_call(platform="cli", conversation_history=history, **start_id)
+    assert unfinished.pre_api_request(
+        platform="cli", conversation_history=[*history, {"role": "user", "display_kind": "steer"}], **request_id,
+    ) is None
+    assert finish(unfinished)["action"] == "continue"
+
+
+@pytest.mark.parametrize("request_turn, appended_rows", [
+    ("turn-1", [{"role": "user", "display_kind": "process_complete"}]),
+    ("turn-1", [{"role": "tool", "display_kind": "steer"}]),
+    ("turn-2", [{"role": "user", "display_kind": "steer"}]),
+])
+def test_finish_hold_ignores_rows_outside_the_current_turn_or_without_user_input(
+    unfinished, request_turn, appended_rows,
+):
+    history = [{"role": "user", "display_kind": "steer"}, {"role": "assistant"},
+               {"role": "user", "display_kind": "internal_notification"}]
+    unfinished.pre_llm_call(platform="cli", turn_id="turn-1", conversation_history=history)
+    assert unfinished.pre_api_request(
+        platform="cli", turn_id=request_turn, conversation_history=[*history, *appended_rows],
+    ) is None
+    assert finish(unfinished) is None
+
+
+@pytest.mark.parametrize("scaffolding", [
+    {"role": "user", "content": "LSP: app.py has 1 error"},  # turn_stop_gates LSP note: no flag, no display_kind
+    {"role": "user", "content": "Continue.", "_pre_verify_synthetic": True},  # another plugin's stop-gate nudge
+    {"role": "user", "content": "Continue where you stopped.", "_verification_stop_synthetic": True},
+    {"role": "user", "content": "[todo snapshot]", "_todo_snapshot_synthetic": True},
+    {"role": "user", "display_kind": "text", "content": "x"},
+])
+def test_finish_hold_never_promotes_a_machinery_turn_on_hermes_own_user_rows(unfinished, scaffolding):
+    # Hermes appends its own user-role rows mid-turn; only a steer means the user wrote into the turn.
+    history = [{"role": "user", "display_kind": "internal_notification"}]
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=history, **turn)
+    assert unfinished.pre_api_request(conversation_history=[*history, {"role": "tool"}, scaffolding], **turn) is None
+    assert finish(unfinished) is None
+
+
+def test_finish_hold_keeps_a_user_started_turn_after_a_machinery_row(unfinished):
+    turn = dict(platform="cli", turn_id="turn-1")
+    history = [{"role": "user"}]
+    unfinished.pre_llm_call(conversation_history=history, **turn)
+    assert unfinished.pre_api_request(
+        conversation_history=[*history, {"role": "user", "display_kind": "process_complete"}], **turn,
+    ) is None
+    assert finish(unfinished)["action"] == "continue"
+
+
+def test_finish_hold_per_call_steer_does_not_leak_across_sessions(unfinished, session_env):
+    turn = dict(platform="cli", turn_id="turn-1")
+    history = [{"role": "user", "display_kind": "internal_notification"}]
+    unfinished.pre_llm_call(conversation_history=history, **turn)
+    session_env["HERMES_SESSION_KEY"] = "other-session"
+    unfinished.pre_llm_call(conversation_history=history, **turn)
+    assert unfinished.pre_api_request(
+        conversation_history=[*history, {"role": "user", "display_kind": "steer"}], **turn,
+    ) is None
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    assert finish(unfinished) is None
+
+
+def test_finish_hold_per_call_hook_returns_none_when_identity_lookup_raises(unfinished, monkeypatch):
+    def broken_identity(_platform):
+        raise RuntimeError("identity unavailable")
+
+    monkeypatch.setattr(pm, "derive_session_identity", broken_identity)
+    assert unfinished.pre_api_request(platform="cli", conversation_history=[{"role": "user"}]) is None
+
+
+def test_finish_hold_registers_other_hooks_when_host_rejects_pre_api_request(plugin):
+    class OlderContext(FakeContext):
+        rejected = False
+
+        def register_hook(self, name, callback):
+            if name == "pre_api_request":
+                self.rejected = True
+                raise ValueError("unknown hook")
+            super().register_hook(name, callback)
+
+    context = OlderContext()
+    pm.PlanModePlugin(context).register()
+    assert context.rejected
+    assert context.hooks.keys() == plugin.ctx.hooks.keys() - {"pre_api_request"}
 
 
 @pytest.mark.parametrize("helper_available", [False, True])

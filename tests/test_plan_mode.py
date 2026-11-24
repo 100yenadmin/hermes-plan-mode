@@ -92,6 +92,7 @@ def test_registers_exact_surface(plugin, plan_profile):
         "pre_tool_call",
         "post_tool_call",
         "pre_llm_call",
+        "pre_api_request",
         "pre_verify",
         "transform_llm_output",
         "pre_approval_request",

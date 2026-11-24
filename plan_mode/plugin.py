@@ -115,6 +115,7 @@ _RESUME_UI_REFUSAL = (
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _MACHINERY_DISPLAY_KINDS = frozenset({"internal_notification", "process_complete", "async_delegation_complete"})
+_STEER_DISPLAY_KIND = "steer"  # agent.prompt_builder.steer_user_row: the user writing into a running turn
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
 # names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
@@ -676,13 +677,7 @@ def _delegated_child() -> bool:
         return False
 
 
-def _is_machinery_turn(history: Any) -> bool:
-    if not isinstance(history, (list, tuple)) or not history:
-        return False
-    row = history[-1]
-    if not isinstance(row, dict) or row.get("role") != "user":
-        return False
-    kind = row.get("display_kind")
+def _is_machinery_display_kind(kind: Any) -> bool:
     if not isinstance(kind, str):
         return False
     # Use the host's classification when loaded, without importing gateway from a hook.
@@ -693,6 +688,13 @@ def _is_machinery_turn(history: Any) -> bool:
         except Exception:
             pass
     return kind in _MACHINERY_DISPLAY_KINDS
+
+
+@dataclass
+class _TurnOrigin:
+    turn_id: str | None
+    start: int
+    machinery: bool
 
 
 def _edit_review_available() -> bool:
@@ -720,7 +722,7 @@ class PlanModePlugin:
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
         self._turn_blocks: dict[str, list[dict[str, Any]]] = {}  # session key -> per-turn blocks not yet named
         self._turn_finishes: dict[str, dict[str, Any]] = {}  # session key -> a plan that ended mid-turn (classic)
-        self._machinery_turn_keys: set[str] = set()  # current turn by session identity; absence means user
+        self._turn_origins: OrderedDict[str, _TurnOrigin] = OrderedDict()
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
         self._hook_platforms: OrderedDict[str, str] = OrderedDict()
@@ -761,6 +763,10 @@ class PlanModePlugin:
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
+        try:
+            self.ctx.register_hook("pre_api_request", self.pre_api_request)
+        except Exception:
+            pass  # Older hosts may reject the per-call hook.
         self.ctx.register_hook("pre_verify", self.pre_verify)
         self.ctx.register_hook("transform_llm_output", self.transform_llm_output)
         # Always registered: settings are read per call, so a profile switch needs no restart; each hook no-ops
@@ -2958,10 +2964,18 @@ class PlanModePlugin:
             with self._lock:
                 # Track the turn's own identity, which can differ from an adopted plan's state key.
                 if identity.surface.lower() not in _NO_TURN_NOTE_PLATFORMS and not _delegated_child():
-                    if _is_machinery_turn(kwargs.get("conversation_history")):
-                        self._machinery_turn_keys.add(identity.key)
-                    else:
-                        self._machinery_turn_keys.discard(identity.key)
+                    history = kwargs.get("conversation_history")
+                    if not isinstance(history, (list, tuple)):
+                        history = ()
+                    last_row = history[-1] if history else None
+                    machinery = (
+                        isinstance(last_row, dict) and last_row.get("role") == "user"
+                        and _is_machinery_display_kind(last_row.get("display_kind"))
+                    )
+                    self._turn_origins[identity.key] = _TurnOrigin(kwargs.get("turn_id"), len(history) - 1, machinery)
+                    self._turn_origins.move_to_end(identity.key)
+                    while len(self._turn_origins) > 256:
+                        self._turn_origins.popitem(last=False)
                 state_key, state = self._state_for_hook(identity)
                 if state_key and state.get("finish_pending"):
                     self._finish_plan(state_key, state)  # the previous turn ended without post_llm_call
@@ -3334,6 +3348,36 @@ class PlanModePlugin:
             "next": next_steps,
         }
 
+    def pre_api_request(self, **kwargs: Any) -> None:
+        """Treat a machinery-started turn as a user turn once the user steers it (writes into it mid-turn)."""
+        try:
+            platform = str(kwargs.get("platform") or "").strip().lower()
+            if platform in _NO_TURN_NOTE_PLATFORMS or _delegated_child():
+                return None
+            identity = derive_session_identity(platform)
+            if (identity.unsupported or identity.non_cli_without_key or not identity.key
+                    or identity.surface.lower() in _NO_TURN_NOTE_PLATFORMS):
+                return None
+            history = kwargs.get("conversation_history")
+            if not isinstance(history, (list, tuple)):
+                return None
+            turn_id = kwargs.get("turn_id")
+            with self._lock:
+                origin = self._turn_origins.get(identity.key)
+                if origin is None or not origin.machinery:
+                    return None
+                if origin.turn_id is not None and turn_id is not None and origin.turn_id != turn_id:
+                    return None
+                # Only a steer is the user writing mid-turn; Hermes' other mid-turn user rows (stop-gate nudges, LSP
+                # notes, continuation prompts) are its own scaffolding and must not turn a notice into a user turn.
+                for index in range(max(origin.start, 0), len(history)):
+                    row = history[index]
+                    if isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == _STEER_DISPLAY_KIND:
+                        origin.machinery = False
+                        break
+        except Exception:
+            return None  # Observing a turn must not affect the model request.
+
     def pre_verify(self, **kwargs: Any) -> dict[str, str] | None:
         """Nudge at most once when Hermes is about to end an edited user turn with open plan todos."""
         try:
@@ -3350,7 +3394,8 @@ class PlanModePlugin:
                     or identity.surface.lower() in _NO_TURN_NOTE_PLATFORMS):
                 return None
             with self._lock:
-                if identity.key in self._machinery_turn_keys:
+                origin = self._turn_origins.get(identity.key)
+                if origin is not None and origin.machinery:
                     return None
                 key, state = self._state_for_hook(identity)
                 if not key or state.get("phase") != "executing" or state.get("finish_pending"):
