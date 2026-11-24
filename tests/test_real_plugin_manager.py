@@ -1084,6 +1084,8 @@ def test_161_real_transform_seam_keeps_a_silent_reply_silent(real_submit_host):
     """Hermes' own output-transform seam, then its own silence rule: [SILENT] must leave plan mode unchanged."""
     finalizer = pytest.importorskip("agent.turn_finalizer")
     filters = pytest.importorskip("gateway.response_filters")
+    if not hasattr(finalizer, "apply_llm_output_transform") or not hasattr(filters, "strip_trailing_silence_marker"):
+        pytest.skip("this Hermes has no shared output-transform seam or trailing-marker rule")
 
     host = real_submit_host
     host.callback(lambda *a, **kw: "once")

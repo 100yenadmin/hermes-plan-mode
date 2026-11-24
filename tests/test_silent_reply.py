@@ -106,9 +106,14 @@ def _host_filters():
     return pytest.importorskip("gateway.response_filters")  # Hermes legs only
 
 
-def test_local_markers_match_the_host():
+def test_local_markers_cover_the_host():
     host = _host_filters()
-    assert render.SILENCE_MARKERS == host.LIVE_GATEWAY_SILENT_MARKERS
+    markers = getattr(host, "LIVE_GATEWAY_SILENT_MARKERS", None)
+    if markers is None:
+        pytest.skip("this Hermes has no shared marker set")
+    # Every marker the host keeps silent must be known here; older hosts know fewer (no zh forms), which only means
+    # a reply such as "静默" loses its footer there, never that a silent turn leaks.
+    assert markers <= render.SILENCE_MARKERS
 
 
 @pytest.mark.parametrize("reply", SILENT + SPOKEN)
@@ -118,8 +123,9 @@ def test_untouched_or_footed_the_host_delivers_the_same_text(plugin, executing_p
     out = plugin.transform_llm_output(response_text=reply, platform="telegram") or reply
     assert host.is_intentional_silence_response(out) == host.is_intentional_silence_response(reply)
     if reply.strip():
-        # What the user would read. A footed reply adds only the footer line.
-        delivered, before = host.strip_trailing_silence_marker(out), host.strip_trailing_silence_marker(reply)
+        # What the user would read. A footed reply adds only the footer line. Older hosts have no trailing rule.
+        strip = getattr(host, "strip_trailing_silence_marker", lambda text: text)
+        delivered, before = strip(out), strip(reply)
         assert delivered == before or delivered == before.rstrip() + "\n\nPlan progress 1/3 · now: Level 1 build"
 
 
