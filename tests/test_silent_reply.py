@@ -143,7 +143,11 @@ def test_a_broken_host_helper_falls_back_to_the_local_rule(plugin, executing_pla
 
     monkeypatch.setitem(sys.modules, "gateway.response_filters", Broken())
     progress(plugin)
-    assert plugin.transform_llm_output(response_text="[SILENT]", platform="telegram") is None
+    # The host's error neither hides the footer on a spoken reply nor lets a silent one through.
+    footer = plugin.transform_llm_output(response_text="Working", platform="telegram")
+    assert footer == "Working\n\nPlan progress 1/3 · now: Level 1 build"
+    assert plugin.transform_llm_output(response_text="NO_REPLY", platform="telegram") is None
+    assert render.is_silent_reply("NO_REPLY") and not render.is_silent_reply("Working")
 
 
 def test_a_host_marker_the_plugin_does_not_know_is_still_silent(plugin, executing_plan, monkeypatch):
