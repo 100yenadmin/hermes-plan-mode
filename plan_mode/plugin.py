@@ -2997,7 +2997,8 @@ class PlanModePlugin:
                     if submission.get("status") == "awaiting" and clarify:
                         awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
                                     f"question={clarify['question']}, choices={clarify['choices']}, "
-                                    "or the user can run /planmode approve.")
+                                    "or the user can run /planmode approve. On a turn the user did not write (a notice, a "
+                                    "wake or another agent's message), do not ask again: wait for the user.")
                         awaiting = awaiting if "approval_card" in self._levers() and submission.get("card") else awaiting[:399]
                         if short:
                             parts.append(awaiting)
