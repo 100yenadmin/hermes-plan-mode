@@ -286,7 +286,7 @@ and the planning turn note tells the model to search for `plan_mode` if it is no
 - media and browser reads: `vision_analyze`, `video_analyze`, `browser_snapshot`, `browser_get_images`,
   `browser_vision`;
 - voice replies: `text_to_speech` with `output_path` omitted, null, or an empty string, using Hermes' default
-  audio location;
+  audio location (it still runs your configured TTS provider, including a command provider, before approval);
 - local UI reads: `read_terminal`, `read_window_below`;
 - `write_file` and `patch` only when every target is an absolute path whose real path stays inside the plans
   directory.
