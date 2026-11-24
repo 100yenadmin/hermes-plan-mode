@@ -3324,6 +3324,9 @@ class PlanModePlugin:
                 key, state = self._state_for_hook(identity)
                 if not key or state.get("phase") != "executing" or state.get("finish_pending"):
                     return None
+                review = state.get("edit_review")
+                if isinstance(review, dict) and review.get("denied"):
+                    return None  # the user just denied an edit: the agent asks what to change, it does not push on
                 progress = state.get("progress") or {}
                 total = progress.get("total", 0)
                 done = progress.get("completed", 0) + progress.get("cancelled", 0)
@@ -3332,10 +3335,12 @@ class PlanModePlugin:
                 revision = state.get("approved_revision")
                 plan = f"Plan rev {revision}" if revision is not None else "Plan"
                 step = progress.get("current") or state.get("next_pending_todo") or "the first pending step"
+                step = " ".join(str(step).split())  # one line, as on the progress card
                 return {"action": "continue", "message": (
                     f"{plan} is not finished: {done} of {total} steps done, next: {step}. Continue with it.\n"
-                    "If it is blocked, needs the user's decision, or is waiting on a running process or a reply, "
-                    "say so in one line and stop; if a step is no longer needed, mark it cancelled in todo_list and say why."
+                    "If it is blocked, needs the user's decision, is waiting on a running process or a reply, or the user "
+                    "asked you to stop or to do something else, say so in one line and stop; if a step is no longer needed, "
+                    "mark it cancelled in todo_list and say why."
                 )}
         except Exception:
             return None  # An advisory finish hold must not stop the turn from ending on error.

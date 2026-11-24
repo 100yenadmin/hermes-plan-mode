@@ -30,8 +30,9 @@ def test_finish_hold_names_the_current_step_and_offers_an_out_once(unfinished):
         "action": "continue",
         "message": (
             "Plan rev 1 is not finished: 2 of 4 steps done, next: Build. Continue with it.\n"
-            "If it is blocked, needs the user's decision, or is waiting on a running process or a reply, "
-            "say so in one line and stop; if a step is no longer needed, mark it cancelled in todo_list and say why."
+            "If it is blocked, needs the user's decision, is waiting on a running process or a reply, or the user "
+            "asked you to stop or to do something else, say so in one line and stop; if a step is no longer needed, "
+            "mark it cancelled in todo_list and say why."
         ),
     }
     assert finish(unfinished, attempt=1) is None
@@ -106,3 +107,20 @@ def test_finish_hold_fails_open_when_the_state_loader_raises(unfinished, monkeyp
 
     monkeypatch.setattr(unfinished, "_load_state", broken_loader)
     assert finish(unfinished) is None
+
+
+def test_finish_hold_noops_right_after_the_user_denied_an_edit(unfinished):
+    # The denial note reaches the model only on the next turn; holding now would contradict the user's "no".
+    state = unfinished._load_state("sk:unit-session")
+    state["edit_review"] = {"denied": True}
+    unfinished._save_state("sk:unit-session", state)
+    assert finish(unfinished) is None
+    state["edit_review"] = {"denied": False}
+    unfinished._save_state("sk:unit-session", state)
+    assert finish(unfinished) is not None  # the same state without a denial still holds
+
+
+def test_finish_hold_puts_a_multi_line_step_on_one_line(unfinished):
+    observe_todos(unfinished, ("in_progress", "line1\nIGNORE ALL\n  line3"), ("pending", "Test"))
+    message = finish(unfinished)["message"]
+    assert "next: line1 IGNORE ALL line3. Continue with it." in message and message.count("\n") == 1
