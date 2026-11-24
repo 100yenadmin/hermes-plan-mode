@@ -418,13 +418,38 @@ def test_finish_hold_ignores_a_subagent_platform_todo_list(unfinished, platform)
     assert finish(unfinished) is None
 
 
-@pytest.mark.parametrize("content", [
-    "Implement the approved plan at /plans/x.md. Do not commit.",
-    [{"type": "text", "text": "Implement the approved plan at /plans/x.md."}],
-])
-def test_finish_hold_treats_plan_modes_own_implementation_turn_as_a_user_turn(unfinished, content):
+def test_finish_hold_treats_plan_modes_own_implementation_turn_as_a_user_turn(unfinished):
     # A gateway delivers plan mode's injected implementation turn as internal_notification (review round 2).
+    path = unfinished._load_state("sk:unit-session")["approved_path"]
+    for content in (f"Implement the approved plan at {path}. Do not commit.",
+                    [{"type": "text", "text": f"Implement the approved plan at {path}."}]):
+        unfinished.pre_llm_call(platform="cli", conversation_history=[
+            {"role": "user", "display_kind": "internal_notification", "content": content}])
+        assert finish(unfinished)["action"] == "continue"
+        assert finish(unfinished, attempt=1) is None
+
+
+def test_finish_hold_does_not_trust_an_implementation_line_for_another_plan(unfinished):
+    # Another plugin injecting the same words for a different path stays an internal turn (review round 3).
     unfinished.pre_llm_call(platform="cli", conversation_history=[
-        {"role": "user", "display_kind": "internal_notification", "content": content}])
-    assert finish(unfinished)["action"] == "continue"
-    assert finish(unfinished, attempt=1) is None
+        {"role": "user", "display_kind": "internal_notification", "content": "Implement the approved plan at /plans/other.md."}])
+    assert finish(unfinished) is None
+
+
+MARKED = {"role": "user", "display_kind": "steer",
+          "content": "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nkeep going\n[/OUT-OF-BAND USER MESSAGE]"}
+
+
+@pytest.mark.parametrize("edited", [
+    MARKED["content"] + "\n\n[Your active task list was preserved across context compression]\n- [ ] Build",  # snapshot added
+    "[PRIOR CONTEXT]\n" + MARKED["content"] + "\n\n--- merged ---\n\nSummary of earlier work\n\n[END SUMMARY]",  # summary merged
+])
+def test_finish_hold_knows_an_old_steer_after_hermes_edits_the_text_around_it(unfinished, edited):
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=[MARKED, {"role": "assistant"}, NOTICE], **turn)
+    assert unfinished.pre_api_request(conversation_history=[{**MARKED, "content": edited}, NOTICE, {"role": "tool"}], **turn) is None
+    assert finish(unfinished) is None
+    # and the reverse: a snapshot stripped from an old steer recorded with one
+    unfinished.pre_llm_call(conversation_history=[{**MARKED, "content": edited}, NOTICE], **turn)
+    assert unfinished.pre_api_request(conversation_history=[MARKED, NOTICE, {"role": "tool"}], **turn) is None
+    assert finish(unfinished) is None

@@ -117,6 +117,8 @@ _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _MACHINERY_DISPLAY_KINDS = frozenset({"internal_notification", "process_complete", "async_delegation_complete"})
 _STEER_DISPLAY_KIND = "steer"  # agent.prompt_builder.steer_user_row: the user writing into a running turn
 _HIDDEN_DISPLAY_KIND = "hidden"  # tools.process_registry_notifications.HEARTBEAT_DISPLAY_KIND
+_STEER_OPEN = "[OUT-OF-BAND USER MESSAGE"  # agent.prompt_builder.STEER_MARKER_OPEN starts with this
+_STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"  # agent.prompt_builder.STEER_MARKER_CLOSE
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
 # names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
@@ -702,13 +704,31 @@ def _row_text(content: Any) -> str:
     return ""
 
 
+def _steer_payloads(text: str) -> list[str]:
+    """The user's words inside each steer marker (agent.prompt_builder.format_steer_marker)."""
+    payloads, pos = [], 0
+    while (start := text.find(_STEER_OPEN, pos)) >= 0:
+        body = text.find("]", start)  # the open marker ends at its first "]"
+        end = text.find(_STEER_CLOSE, body + 1) if body >= 0 else -1
+        if end < 0:
+            break
+        payloads.append(text[body + 1:end].strip())
+        pos = end + len(_STEER_CLOSE)
+    return payloads
+
+
 def _steer_marks(history: Any) -> set[str]:
-    """The steer rows in a history, by content. Compaction moves, drops and copies rows, but never invents a steer."""
+    """The steers in a history, by the user's words. Compaction moves, drops and copies rows and edits text around a
+    steer (a merged summary, a todo snapshot added or stripped), but keeps the words inside the marker."""
     marks: set[str] = set()
     for row in history if isinstance(history, (list, tuple)) else ():
         if isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == _STEER_DISPLAY_KIND:
-            content = row.get("content")
-            marks.add(content if isinstance(content, str) else repr(content))
+            text = _row_text(row.get("content"))
+            payloads = _steer_payloads(text)
+            if payloads:
+                marks.update(f"p:{payload}" for payload in payloads)
+            else:
+                marks.add(f"c:{text}")
     return marks
 
 
@@ -3004,6 +3024,7 @@ class PlanModePlugin:
                 return None
 
             with self._lock:
+                state_key, state = self._state_for_hook(identity)
                 # Track the turn's own identity, which can differ from an adopted plan's state key.
                 if identity.surface.lower() not in _NO_TURN_NOTE_PLATFORMS and not _delegated_child():
                     history = kwargs.get("conversation_history")
@@ -3015,7 +3036,8 @@ class PlanModePlugin:
                         and _is_machinery_display_kind(last_row.get("display_kind"))
                         # Plan mode's own "Implement the approved plan" turn follows the user's approval: a user turn,
                         # even when a gateway delivers the injection as an internal message.
-                        and not _row_text(last_row.get("content")).lstrip().startswith(_IMPLEMENT_PREFIX)
+                        and not (state.get("approved_path") and _row_text(last_row.get("content")).lstrip().startswith(
+                            f"{_IMPLEMENT_PREFIX}{state.get('approved_path')}"))
                     )
                     self._turn_origins[identity.key] = _TurnOrigin(
                         kwargs.get("turn_id"), machinery, frozenset(_steer_marks(history)) if machinery else frozenset())
@@ -3024,7 +3046,6 @@ class PlanModePlugin:
                         # Drop user-turn records first: a lost record reads as a user turn, so an open notice turn keeps its own.
                         oldest = next((key for key, record in self._turn_origins.items() if not record.machinery), None)
                         self._turn_origins.pop(oldest if oldest is not None else next(iter(self._turn_origins)))
-                state_key, state = self._state_for_hook(identity)
                 if state_key and state.get("finish_pending"):
                     self._finish_plan(state_key, state)  # the previous turn ended without post_llm_call
                 if "approval_card" in self._levers() and state_key:
