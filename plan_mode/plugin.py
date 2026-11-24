@@ -693,20 +693,30 @@ def _is_machinery_display_kind(kind: Any) -> bool:
     return kind in _MACHINERY_DISPLAY_KINDS
 
 
-def _same_turn_start(content: Any, recorded: Any) -> bool:
-    """The turn's first row after compaction: same content, or the same text with a todo snapshot appended."""
-    if content == recorded:
-        return True
-    return isinstance(content, str) and isinstance(recorded, str) and bool(recorded) and content.startswith(recorded)
+def _row_text(content: Any) -> str:
+    """A message row's text: a string, or the text parts of a multimodal list."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    return ""
+
+
+def _steer_marks(history: Any) -> set[str]:
+    """The steer rows in a history, by content. Compaction moves, drops and copies rows, but never invents a steer."""
+    marks: set[str] = set()
+    for row in history if isinstance(history, (list, tuple)) else ():
+        if isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == _STEER_DISPLAY_KIND:
+            content = row.get("content")
+            marks.add(content if isinstance(content, str) else repr(content))
+    return marks
 
 
 @dataclass
 class _TurnOrigin:
     turn_id: str | None
-    start: int
     machinery: bool
-    kind: Any = None  # the turn's first row, to find it again after Hermes compacts the history
-    content: Any = None
+    known_steers: frozenset[str] = frozenset()  # steers already in the history when the turn started
 
 
 def _edit_review_available() -> bool:
@@ -2413,6 +2423,15 @@ class PlanModePlugin:
 
     def post_llm_call(self, **kwargs: Any) -> None:
         """Turn-end hook (after the tool loop), including local surfaces without footers."""
+        try:
+            platform = str(kwargs.get("platform") or "").strip().lower()
+            if platform not in _NO_TURN_NOTE_PLATFORMS and not _delegated_child():  # a child shares the parent's key
+                ended = derive_session_identity(platform)
+                if ended.key:
+                    with self._lock:
+                        self._turn_origins.pop(ended.key, None)  # the turn is over; only open turns keep a record
+        except Exception:
+            pass
         if not {"todo_batch", "todo_inline"} & self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
             return
         try:
@@ -2994,10 +3013,12 @@ class PlanModePlugin:
                     machinery = (
                         isinstance(last_row, dict) and last_row.get("role") == "user"
                         and _is_machinery_display_kind(last_row.get("display_kind"))
+                        # Plan mode's own "Implement the approved plan" turn follows the user's approval: a user turn,
+                        # even when a gateway delivers the injection as an internal message.
+                        and not _row_text(last_row.get("content")).lstrip().startswith(_IMPLEMENT_PREFIX)
                     )
                     self._turn_origins[identity.key] = _TurnOrigin(
-                        kwargs.get("turn_id"), len(history) - 1, machinery,
-                        last_row.get("display_kind") if machinery else None, last_row.get("content") if machinery else None)
+                        kwargs.get("turn_id"), machinery, frozenset(_steer_marks(history)) if machinery else frozenset())
                     self._turn_origins.move_to_end(identity.key)
                     while len(self._turn_origins) > 256:
                         # Drop user-turn records first: a lost record reads as a user turn, so an open notice turn keeps its own.
@@ -3397,20 +3418,11 @@ class PlanModePlugin:
                     return None
                 # Only a steer is the user writing mid-turn; Hermes' other mid-turn user rows (stop-gate nudges, LSP
                 # notes, continuation prompts) are its own scaffolding and must not turn a notice into a user turn.
-                # Hermes may compact the history after pre_llm_call (turn start) or mid-turn, which moves every row, so
-                # scan after this turn's own first row when it is still there, else from the recorded index.
-                begin = max(origin.start, 0)
-                for index in range(len(history) - 1, -1, -1):
-                    row = history[index]
-                    if (isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == origin.kind
-                            and _same_turn_start(row.get("content"), origin.content)):
-                        begin = index + 1
-                        break
-                for index in range(begin, len(history)):
-                    row = history[index]
-                    if isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == _STEER_DISPLAY_KIND:
-                        origin.machinery = False
-                        break
+                # A steer counts when it was not in the history at turn start: Hermes may compact the history right
+                # after pre_llm_call or mid-turn, which moves, drops and copies rows, so positions are not reliable.
+                # (A new steer whose text repeats an earlier one is missed: that turn is not held.)
+                if _steer_marks(history) - origin.known_steers:
+                    origin.machinery = False
         except Exception:
             return None  # Observing a turn must not affect the model request.
 

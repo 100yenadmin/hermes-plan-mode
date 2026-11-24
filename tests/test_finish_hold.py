@@ -327,12 +327,44 @@ def test_finish_hold_finds_the_turn_start_after_hermes_compacts_the_history(unfi
     assert finish(unfinished, attempt=1) is None
 
 
-def test_finish_hold_ignores_an_earlier_steer_before_the_turn_start_after_compaction(unfinished):
-    long_history = [{"role": "assistant", "content": f"old {i}"} for i in range(100)] + [NOTICE]
+@pytest.mark.parametrize("compacted", [
+    [STEER, {"role": "assistant", "content": "ok"}, NOTICE, {"role": "tool", "content": "done"}],
+    # the current notice dropped, an older identical notice and its steer kept (review round 2)
+    [NOTICE, STEER, {"role": "assistant", "content": "ok"}, {"role": "tool", "content": "done"}],
+    # compaction re-inserting a copy of the earlier steer after the notice (an intent anchor)
+    [{"role": "assistant", "content": "ok"}, NOTICE, {"role": "tool", "content": "done"}, dict(STEER)],
+])
+def test_finish_hold_never_counts_an_earlier_turns_steer_after_compaction(unfinished, compacted):
+    long_history = [NOTICE, STEER] + [{"role": "assistant", "content": f"old {i}"} for i in range(100)] + [NOTICE]
     turn = dict(platform="cli", turn_id="turn-1")
     unfinished.pre_llm_call(conversation_history=long_history, **turn)
-    compacted = [STEER, {"role": "assistant", "content": "ok"}, NOTICE, {"role": "tool", "content": "done"}]
     assert unfinished.pre_api_request(conversation_history=compacted, **turn) is None
+    assert finish(unfinished) is None
+
+
+NEW_STEER = {"role": "user", "display_kind": "steer", "content": "[OUT-OF-BAND USER MESSAGE]\nalso run the tests"}
+
+
+@pytest.mark.parametrize("compacted", [
+    # compaction dropped the notice; the new steer sits low in the shorter list (review round 2)
+    [{"role": "user", "content": "[CONTEXT SUMMARY] ..."}, {"role": "tool", "content": "done"}, NEW_STEER],
+    # Hermes put the steer after an earlier turn's tool row, before this turn's notice (turn_iteration_prep)
+    [{"role": "tool", "content": "old"}, NEW_STEER, {"role": "assistant", "content": "ok"}, NOTICE],
+])
+def test_finish_hold_counts_a_new_steer_wherever_compaction_puts_it(unfinished, compacted):
+    long_history = [NOTICE, STEER] + [{"role": "assistant", "content": f"old {i}"} for i in range(100)] + [NOTICE]
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=long_history, **turn)
+    assert unfinished.pre_api_request(conversation_history=compacted, **turn) is None
+    assert finish(unfinished)["action"] == "continue"
+    assert finish(unfinished, attempt=1) is None
+
+
+def test_finish_hold_misses_a_new_steer_that_repeats_an_earlier_one(unfinished):
+    # Content is the only identity that survives compaction; a repeat is missed, which errs toward no hold.
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=[STEER, NOTICE], **turn)
+    assert unfinished.pre_api_request(conversation_history=[STEER, NOTICE, {"role": "tool"}, dict(STEER)], **turn) is None
     assert finish(unfinished) is None
 
 
@@ -345,6 +377,29 @@ def test_finish_hold_keeps_an_open_notice_turn_record_under_session_traffic(unfi
     session_env["HERMES_SESSION_KEY"] = "unit-session"
     assert finish(unfinished) is None
     assert len(unfinished._turn_origins) <= 256
+
+
+def test_finish_hold_keeps_an_open_notice_turn_record_while_other_notice_turns_come_and_go(unfinished, session_env):
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=[NOTICE], **turn)
+    for i in range(300):  # review round 2: finished notice turns no longer keep records
+        session_env["HERMES_SESSION_KEY"] = f"notice-{i}"
+        unfinished.pre_llm_call(platform="cli", conversation_history=[NOTICE])
+        unfinished.post_llm_call(platform="cli")
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    assert finish(unfinished) is None
+    assert len(unfinished._turn_origins) == 1  # only the open turn
+
+
+def test_a_delegates_turn_end_keeps_the_parents_notice_turn_record(unfinished, monkeypatch):
+    unfinished.pre_llm_call(platform="cli", conversation_history=[NOTICE])
+    monkeypatch.setattr(pm, "_delegated_child", lambda: True)
+    unfinished.post_llm_call(platform="cli")  # the child shares the parent's session key
+    unfinished.post_llm_call(platform="subagent")
+    monkeypatch.setattr(pm, "_delegated_child", lambda: False)
+    assert finish(unfinished) is None
+    unfinished.post_llm_call(platform="cli")  # the parent's own turn end
+    assert not unfinished._turn_origins
 
 
 def test_finish_hold_ignores_a_delegates_own_todo_list(unfinished, monkeypatch):
@@ -361,3 +416,15 @@ def test_finish_hold_ignores_a_subagent_platform_todo_list(unfinished, platform)
     unfinished.post_tool_call("todo_list", {"todos": []}, status="ok", platform=platform,
                               result=json.dumps({"todos": [{"status": "pending", "content": "Child step"}]}))
     assert finish(unfinished) is None
+
+
+@pytest.mark.parametrize("content", [
+    "Implement the approved plan at /plans/x.md. Do not commit.",
+    [{"type": "text", "text": "Implement the approved plan at /plans/x.md."}],
+])
+def test_finish_hold_treats_plan_modes_own_implementation_turn_as_a_user_turn(unfinished, content):
+    # A gateway delivers plan mode's injected implementation turn as internal_notification (review round 2).
+    unfinished.pre_llm_call(platform="cli", conversation_history=[
+        {"role": "user", "display_kind": "internal_notification", "content": content}])
+    assert finish(unfinished)["action"] == "continue"
+    assert finish(unfinished, attempt=1) is None
