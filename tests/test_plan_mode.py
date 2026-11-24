@@ -2099,7 +2099,7 @@ def test_u2_todo_progress_and_completion(plugin, executing_plan, tool):
     todos = [{"content": "x" * 70, "status": "in_progress"}, {"status": "completed"}, {"status": "cancelled"}]
     result = {"todos": todos, "revision": 2, "summary": {"total": 3, "completed": 1, "cancelled": 1}}
     plugin.post_tool_call(tool, {"todos": []}, status="ok", result=json.dumps(result))
-    assert plugin._load_state("sk:unit-session")["progress"] == {"total": 3, "completed": 1, "cancelled": 1, "current": "x" * 60}
+    assert plugin._load_state("sk:unit-session")["progress"] == {"total": 3, "completed": 1, "cancelled": 1, "current": "x" * 59 + "…"}
     todos[0]["status"] = "completed"
     result["summary"]["completed"] = 2
     plugin.post_tool_call(tool, {"todos": []}, status="ok", result=json.dumps(result))

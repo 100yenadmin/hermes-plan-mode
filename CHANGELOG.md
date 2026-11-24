@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Silent replies stay silent** (field report, 2026-11-24). While a plan was building, a reply that was only Hermes'
+  silence marker, such as `[SILENT]` on a turn started by another agent or a background wake, got the progress footer
+  appended. The reply was then no longer a bare marker, so Hermes delivered it and the user received a stray
+  "Plan progress" message. Plan mode now leaves a blank reply, or one Hermes treats as silent, exactly as written. It
+  uses Hermes' own silence rule when Hermes has loaded it, and the same markers otherwise. The blocked-calls and finish
+  lines are skipped on such a turn. Workaround on 1.6.0: `footer: off`.
+- **The footer cuts the step name at a word**, with an ellipsis, instead of mid-word at 60 characters.
+
 ## 1.6.0 - 2026-11-18
 
 - **`/planmode resume` continues an approved plan in a new session** (#6). Until now, an approved plan that had not

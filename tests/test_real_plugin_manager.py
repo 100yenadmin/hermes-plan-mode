@@ -1079,6 +1079,27 @@ def test_u1_real_cli_approval_same_call(real_submit_host):
     assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="submit-session") is None
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])  # classic shows a footer with no todo progress yet
+def test_161_real_transform_seam_keeps_a_silent_reply_silent(real_submit_host):
+    """Hermes' own output-transform seam, then its own silence rule: [SILENT] must leave plan mode unchanged."""
+    finalizer = pytest.importorskip("agent.turn_finalizer")
+    filters = pytest.importorskip("gateway.response_filters")
+
+    host = real_submit_host
+    host.callback(lambda *a, **kw: "once")
+    assert json.loads(host.submit())["approved"]
+
+    def final(text, turn):
+        agent = SimpleNamespace(session_id="submit-session", model="test", platform="telegram")
+        return finalizer.apply_llm_output_transform(agent, text, turn_id=turn)[0]
+
+    assert final("Working on it.", "t1") == "Working on it.\n\nExecuting approved plan rev 1"  # same state, footed
+    for turn, reply in enumerate(("[SILENT]", "NO_REPLY", "Answered.\n\n[SILENT]")):
+        out = final(reply, f"silent-{turn}")
+        assert out == reply  # untouched, so the host's own rule still applies
+        assert filters.is_intentional_silence_response(out) or filters.strip_trailing_silence_marker(out) == "Answered."
+
+
 def test_u1_real_cli_deny_keeps_planning(real_submit_host):
     host = real_submit_host
     host.callback(lambda *a, **kw: "deny")

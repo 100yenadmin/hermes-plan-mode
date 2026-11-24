@@ -66,7 +66,7 @@ def test_footer_off_turns_off_the_pointer_too(awaiting, footer):
     assert plugin.transform_llm_output("Saved the plan.", platform=platform) is None
 
 
-@pytest.mark.parametrize("reply", ["Saved", "Saved  ", "Saved\n", "Saved\n\n", ""])
+@pytest.mark.parametrize("reply", ["Saved", "Saved  ", "Saved\n", "Saved\n\n"])  # an empty reply stays empty (1.6.1)
 def test_pointer_is_a_pure_append(awaiting, reply):
     plugin, _, _, _, platform = awaiting
     result = plugin.transform_llm_output(reply, platform=platform)
