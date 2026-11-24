@@ -1079,6 +1079,16 @@ def test_u1_real_cli_approval_same_call(real_submit_host):
     assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="submit-session") is None
 
 
+def test_real_voice_reply_while_planning(real_submit_host, tmp_path):
+    block_message = real_submit_host.plugins.get_pre_tool_call_block_message
+    assert block_message("text_to_speech", {"text": "hi"}, session_id="submit-session") is None
+    result = block_message(
+        "text_to_speech", {"text": "hi", "output_path": str(tmp_path / "ws" / "a.mp3")},
+        session_id="submit-session",
+    )
+    assert result and "without output_path" in result
+
+
 def test_u1_real_cli_deny_keeps_planning(real_submit_host):
     host = real_submit_host
     host.callback(lambda *a, **kw: "deny")
