@@ -36,7 +36,7 @@ def prepared(make_plugin, session_env, levers="approval_card"):
 def test_show_complete_single_read(make_plugin, session_env, monkeypatch, levers, size):
     plugin, path = prepared(make_plugin, session_env, levers)
     text = "é" * (size // 2) + ("x" if size % 2 else "")
-    path.write_text(text)
+    path.write_bytes(text.encode("utf-8"))
     real_open, reads = builtins.open, []
     def counted(target, *args, **kwargs):
         if str(target) == str(path):
@@ -67,7 +67,7 @@ def test_chat_show_does_not_arm(make_plugin, session_env, platform):
 def test_edited_approval_captures_full_snapshot(make_plugin, session_env, monkeypatch, explicit, levers):
     plugin, path = prepared(make_plugin, session_env, levers)
     text = "# Revised\n" + "x" * 12000 + "\nKeep the decisive change.\n"
-    path.write_text(text)
+    path.write_bytes(text.encode("utf-8"))
     assert plugin.command("show").endswith(text)
     digest = state(plugin)["review"]["digest"]
     real_open, reads = builtins.open, []
@@ -211,10 +211,10 @@ def test_two_sessions_share_snapshot_names_safely(make_plugin, session_env, iden
 
 
 @pytest.mark.parametrize("existing", ["different-regular-file", "matching-symlink", "hard-link-to-plan"])
-def test_an_existing_file_at_the_snapshot_name_is_never_reused(make_plugin, session_env, existing):
+def test_an_existing_file_at_the_snapshot_name_is_never_reused(make_plugin, session_env, symlink_or_skip, existing):
     plugin, path = prepared(make_plugin, session_env)
     text = "# Revised\nPreserve café.\n"
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     plugin.command("show")
     taken = path.parent / "approved" / pm.PlanModePlugin._snapshot_name(path.stem, 2, state(plugin)["review"]["digest"])
     taken.parent.mkdir()
@@ -224,7 +224,7 @@ def test_an_existing_file_at_the_snapshot_name_is_never_reused(make_plugin, sess
         taken.write_bytes(b"different existing bytes")
     elif existing == "matching-symlink":
         target.write_bytes(text.encode("utf-8"))
-        taken.symlink_to(target)
+        symlink_or_skip(taken, target)
     else:
         target = path
         os.link(path, taken)  # a later edit of the plan would change this name's content
@@ -236,7 +236,12 @@ def test_an_existing_file_at_the_snapshot_name_is_never_reused(make_plugin, sess
     assert snapshot.read_bytes() == text.encode("utf-8") and snapshot.stat().st_nlink == 1 and not snapshot.is_symlink()
     assert target.read_bytes() == original
     if existing == "matching-symlink":
-        assert taken.is_symlink() and taken.readlink() == target
+        assert taken.is_symlink()
+        if os.name == "nt":
+            # Windows readlink can return an extended-length path.
+            assert taken.resolve() == target.resolve()
+        else:
+            assert taken.readlink() == target
 
 
 def test_snapshot_names_exhausted_keeps_approval_pending(make_plugin, session_env, monkeypatch):
@@ -357,7 +362,7 @@ def test_edit_instructions_and_ui_note(make_plugin, session_env, monkeypatch):
     nested = path.parent / "nested" / path.name  # same name as the submitted plan, in a subdirectory
     nested.parent.mkdir()
     assert plugin.pre_tool_call("write_file", {"path": str(nested)}) is None
-    nested.write_text("# Nested\n")
+    nested.write_bytes(b"# Nested\n")
     reply = plugin.command(f"edit {nested}")
     assert reply.endswith(f"Then /planmode show {nested}, then /planmode approve {nested}.")
     assert plugin.command(f"show {nested}").endswith("# Nested\n")
@@ -402,7 +407,7 @@ def test_unreadable_or_oversized_submitted_plan_still_gets_the_changed_note(make
 def test_failed_snapshot_write_leaves_no_partial_file(make_plugin, session_env):
     plugin, path = prepared(make_plugin, session_env)
     text = "# Revised\n" + "y" * 5000 + "\n"
-    path.write_text(text)
+    path.write_bytes(text.encode("utf-8"))
     plugin.command("show")
     current = state(plugin)
     good = current["review"]["text"]

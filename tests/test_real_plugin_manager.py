@@ -1126,6 +1126,16 @@ def test_161_real_transform_seam_keeps_a_silent_reply_silent(real_submit_host):
         assert filters.is_intentional_silence_response(out) or filters.strip_trailing_silence_marker(out) == "Answered."
 
 
+def test_real_voice_reply_while_planning(real_submit_host, tmp_path):
+    block_message = real_submit_host.plugins.get_pre_tool_call_block_message
+    assert block_message("text_to_speech", {"text": "hi"}, session_id="submit-session") is None
+    result = block_message(
+        "text_to_speech", {"text": "hi", "output_path": str(tmp_path / "ws" / "a.mp3")},
+        session_id="submit-session",
+    )
+    assert result and "without output_path" in result
+
+
 def test_u1_real_cli_deny_keeps_planning(real_submit_host):
     host = real_submit_host
     host.callback(lambda *a, **kw: "deny")
@@ -1176,7 +1186,7 @@ def test_062_real_show_then_approve_changed_snapshot(real_submit_host):
 
     def edit_then_deny(*args, **kwargs):
         path = Path(plugin._load_state("sk:submit-session")["submission"]["path"])
-        path.write_text("# Revised\n" + "x" * 12000 + "\nPreserve the approved change.\n")
+        path.write_bytes(b"# Revised\n" + b"x" * 12000 + b"\nPreserve the approved change.\n")
         return "deny"
 
     host.callback(edit_then_deny)

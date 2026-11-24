@@ -62,6 +62,7 @@ READ_ONLY_TOOLS = frozenset(
 )
 PLAN_WRITERS = frozenset({"write_file", "patch"})
 PLAN_MODE_TOOL = "plan_mode"
+VOICE_REPLY_TOOL = "text_to_speech"
 REPORT_SKILL = "plan-mode-report-problem"
 REPORT_SKILL_DESCRIPTION = "Plan Mode: report a bug or problem"
 REPORT_SKILL_PATH = Path(__file__).resolve().parent.parent / "skills" / REPORT_SKILL / "SKILL.md"
@@ -2632,6 +2633,14 @@ class PlanModePlugin:
                     or name in self._extra_allowed_tools()
                 ):
                     return None
+                if name == VOICE_REPLY_TOOL:
+                    if isinstance(args, dict):
+                        output_path = call_args.get("output_path")
+                        if output_path is None or (isinstance(output_path, str) and output_path == ""):
+                            return None
+                    return _block_message(
+                        name, "While planning, call text_to_speech again without output_path to send a voice reply.",
+                    )
                 if name == "skill_view":
                     reason = _skill_view_block_reason()
                     return _block_message(name, reason) if reason else None
@@ -2999,7 +3008,8 @@ class PlanModePlugin:
                     if submission.get("status") == "awaiting" and clarify:
                         awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
                                     f"question={clarify['question']}, choices={clarify['choices']}, "
-                                    "or the user can run /planmode approve.")
+                                    "or the user can run /planmode approve. On a turn the user did not write (a notice, a "
+                                    "wake or another agent's message), do not ask again: wait for the user.")
                         awaiting = awaiting if "approval_card" in self._levers() and submission.get("card") else awaiting[:399]
                         if short:
                             parts.append(awaiting)
