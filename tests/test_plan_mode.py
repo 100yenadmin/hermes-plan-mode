@@ -2906,7 +2906,8 @@ def test_v034_issued_question_status_and_turn_note(plugin, clarify_plan):
     assert "awaiting approval (rev 1, asked in chat)" in plugin.command("status")
     note = plugin.pre_llm_call()["context"].splitlines()[-1]
     assert note == (f"Plan rev 1 awaits approval: ask with clarify using exactly question={block['question']}, "
-                    f"choices={block['choices']}, or the user can run /planmode approve.")
+                    f"choices={block['choices']}, or the user can run /planmode approve. On a turn the user did not "
+                    "write (a notice, a wake or another agent's message), do not ask again: wait for the user.")
     assert len(note) < 400
 
 
