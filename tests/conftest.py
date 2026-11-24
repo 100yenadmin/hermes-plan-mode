@@ -23,7 +23,9 @@ def symlink_or_skip():
         try:
             link.symlink_to(target, target_is_directory=target_is_directory)
         except (OSError, NotImplementedError):
-            pytest.skip("symlinks need a privilege on this platform")
+            if os.name != "nt":
+                raise  # symlinks always work on POSIX; a failure there is a real failure
+            pytest.skip("symlinks need a privilege on Windows")
 
     return create
 
