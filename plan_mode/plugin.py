@@ -116,6 +116,7 @@ _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer e
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
 _MACHINERY_DISPLAY_KINDS = frozenset({"internal_notification", "process_complete", "async_delegation_complete"})
 _STEER_DISPLAY_KIND = "steer"  # agent.prompt_builder.steer_user_row: the user writing into a running turn
+_HIDDEN_DISPLAY_KIND = "hidden"  # tools.process_registry_notifications.HEARTBEAT_DISPLAY_KIND
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
 # names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
@@ -680,6 +681,8 @@ def _delegated_child() -> bool:
 def _is_machinery_display_kind(kind: Any) -> bool:
     if not isinstance(kind, str):
         return False
+    if kind == _HIDDEN_DISPLAY_KIND:
+        return True  # a process heartbeat wake: a row no surface paints, never something the user typed
     # Use the host's classification when loaded, without importing gateway from a hook.
     check = getattr(sys.modules.get("gateway.response_filters"), "is_machinery_display_kind", None)
     if callable(check):
@@ -690,11 +693,20 @@ def _is_machinery_display_kind(kind: Any) -> bool:
     return kind in _MACHINERY_DISPLAY_KINDS
 
 
+def _same_turn_start(content: Any, recorded: Any) -> bool:
+    """The turn's first row after compaction: same content, or the same text with a todo snapshot appended."""
+    if content == recorded:
+        return True
+    return isinstance(content, str) and isinstance(recorded, str) and bool(recorded) and content.startswith(recorded)
+
+
 @dataclass
 class _TurnOrigin:
     turn_id: str | None
     start: int
     machinery: bool
+    kind: Any = None  # the turn's first row, to find it again after Hermes compacts the history
+    content: Any = None
 
 
 def _edit_review_available() -> bool:
@@ -723,6 +735,7 @@ class PlanModePlugin:
         self._turn_blocks: dict[str, list[dict[str, Any]]] = {}  # session key -> per-turn blocks not yet named
         self._turn_finishes: dict[str, dict[str, Any]] = {}  # session key -> a plan that ended mid-turn (classic)
         self._turn_origins: OrderedDict[str, _TurnOrigin] = OrderedDict()
+        self._child_todo_states: OrderedDict[str, None] = OrderedDict()  # last todo write came from a delegate/subagent
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
         self._hook_platforms: OrderedDict[str, str] = OrderedDict()
@@ -2816,6 +2829,16 @@ class PlanModePlugin:
                     if state.get("phase") == "executing" or ("approval_card" in self._levers() and state.get("edit_review")):
                         progress = todo_progress(kwargs.get("result"))
                         if progress is not None:
+                            # A delegate's own list lands in the plan's progress (unchanged); the finish hold uses only
+                            # the parent's, so a child's open item never holds the parent's turn.
+                            storage_key = _state_storage_key(state_key)
+                            if _delegated_child() or str(kwargs.get("platform") or "").strip().lower() in _NO_TURN_NOTE_PLATFORMS:
+                                self._child_todo_states[storage_key] = None
+                                self._child_todo_states.move_to_end(storage_key)
+                                while len(self._child_todo_states) > 256:
+                                    self._child_todo_states.popitem(last=False)
+                            else:
+                                self._child_todo_states.pop(storage_key, None)
                             state["next_pending_todo"] = progress.pop("next_pending")
                             # Capture before classic completion clears the approved identity.
                             card_key = ((identity.key, _state_storage_key(state_key), state.get("approved_path"),
@@ -2972,10 +2995,14 @@ class PlanModePlugin:
                         isinstance(last_row, dict) and last_row.get("role") == "user"
                         and _is_machinery_display_kind(last_row.get("display_kind"))
                     )
-                    self._turn_origins[identity.key] = _TurnOrigin(kwargs.get("turn_id"), len(history) - 1, machinery)
+                    self._turn_origins[identity.key] = _TurnOrigin(
+                        kwargs.get("turn_id"), len(history) - 1, machinery,
+                        last_row.get("display_kind") if machinery else None, last_row.get("content") if machinery else None)
                     self._turn_origins.move_to_end(identity.key)
                     while len(self._turn_origins) > 256:
-                        self._turn_origins.popitem(last=False)
+                        # Drop user-turn records first: a lost record reads as a user turn, so an open notice turn keeps its own.
+                        oldest = next((key for key, record in self._turn_origins.items() if not record.machinery), None)
+                        self._turn_origins.pop(oldest if oldest is not None else next(iter(self._turn_origins)))
                 state_key, state = self._state_for_hook(identity)
                 if state_key and state.get("finish_pending"):
                     self._finish_plan(state_key, state)  # the previous turn ended without post_llm_call
@@ -3370,7 +3397,16 @@ class PlanModePlugin:
                     return None
                 # Only a steer is the user writing mid-turn; Hermes' other mid-turn user rows (stop-gate nudges, LSP
                 # notes, continuation prompts) are its own scaffolding and must not turn a notice into a user turn.
-                for index in range(max(origin.start, 0), len(history)):
+                # Hermes may compact the history after pre_llm_call (turn start) or mid-turn, which moves every row, so
+                # scan after this turn's own first row when it is still there, else from the recorded index.
+                begin = max(origin.start, 0)
+                for index in range(len(history) - 1, -1, -1):
+                    row = history[index]
+                    if (isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == origin.kind
+                            and _same_turn_start(row.get("content"), origin.content)):
+                        begin = index + 1
+                        break
+                for index in range(begin, len(history)):
                     row = history[index]
                     if isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == _STEER_DISPLAY_KIND:
                         origin.machinery = False
@@ -3400,6 +3436,8 @@ class PlanModePlugin:
                 key, state = self._state_for_hook(identity)
                 if not key or state.get("phase") != "executing" or state.get("finish_pending"):
                     return None
+                if _state_storage_key(key) in self._child_todo_states:
+                    return None  # the open todos are a delegate's list, not the parent's plan steps
                 review = state.get("edit_review")
                 if isinstance(review, dict) and review.get("denied") and "approval_card" in self._levers():
                     return None  # the user just denied an edit: the agent asks what to change, it does not push on

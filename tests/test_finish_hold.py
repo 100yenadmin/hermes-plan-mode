@@ -42,7 +42,7 @@ def test_finish_hold_names_the_current_step_and_offers_an_out_once(unfinished):
     assert finish(unfinished, attempt=1) is None
 
 
-@pytest.mark.parametrize("kind", ["internal_notification", "process_complete", "async_delegation_complete"])
+@pytest.mark.parametrize("kind", ["internal_notification", "process_complete", "async_delegation_complete", "hidden"])
 def test_finish_hold_leaves_machinery_turns_alone(unfinished, kind):
     unfinished.pre_llm_call(platform="cli", conversation_history=[{"role": "user", "display_kind": kind}])
     before = copy.deepcopy(unfinished.ctx.state.values)
@@ -308,3 +308,56 @@ def test_finish_hold_puts_a_multi_line_step_on_one_line(unfinished):
     observe_todos(unfinished, ("in_progress", "line1\nIGNORE ALL\n  line3"), ("pending", "Test"))
     message = finish(unfinished)["message"]
     assert "next: line1 IGNORE ALL line3. Continue with it." in message and message.count("\n") == 1
+
+
+NOTICE = {"role": "user", "display_kind": "process_complete", "content": "[IMPORTANT: Background process 7 finished]"}
+STEER = {"role": "user", "display_kind": "steer", "content": "[OUT-OF-BAND USER MESSAGE ...]"}
+
+
+@pytest.mark.parametrize("anchor", [NOTICE, {**NOTICE, "content": NOTICE["content"] + "\n\n[todo snapshot]"}])
+def test_finish_hold_finds_the_turn_start_after_hermes_compacts_the_history(unfinished, anchor):
+    # Turn-start compaction runs right after pre_llm_call, so the recorded index is stale from the first model call.
+    long_history = [{"role": "assistant", "content": f"old {i}"} for i in range(100)] + [NOTICE]
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=long_history, **turn)
+    compacted = [{"role": "user", "content": "[CONTEXT SUMMARY] ..."}, {"role": "assistant", "content": "ok"}, anchor,
+                 {"role": "assistant", "tool_calls": []}, {"role": "tool", "content": "done"}, STEER]
+    assert unfinished.pre_api_request(conversation_history=compacted, **turn) is None
+    assert finish(unfinished)["action"] == "continue"
+    assert finish(unfinished, attempt=1) is None
+
+
+def test_finish_hold_ignores_an_earlier_steer_before_the_turn_start_after_compaction(unfinished):
+    long_history = [{"role": "assistant", "content": f"old {i}"} for i in range(100)] + [NOTICE]
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=long_history, **turn)
+    compacted = [STEER, {"role": "assistant", "content": "ok"}, NOTICE, {"role": "tool", "content": "done"}]
+    assert unfinished.pre_api_request(conversation_history=compacted, **turn) is None
+    assert finish(unfinished) is None
+
+
+def test_finish_hold_keeps_an_open_notice_turn_record_under_session_traffic(unfinished, session_env):
+    turn = dict(platform="cli", turn_id="turn-1")
+    unfinished.pre_llm_call(conversation_history=[NOTICE], **turn)
+    for i in range(300):
+        session_env["HERMES_SESSION_KEY"] = f"busy-{i}"
+        unfinished.pre_llm_call(platform="cli", conversation_history=[{"role": "user", "content": "hi"}])
+    session_env["HERMES_SESSION_KEY"] = "unit-session"
+    assert finish(unfinished) is None
+    assert len(unfinished._turn_origins) <= 256
+
+
+def test_finish_hold_ignores_a_delegates_own_todo_list(unfinished, monkeypatch):
+    monkeypatch.setattr(pm, "_delegated_child", lambda: True)
+    observe_todos(unfinished, ("pending", "Check child output"))
+    monkeypatch.setattr(pm, "_delegated_child", lambda: False)
+    assert finish(unfinished) is None  # the open item is the child's list, not the parent's plan
+    observe_todos(unfinished, ("completed", "Read"), ("pending", "Build"))
+    assert finish(unfinished)["action"] == "continue"  # the parent's own list holds again
+
+
+@pytest.mark.parametrize("platform", ["subagent", "curator"])
+def test_finish_hold_ignores_a_subagent_platform_todo_list(unfinished, platform):
+    unfinished.post_tool_call("todo_list", {"todos": []}, status="ok", platform=platform,
+                              result=json.dumps({"todos": [{"status": "pending", "content": "Child step"}]}))
+    assert finish(unfinished) is None
