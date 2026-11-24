@@ -823,6 +823,10 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   a longer streamed reply could re-send part of it. The approval pointer applies on every resolved surface regardless
   of reply length, so on a long streamed chat reply it may re-send that reply's last part. `footer: off` turns off
   both the footer and the pointer, and the pointer never goes to subagent or curator turns.
+- **Silent replies stay silent.** A blank reply, or one that is a Hermes silence marker (`[SILENT]`, `NO_REPLY` and the
+  other forms Hermes accepts, alone, on the reply's first or last line, or opening it in brackets), is left exactly as
+  written, so Hermes still keeps the turn silent. No footer, approval pointer, blocked-calls line or finish line is
+  added on that turn; the plan itself still advances and finishes as usual.
 - **Other output transforms.** Hermes runs every plugin's `transform_llm_output` but uses only the first returned
   text. While the footer or the approval pointer shows, another plugin's transformed reply (for example a redactor's)
   may be discarded; set `plan_mode.footer: off` if you rely on one (this also turns off the pointer).

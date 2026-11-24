@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import os
+import sys
+import unicodedata
 
 
 AGENT_HINT = (
@@ -307,6 +309,15 @@ def plan_text(path: str, text: str, revision, status: str, cap: int | None = Non
     return result[:max(0, 3500 - len(suffix))] + suffix[:3500]
 
 
+def _step_name(text: str, limit: int = 60) -> str:
+    """At most ``limit`` characters, cut at a word with an ellipsis rather than mid-word."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit - 1]
+    word = head.rsplit(" ", 1)[0].rstrip()
+    return (word if len(word) >= limit // 2 else head) + "…"
+
+
 def todo_progress(result) -> dict | None:
     """Ignore malformed observations; derive counts from the observed items."""
     try:
@@ -322,7 +333,7 @@ def todo_progress(result) -> dict | None:
             "total": len(todos),
             "completed": sum(todo.get("status") == "completed" for todo in todos),
             "cancelled": sum(todo.get("status") == "cancelled" for todo in todos),
-            "current": current[:60],
+            "current": _step_name(current),
         }
     except (TypeError, ValueError, AttributeError):
         return None
@@ -387,6 +398,55 @@ def finish_receipt(revision, progress, files, *, details: bool) -> str:
         parts.append(changed)
     head = "✅ Plan" + (f" rev {revision}" if revision is not None else "") + " done"
     return head + (": " + ", ".join(parts) if parts else "") + "."
+
+
+# The host's silence markers (Hermes gateway/response_filters.py LIVE_GATEWAY_SILENT_MARKERS). A reply that is one of
+# these, or that ends with one on its own line, is not delivered; anything appended to it would be.
+SILENCE_MARKERS = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY", "[静默]", "静默", "[沉默]", "沉默"})
+_BRACKETED_SILENCE_MARKERS = tuple(sorted(marker for marker in SILENCE_MARKERS if marker.startswith("[")))
+
+
+def _is_marker(text: str) -> bool:
+    stripped = text.strip()
+    if not 0 < len(stripped) <= 64:
+        return False
+    start, end = 0, len(stripped)
+
+    def edge(ch: str) -> bool:  # square brackets stay, so "[SILENT" never becomes "SILENT"
+        return ch not in "[]" and unicodedata.category(ch).startswith("P")
+
+    while start < end and edge(stripped[start]):
+        start += 1
+    while end > start and edge(stripped[end - 1]):
+        end -= 1
+    return any(" ".join(form.upper().split()) in SILENCE_MARKERS for form in (stripped, stripped[start:end].strip()))
+
+
+def _host_says_silent(text: str) -> bool:
+    # Only a module the host already loaded: importing Hermes from a plugin hook can have side effects.
+    host = sys.modules.get("gateway.response_filters")
+    try:
+        return bool(host.is_autonomous_silence_response(text)) if host is not None else False
+    except Exception:
+        return False
+
+
+def is_silent_reply(text) -> bool:
+    """True when the host may treat the reply as silence, so plan mode must leave it exactly as written.
+
+    Deliberately loose, like the host's cron rule: the whole reply, its first or last line, or a bracketed opening
+    marker. A false match costs one footer line; a miss sends a silent turn to the user. Blank text and non-text
+    count as silent too.
+    """
+    if not isinstance(text, str):
+        return True
+    stripped = text.strip()
+    if not stripped:
+        return True
+    lines = [line for line in stripped.splitlines() if line.strip()]
+    return (stripped.upper().startswith(_BRACKETED_SILENCE_MARKERS)
+            or any(_is_marker(candidate) for candidate in (stripped, lines[0], lines[-1]))
+            or _host_says_silent(text))
 
 
 def response_footer(response_text: str, state: dict) -> str | None:
