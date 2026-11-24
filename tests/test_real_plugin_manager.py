@@ -1079,6 +1079,29 @@ def test_u1_real_cli_approval_same_call(real_submit_host):
     assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="submit-session") is None
 
 
+@pytest.mark.parametrize("plan_profile", ["classic"])  # classic shows a footer with no todo progress yet
+def test_161_real_transform_seam_keeps_a_silent_reply_silent(real_submit_host):
+    """Hermes' own output-transform seam, then its own silence rule: [SILENT] must leave plan mode unchanged."""
+    finalizer = pytest.importorskip("agent.turn_finalizer")
+    filters = pytest.importorskip("gateway.response_filters")
+    if not hasattr(finalizer, "apply_llm_output_transform") or not hasattr(filters, "strip_trailing_silence_marker"):
+        pytest.skip("this Hermes has no shared output-transform seam or trailing-marker rule")
+
+    host = real_submit_host
+    host.callback(lambda *a, **kw: "once")
+    assert json.loads(host.submit())["approved"]
+
+    def final(text, turn):
+        agent = SimpleNamespace(session_id="submit-session", model="test", platform="telegram")
+        return finalizer.apply_llm_output_transform(agent, text, turn_id=turn)[0]
+
+    assert final("Working on it.", "t1") == "Working on it.\n\nExecuting approved plan rev 1"  # same state, footed
+    for turn, reply in enumerate(("[SILENT]", "NO_REPLY", "Answered.\n\n[SILENT]")):
+        out = final(reply, f"silent-{turn}")
+        assert out == reply  # untouched, so the host's own rule still applies
+        assert filters.is_intentional_silence_response(out) or filters.strip_trailing_silence_marker(out) == "Answered."
+
+
 def test_real_voice_reply_while_planning(real_submit_host, tmp_path):
     block_message = real_submit_host.plugins.get_pre_tool_call_block_message
     assert block_message("text_to_speech", {"text": "hi"}, session_id="submit-session") is None
@@ -1139,7 +1162,7 @@ def test_062_real_show_then_approve_changed_snapshot(real_submit_host):
 
     def edit_then_deny(*args, **kwargs):
         path = Path(plugin._load_state("sk:submit-session")["submission"]["path"])
-        path.write_text("# Revised\n" + "x" * 12000 + "\nPreserve the approved change.\n")
+        path.write_bytes(b"# Revised\n" + b"x" * 12000 + b"\nPreserve the approved change.\n")
         return "deny"
 
     host.callback(edit_then_deny)

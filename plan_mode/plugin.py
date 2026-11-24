@@ -34,7 +34,7 @@ from .progress_card import ProgressCards
 from .render import (
     AGENT_HINT, AGENT_HINT_BRIDGE, KANBAN_HINT, BLOCKED_TOOL_MESSAGE, BRIDGE_TODO, BUILTIN_OVERRIDE, LEAN_EXECUTION, LOCAL_PLATFORMS,
     BRIEF_FINAL, EDIT_BATCH, EXEC_SKILL_GUARD_MESSAGE, NO_COMMIT_BLOCK, SKILL_EXECUTION, executing_pointer, light_note,
-    block_receipt, finish_receipt, no_commits, plan_file_stamp, plan_text, planning_note, progress_card, response_footer, todo_progress,
+    block_receipt, finish_receipt, is_silent_reply, no_commits, plan_file_stamp, plan_text, planning_note, progress_card, response_footer, todo_progress,
 )
 
 READ_ONLY_TOOLS = frozenset(
@@ -3006,7 +3006,8 @@ class PlanModePlugin:
                     if submission.get("status") == "awaiting" and clarify:
                         awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
                                     f"question={clarify['question']}, choices={clarify['choices']}, "
-                                    "or the user can run /planmode approve.")
+                                    "or the user can run /planmode approve. On a turn the user did not write (a notice, a "
+                                    "wake or another agent's message), do not ask again: wait for the user.")
                         awaiting = awaiting if "approval_card" in self._levers() and submission.get("card") else awaiting[:399]
                         if short:
                             parts.append(awaiting)
@@ -3323,6 +3324,8 @@ class PlanModePlugin:
             receipt = "\n".join(line for line in (receipt, finish) if line)
             if self._footer_off():
                 return None  # `footer: off` opts out of every plan-mode output transform
+            if is_silent_reply(response_text):
+                return None  # anything appended would turn a silent turn into a message (receipts are dropped)
             result = self._reply_transform(response_text, platform, identity)
             if not receipt:
                 return result

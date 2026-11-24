@@ -118,7 +118,7 @@ def test_profile_default_style_and_effective_skill(make_plugin, monkeypatch, sty
     assert plugin._plan_skill() == (skill if not blocked else "")
     assert plugin._levers() == expected
     if style == "core":
-        golden = json.loads((Path(__file__).parent / "fixtures/default_off_035.json").read_text())
+        golden = json.loads((Path(__file__).parent / "fixtures/default_off_035.json").read_text(encoding="utf-8"))
         monkeypatch.setattr(render, "plan_file_stamp", lambda now=None: "2026-10-11_123456")
         state = {"plans_dir": "/workspace/.hermes/plans"}
         for commits in (False, True):
