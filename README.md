@@ -826,10 +826,11 @@ Claude Code (Opus 5.5, a different model) is shown for context only:
   a longer streamed reply could re-send part of it. The approval pointer applies on every resolved surface regardless
   of reply length, so on a long streamed chat reply it may re-send that reply's last part. `footer: off` turns off
   both the footer and the pointer, and the pointer never goes to subagent or curator turns.
-- **Silent replies stay silent.** A blank reply, or one that is a Hermes silence marker (`[SILENT]`, `NO_REPLY` and the
-  other forms Hermes accepts, alone, on the reply's first or last line, or opening it in brackets), is left exactly as
-  written, so Hermes still keeps the turn silent. No footer, approval pointer, blocked-calls line or finish line is
-  added on that turn; the plan itself still advances and finishes as usual.
+- **Silent replies stay silent.** A blank reply, or one that carries a Hermes silence marker (`[SILENT]`, `NO_REPLY` and
+  the other forms Hermes accepts, alone, on the reply's first or last line, or opening it in brackets), is left exactly
+  as written, so Hermes' own silence rule still applies: a bare marker stays silent, and a marker that closes a real
+  answer is dropped while the answer is delivered. No footer, approval pointer, blocked-calls line or finish line is
+  added on that turn, even when Hermes delivers the answer; the plan itself still advances and finishes as usual.
 - **Other output transforms.** Hermes runs every plugin's `transform_llm_output` but uses only the first returned
   text. While the footer or the approval pointer shows, another plugin's transformed reply (for example a redactor's)
   may be discarded; set `plan_mode.footer: off` if you rely on one (this also turns off the pointer).
@@ -910,7 +911,7 @@ Manual walkthrough in a disposable workspace (full surface-by-surface list in
 Disclosure — plan-mode blocks mutating Hermes tools dispatched through `pre_tool_call` (not Codex app-server
 `exec`/`applyPatch`, not TUI `/background` or `btw` side agents) until the user approves a plan: on its approval card
 (a `clarify` question only the plugin issues and checks), through Hermes' own approval prompt (classic profile and
-surfaces without a card), or with `/planmode approve`. It reads nine groups of internal Hermes seams for session identity, workspace,
+surfaces without a card), or with `/planmode approve`. It reads ten groups of internal Hermes seams for session identity, workspace,
 profile, `skills.inline_shell` and the classic CLI's inline diff, each guarded, with the fallbacks listed below. It creates `<cwd>/.hermes/plans`, reads plan
 files there, saves the approved text of an edited plan as a new file under `.hermes/plans/approved/`, and keeps
 per-session state in plugin state. It adds a turn note while planning or executing, a
@@ -952,6 +953,8 @@ Each is reached through a lazy, guarded import or a guarded attribute read.
    `_on_tool_complete` (Hermes sets them only while `display.inline_diffs` is on); `TERMINAL_ENV`, which must be
    local; and `agent.display._MAX_INLINE_DIFF_LINES`. Any of them missing or different → the agent shows the plan as
    without `write_once`.
+10. Silent replies: `gateway.response_filters.is_autonomous_silence_response`, read only if Hermes already imported the
+   module (plan mode never imports it). Missing or failing → plan mode's own copy of Hermes' silence markers decides.
 
 Public hooks used: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `post_api_request`,
 `transform_llm_output`, `transform_tool_result`, `pre_approval_request`, `post_approval_response`,
