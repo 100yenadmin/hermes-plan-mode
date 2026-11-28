@@ -329,11 +329,14 @@ def todo_progress(result) -> dict | None:
                         if todo.get("status") == "in_progress"), "")
         if not isinstance(current, str):
             return None
+        pending = next((todo.get("content", "") for todo in todos
+                        if todo.get("status") == "pending"), "")
         return {
             "total": len(todos),
             "completed": sum(todo.get("status") == "completed" for todo in todos),
             "cancelled": sum(todo.get("status") == "cancelled" for todo in todos),
             "current": _step_name(current),
+            "next_pending": _step_name(pending) if isinstance(pending, str) else "",
         }
     except (TypeError, ValueError, AttributeError):
         return None

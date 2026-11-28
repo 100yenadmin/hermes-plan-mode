@@ -10,6 +10,8 @@ provides_hooks:
   - pre_tool_call
   - post_tool_call
   - pre_llm_call
+  - pre_api_request
+  - pre_verify
   - transform_llm_output
   - pre_approval_request
   - post_approval_response
@@ -40,6 +42,12 @@ config_schema:
     default: true
     label: Progress card
     description: "While an approved plan is being built, one message shows its steps and updates as they finish, on Telegram, Discord, Slack and other chat platforms, Desktop and the TUI. The classic CLI shows Hermes' own todo list instead."
+  finish_hold:
+    type: str
+    choices: ["on", "off"]
+    default: "on"
+    label: Finish hold
+    description: "After file edits, prompts the agent once per turn to continue an approved plan with unfinished todos."
   plan_style:
     type: str
     choices: [compact, core]

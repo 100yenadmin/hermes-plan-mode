@@ -104,7 +104,7 @@ _SESSION_INDEX_KEY = "session-index"
 _PLAN_HISTORY_KEY = resume.PLAN_HISTORY_KEY  # what /planmode list shows for plans of ended sessions
 _SESSION_BACKFILL_KEY = "session-index-backfill"
 _EXECUTION_FIELDS = ("phase", "approved_path", "approved_revision", "approved_snapshot", "approved_at", "executing_turns", "progress",
-                     "user_asked_process", "user_asked_commits", "finish_pending", "changed_files", "approval_id")
+                     "next_pending_todo", "user_asked_process", "user_asked_commits", "finish_pending", "changed_files", "approval_id")
 # Mirrored to every linked copy of a TUI/Desktop state; approved_while_open is read after an approval, too.
 _FAMILY_FIELDS = _EXECUTION_FIELDS + ("approved_while_open", "edit_review")
 _RESUME_UI_REFUSAL = (
@@ -114,6 +114,12 @@ _RESUME_UI_REFUSAL = (
 )
 _FOOTER_MAX_CHARS = 1800  # below Discord's ~1.9k streaming split, so a footer edit never re-sends a chunk
 _NO_TURN_NOTE_PLATFORMS = frozenset({"subagent", "curator"})
+_MACHINERY_DISPLAY_KINDS = frozenset({"internal_notification", "process_complete", "async_delegation_complete"})
+_STEER_DISPLAY_KIND = "steer"  # agent.prompt_builder.steer_user_row: the user writing into a running turn
+_HIDDEN_DISPLAY_KIND = "hidden"  # tools.process_registry_notifications.HEARTBEAT_DISPLAY_KIND
+_STEER_OPEN = "[OUT-OF-BAND USER MESSAGE"  # agent.prompt_builder.STEER_MARKER_OPEN starts with this
+_STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"  # agent.prompt_builder.STEER_MARKER_CLOSE
+_COMPRESSED_SUMMARY_KEY = "_compressed_summary"  # agent.context_compressor.COMPRESSED_SUMMARY_METADATA_KEY
 # Block receipts: Hermes emits no tool event for a hook-blocked call (NousResearch/hermes-agent#151276), so the reply
 # names what plan mode stopped. Only the lock's own blocks count; API and webhook replies are left unchanged for programs.
 _RECEIPT_PREFIXES = ("Plan mode is on: ", NO_COMMIT_BLOCK)
@@ -675,6 +681,67 @@ def _delegated_child() -> bool:
         return False
 
 
+def _is_machinery_display_kind(kind: Any) -> bool:
+    if not isinstance(kind, str):
+        return False
+    if kind == _HIDDEN_DISPLAY_KIND:
+        return True  # a process heartbeat wake: a row no surface paints, never something the user typed
+    # Use the host's classification when loaded, without importing gateway from a hook.
+    check = getattr(sys.modules.get("gateway.response_filters"), "is_machinery_display_kind", None)
+    if callable(check):
+        try:
+            return bool(check(kind))
+        except Exception:
+            pass
+    return kind in _MACHINERY_DISPLAY_KINDS
+
+
+def _row_text(content: Any) -> str:
+    """A message row's text: a string, or the text parts of a multimodal list."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    return ""
+
+
+def _steer_payloads(text: str) -> list[str]:
+    """The user's words inside each steer marker (agent.prompt_builder.format_steer_marker)."""
+    payloads, pos = [], 0
+    while (start := text.find(_STEER_OPEN, pos)) >= 0:
+        body = text.find("]", start)  # the open marker ends at its first "]"
+        end = text.find(_STEER_CLOSE, body + 1) if body >= 0 else -1
+        if end < 0:
+            break
+        payloads.append(" ".join(text[body + 1:end].split()))  # compaction can reflow whitespace
+        pos = end + len(_STEER_CLOSE)
+    return payloads
+
+
+def _steer_marks(history: Any) -> set[str]:
+    """The steers in a history, by the user's words. Compaction moves, drops and copies rows and edits text around a
+    steer (a merged summary, a todo snapshot added or stripped), but keeps the words inside the marker."""
+    marks: set[str] = set()
+    for row in history if isinstance(history, (list, tuple)) else ():
+        if isinstance(row, dict) and row.get("role") == "user" and row.get("display_kind") == _STEER_DISPLAY_KIND:
+            if row.get(_COMPRESSED_SUMMARY_KEY):
+                continue  # a row compaction rewrote (summary merged in) is never a fresh steer
+            text = _row_text(row.get("content"))
+            payloads = _steer_payloads(text)
+            if payloads:
+                marks.update(f"p:{payload}" for payload in payloads)
+            else:
+                marks.add(f"c:{' '.join(text.split())}")
+    return marks
+
+
+@dataclass
+class _TurnOrigin:
+    turn_id: str | None
+    machinery: bool
+    known_steers: frozenset[str] = frozenset()  # steers already in the history when the turn started
+
+
 def _edit_review_available() -> bool:
     """Missing/raising host probes never offer a review the host cannot prompt for."""
     try:
@@ -700,6 +767,8 @@ class PlanModePlugin:
         self._clarify_notes: dict[tuple[str, str], tuple[Any, str]] = {}
         self._turn_blocks: dict[str, list[dict[str, Any]]] = {}  # session key -> per-turn blocks not yet named
         self._turn_finishes: dict[str, dict[str, Any]] = {}  # session key -> a plan that ended mid-turn (classic)
+        self._turn_origins: OrderedDict[str, _TurnOrigin] = OrderedDict()
+        self._child_todo_states: OrderedDict[str, None] = OrderedDict()  # last todo write came from a delegate/subagent
         self._open_asks: set[tuple[str, str]] = set()
         self._card_baselines: OrderedDict[str, dict] = OrderedDict()
         self._hook_platforms: OrderedDict[str, str] = OrderedDict()
@@ -740,6 +809,11 @@ class PlanModePlugin:
         self.ctx.register_hook("pre_tool_call", self.pre_tool_call)
         self.ctx.register_hook("post_tool_call", self.post_tool_call)
         self.ctx.register_hook("pre_llm_call", self.pre_llm_call)
+        try:
+            self.ctx.register_hook("pre_api_request", self.pre_api_request)
+        except Exception:
+            pass  # Older hosts may reject the per-call hook.
+        self.ctx.register_hook("pre_verify", self.pre_verify)
         self.ctx.register_hook("transform_llm_output", self.transform_llm_output)
         # Always registered: settings are read per call, so a profile switch needs no restart; each hook no-ops
         # unless its lever is on.
@@ -2372,6 +2446,15 @@ class PlanModePlugin:
 
     def post_llm_call(self, **kwargs: Any) -> None:
         """Turn-end hook (after the tool loop), including local surfaces without footers."""
+        try:
+            platform = str(kwargs.get("platform") or "").strip().lower()
+            if platform not in _NO_TURN_NOTE_PLATFORMS and not _delegated_child():  # a child shares the parent's key
+                ended = derive_session_identity(platform)
+                if ended.key:
+                    with self._lock:
+                        self._turn_origins.pop(ended.key, None)  # the turn is over; only open turns keep a record
+        except Exception:
+            pass
         if not {"todo_batch", "todo_inline"} & self._levers() or str(kwargs.get("platform") or "").lower() in _NO_TURN_NOTE_PLATFORMS:
             return
         try:
@@ -2788,6 +2871,17 @@ class PlanModePlugin:
                     if state.get("phase") == "executing" or ("approval_card" in self._levers() and state.get("edit_review")):
                         progress = todo_progress(kwargs.get("result"))
                         if progress is not None:
+                            # A delegate's own list lands in the plan's progress (unchanged); the finish hold uses only
+                            # the parent's, so a child's open item never holds the parent's turn.
+                            storage_key = _state_storage_key(state_key)
+                            if _delegated_child() or str(kwargs.get("platform") or "").strip().lower() in _NO_TURN_NOTE_PLATFORMS:
+                                self._child_todo_states[storage_key] = None
+                                self._child_todo_states.move_to_end(storage_key)
+                                while len(self._child_todo_states) > 256:
+                                    self._child_todo_states.popitem(last=False)
+                            else:
+                                self._child_todo_states.pop(storage_key, None)
+                            state["next_pending_todo"] = progress.pop("next_pending")
                             # Capture before classic completion clears the approved identity.
                             card_key = ((identity.key, _state_storage_key(state_key), state.get("approved_path"),
                                          state.get("approved_revision"), state.get("approved_at")) if state.get("approved_path") else None)
@@ -2934,6 +3028,27 @@ class PlanModePlugin:
 
             with self._lock:
                 state_key, state = self._state_for_hook(identity)
+                # Track the turn's own identity, which can differ from an adopted plan's state key.
+                if identity.surface.lower() not in _NO_TURN_NOTE_PLATFORMS and not _delegated_child():
+                    history = kwargs.get("conversation_history")
+                    if not isinstance(history, (list, tuple)):
+                        history = ()
+                    last_row = history[-1] if history else None
+                    machinery = (
+                        isinstance(last_row, dict) and last_row.get("role") == "user"
+                        and _is_machinery_display_kind(last_row.get("display_kind"))
+                        # Plan mode's own "Implement the approved plan" turn follows the user's approval: a user turn,
+                        # even when a gateway delivers the injection as an internal message.
+                        and not (state.get("approved_path") and _row_text(last_row.get("content")).lstrip().startswith(
+                            f"{_IMPLEMENT_PREFIX}{state.get('approved_path')}"))
+                    )
+                    self._turn_origins[identity.key] = _TurnOrigin(
+                        kwargs.get("turn_id"), machinery, frozenset(_steer_marks(history)) if machinery else frozenset())
+                    self._turn_origins.move_to_end(identity.key)
+                    while len(self._turn_origins) > 256:
+                        # Drop user-turn records first: a lost record reads as a user turn, so an open notice turn keeps its own.
+                        oldest = next((key for key, record in self._turn_origins.items() if not record.machinery), None)
+                        self._turn_origins.pop(oldest if oldest is not None else next(iter(self._turn_origins)))
                 if state_key and state.get("finish_pending"):
                     self._finish_plan(state_key, state)  # the previous turn ended without post_llm_call
                 if "approval_card" in self._levers() and state_key:
@@ -3006,9 +3121,11 @@ class PlanModePlugin:
                     if submission.get("status") == "awaiting" and clarify:
                         awaiting = (f"Plan rev {submission['revision']} awaits approval: ask with clarify using exactly "
                                     f"question={clarify['question']}, choices={clarify['choices']}, "
-                                    "or the user can run /planmode approve. On a turn the user did not write (a notice, a "
-                                    "wake or another agent's message), do not ask again: wait for the user.")
-                        awaiting = awaiting if "approval_card" in self._levers() and submission.get("card") else awaiting[:399]
+                                    "or the user can run /planmode approve.")
+                        if "approval_card" not in self._levers() or not submission.get("card"):
+                            awaiting = awaiting[:399]
+                        awaiting += (" On a turn the user did not write (a notice, a wake or another agent's message), "
+                                     "do not ask again: wait for the user.")
                         if short:
                             parts.append(awaiting)
                         else:
@@ -3302,6 +3419,81 @@ class PlanModePlugin:
             "approved_snapshot": state.get("approved_snapshot"),
             "next": next_steps,
         }
+
+    def pre_api_request(self, **kwargs: Any) -> None:
+        """Treat a machinery-started turn as a user turn once the user steers it (writes into it mid-turn)."""
+        try:
+            platform = str(kwargs.get("platform") or "").strip().lower()
+            if platform in _NO_TURN_NOTE_PLATFORMS or _delegated_child():
+                return None
+            identity = derive_session_identity(platform)
+            if (identity.unsupported or identity.non_cli_without_key or not identity.key
+                    or identity.surface.lower() in _NO_TURN_NOTE_PLATFORMS):
+                return None
+            history = kwargs.get("conversation_history")
+            if not isinstance(history, (list, tuple)):
+                return None
+            turn_id = kwargs.get("turn_id")
+            with self._lock:
+                origin = self._turn_origins.get(identity.key)
+                if origin is None or not origin.machinery:
+                    return None
+                if origin.turn_id is not None and turn_id is not None and origin.turn_id != turn_id:
+                    return None
+                # Only a steer is the user writing mid-turn; Hermes' other mid-turn user rows (stop-gate nudges, LSP
+                # notes, continuation prompts) are its own scaffolding and must not turn a notice into a user turn.
+                # A steer counts when it was not in the history at turn start: Hermes may compact the history right
+                # after pre_llm_call or mid-turn, which moves, drops and copies rows, so positions are not reliable.
+                # (A new steer whose text repeats an earlier one is missed: that turn is not held.)
+                if _steer_marks(history) - origin.known_steers:
+                    origin.machinery = False
+        except Exception:
+            return None  # Observing a turn must not affect the model request.
+
+    def pre_verify(self, **kwargs: Any) -> dict[str, str] | None:
+        """Nudge at most once when Hermes is about to end an edited user turn with open plan todos."""
+        try:
+            if kwargs.get("attempt") != 0 or not kwargs.get("changed_paths") or is_silent_reply(kwargs.get("final_response")):
+                return None
+            setting = self._config("finish_hold", "on")
+            if setting is False or str(setting).strip().lower() == "off":  # YAML 1.1 reads bare off as False.
+                return None
+            platform = str(kwargs.get("platform") or "").strip().lower()
+            if platform in _NO_TURN_NOTE_PLATFORMS or _delegated_child():
+                return None
+            identity = derive_session_identity(platform)
+            if (identity.unsupported or identity.non_cli_without_key or not identity.key
+                    or identity.surface.lower() in _NO_TURN_NOTE_PLATFORMS):
+                return None
+            with self._lock:
+                origin = self._turn_origins.get(identity.key)
+                if origin is not None and origin.machinery:
+                    return None
+                key, state = self._state_for_hook(identity)
+                if not key or state.get("phase") != "executing" or state.get("finish_pending"):
+                    return None
+                if _state_storage_key(key) in self._child_todo_states:
+                    return None  # the open todos are a delegate's list, not the parent's plan steps
+                review = state.get("edit_review")
+                if isinstance(review, dict) and review.get("denied") and "approval_card" in self._levers():
+                    return None  # the user just denied an edit: the agent asks what to change, it does not push on
+                progress = state.get("progress") or {}
+                total = progress.get("total", 0)
+                done = progress.get("completed", 0) + progress.get("cancelled", 0)
+                if total <= 0 or done >= total:
+                    return None
+                revision = state.get("approved_revision")
+                plan = f"Plan rev {revision}" if revision is not None else "Plan"
+                step = progress.get("current") or state.get("next_pending_todo") or "the first pending step"
+                step = " ".join(str(step).split())  # one line, as on the progress card
+                return {"action": "continue", "message": (
+                    f"{plan} is not finished: {done} of {total} steps done, next: {step}. Continue with it.\n"
+                    "If it is blocked, needs the user's decision, is waiting on a running process or a reply, or the user "
+                    "asked you to stop or to do something else, say so in one line and stop; if a step is no longer needed, "
+                    "mark it cancelled in todo_list and say why."
+                )}
+        except Exception:
+            return None  # An advisory finish hold must not stop the turn from ending on error.
 
     def transform_llm_output(self, response_text: str = "", **kwargs: Any) -> str | None:
         try:

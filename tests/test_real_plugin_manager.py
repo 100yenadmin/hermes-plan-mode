@@ -1079,6 +1079,83 @@ def test_u1_real_cli_approval_same_call(real_submit_host):
     assert host.plugins.get_pre_tool_call_block_message("terminal", {"command": "pwd"}, session_id="submit-session") is None
 
 
+def test_finish_hold_through_the_real_plugin_manager(real_submit_host):
+    host = real_submit_host
+    get_continue = getattr(host.plugins, "get_pre_verify_continue_message", None)
+    if not callable(get_continue):
+        pytest.skip("Hermes lacks the pre_verify continue-message seam")
+    host.callback(lambda *a, **kw: "once")
+    assert json.loads(host.submit())["approved"]
+
+    def observe(status):
+        todos = [{"status": status, "content": "Verify the change"}]
+        host.plugins.invoke_hook("post_tool_call", tool_name="todo_list", args={"todos": todos},
+                                 result=json.dumps({"todos": todos}), status="ok", platform="cli",
+                                 session_id="submit-session")
+
+    args = dict(session_id="submit-session", platform="cli", model="test", coding=True,
+                final_response="The change is in place.", changed_paths=["app.py"])
+    observe("pending")
+    assert get_continue(attempt=0, **args).startswith(
+        "Plan rev 1 is not finished: 0 of 1 steps done, next: Verify the change. Continue with it.")
+    assert get_continue(attempt=1, **args) is None
+    observe("completed")
+    assert get_continue(attempt=0, **args) is None
+
+
+def test_finish_hold_skips_injected_history_through_the_real_plugin_manager(real_submit_host):
+    host = real_submit_host
+    get_continue = getattr(host.plugins, "get_pre_verify_continue_message", None)
+    if not callable(get_continue):
+        pytest.skip("Hermes lacks the pre_verify continue-message seam")
+    host.callback(lambda *a, **kw: "once")
+    assert json.loads(host.submit())["approved"]
+    session = dict(session_id="submit-session", platform="cli")
+    args = dict(model="test", coding=True, attempt=0, final_response="The change is in place.", changed_paths=["app.py"])
+    todos = [{"status": "pending", "content": "Verify the change"}]
+    host.plugins.invoke_hook("post_tool_call", tool_name="todo_list", args={"todos": todos},
+                             result=json.dumps({"todos": todos}), status="ok", **session)
+    assert get_continue(**session, **args)  # the open todo would hold a user turn
+    host.plugins.invoke_hook("pre_llm_call", user_message="A process finished.",
+                             conversation_history=[{"role": "user", "display_kind": "internal_notification",
+                                                    "content": "A process finished."}], **session)
+    assert get_continue(**session, **args) is None
+
+
+def test_finish_hold_promotes_a_steered_turn_through_the_real_plugin_manager(real_submit_host):
+    host = real_submit_host
+    get_continue = getattr(host.plugins, "get_pre_verify_continue_message", None)
+    if not callable(get_continue) or "pre_api_request" not in getattr(host.plugins, "VALID_HOOKS", ()):
+        pytest.skip("Hermes lacks the finish hold or per-call hook seam")
+    host.callback(lambda *a, **kw: "once")
+    assert json.loads(host.submit())["approved"]
+    session = dict(session_id="submit-session", platform="cli")
+    turn = dict(turn_id="turn-1", **session)
+    args = dict(model="test", coding=True, final_response="The change is in place.", changed_paths=["app.py"])
+    todos = [{"status": "pending", "content": "Verify the change"}]
+    host.plugins.invoke_hook("post_tool_call", tool_name="todo_list", args={"todos": todos},
+                             result=json.dumps({"todos": todos}), status="ok", **session)
+    history = [{"role": "user", "display_kind": "internal_notification", "content": "A process finished."}]
+    host.plugins.invoke_hook("pre_llm_call", conversation_history=history, **turn)
+    assert get_continue(attempt=0, **session, **args) is None
+    # Hermes' own mid-turn scaffolding (an LSP note has no flag and no display_kind) does not make it a user turn.
+    host.plugins.invoke_hook("pre_api_request", **turn, conversation_history=[
+        *history, {"role": "tool", "content": "Edited app.py."}, {"role": "user", "content": "LSP: app.py has 1 error"},
+    ])
+    assert get_continue(attempt=0, **session, **args) is None
+    builder = pytest.importorskip("agent.prompt_builder")
+    steer_user_row = getattr(builder, "steer_user_row", None)
+    if not callable(steer_user_row):
+        pytest.skip("Hermes has no steer row builder")
+    host.plugins.invoke_hook("pre_api_request", **turn, conversation_history=[
+        *history, {"role": "tool", "content": "Edited app.py."}, steer_user_row("Run the checks too."),
+    ])
+    message = get_continue(attempt=0, **session, **args)
+    assert message and message.startswith(
+        "Plan rev 1 is not finished: 0 of 1 steps done, next: Verify the change. Continue with it.")
+    assert get_continue(attempt=1, **session, **args) is None
+
+
 @pytest.mark.parametrize("plan_profile", ["classic"])  # classic shows a footer with no todo progress yet
 def test_161_real_transform_seam_keeps_a_silent_reply_silent(real_submit_host):
     """Hermes' own output-transform seam, then its own silence rule: [SILENT] must leave plan mode unchanged."""
