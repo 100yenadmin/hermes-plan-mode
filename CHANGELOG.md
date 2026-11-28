@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.7.0 - 2026-11-28
+
+- **Finish hold** (#105, #118). While an approved plan is being built, when Hermes is about to end a turn in which the
+  agent edited files with Hermes' file tools (`write_file`, `patch`) and the plan's todo list still has open steps,
+  plan mode asks the agent once to continue, naming the next step. The message always offers a way out: say in one line
+  that the step is blocked, needs your decision, is waiting on a running process or a reply, or that you asked it to
+  stop or do something else, and stop; or cancel a step that is no longer needed. It uses Hermes' public `pre_verify`
+  hook and holds at most once per turn. Set `finish_hold: off` to turn it off.
+  - **Only turns you started are held.** Turns Hermes marks as internal (background-process notices, delegation
+    results, wakes, other plugins' injected messages) are never held, so a hold never becomes an extra message on a
+    turn you did not start. A turn Hermes does not mark counts as yours.
+  - **A message you send into a turn Hermes started makes it your turn** (a steer), held at most once. Only a real
+    steer counts; Hermes' own mid-turn rows (stop-gate nudges, LSP notes, continuation prompts) do not. On a Hermes
+    without the `pre_api_request` hook, such a turn stays internal and is not held.
+  - There is no hold right after you deny an edit through edit review, silent replies stay silent, and a delegate's
+    own todo list never holds the parent's turn.
+- **The approval note keeps its no-re-ask sentence** when the question and choices are cut at 399 characters.
+- **A stale "edit denied" flag no longer turns the finish hold off** when the approval card lever is off.
+
+Known gaps (rare, documented in the PR): a new steer whose words repeat an earlier steer's exactly is not counted, so
+that turn is not held; after a restart, a delegate's saved todo list can hold the parent's next edited turn once, with
+the way out.
+
 ## 1.6.1 - 2026-11-24
 
 - **Silent replies stay silent** (field report, 2026-11-24). While a plan was building, a reply that was only Hermes'
