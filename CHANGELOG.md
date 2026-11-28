@@ -15,7 +15,7 @@
     steer counts; Hermes' own mid-turn rows (stop-gate nudges, LSP notes, continuation prompts) do not. On a Hermes
     without the `pre_api_request` hook, such a turn stays internal and is not held.
   - There is no hold right after you deny an edit through edit review, silent replies stay silent, and a delegate's
-    own todo list never holds the parent's turn.
+    own todo list does not hold the parent's turn (one exception after a restart, under Known gaps).
 - **The approval note keeps its no-re-ask sentence** when the question and choices are cut at 399 characters.
 - **A stale "edit denied" flag no longer turns the finish hold off** when the approval card lever is off.
 
